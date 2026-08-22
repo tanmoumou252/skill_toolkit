@@ -1,6 +1,7 @@
 ---
 name: pwsh-gnu-bridge
-description: Use when generating or debugging PowerShell 7 commands on Windows, invoking native programs or PortableGit/GNU tools from pwsh, resolving PowerShell alias and GNU argument conflicts, or handling cross-shell paths, quoting, encoding, line endings, pipelines, and exit codes. Also use when deciding whether a POSIX script requires Git Bash. Do not use merely because a normal coding task reads files, runs tests, or builds a project.
+description: >
+  在 Windows 上生成或执行任何终端命令前使用。覆盖 PowerShell 7 / pwsh 命令编写调试、调用 git、node、npm、python 等原生程序、使用 PortableGit 的 grep、awk、sed、ls、rm 等 GNU 工具、判断 POSIX 脚本是否需要 Git Bash。用于排查症状：ls -la、rm -rf、cp -r 等 GNU 参数报错，提示找不到与参数名称匹配的参数，不是 cmdlet 的名称，ParameterBindingException，别名冲突，Get-Command 解析，Remove-Alias 与 Profile，NoProfile，中文乱码，UTF-8 BOM，CRLF/LF 换行，$LASTEXITCODE 退出码，heredoc，export，进程替换，.sh 脚本，含空格或非 ASCII 路径，引号与参数传递，递归删除、覆盖等高风险文件操作。即使宿主已有基础 shell 提示仍需加载：本技能额外覆盖别名解析与 Profile 状态、编码分层、退出码传播、Git Bash 适用边界、高风险操作的路径包含性校验。
 ---
 
 # PowerShell 7 与 GNU 工具互操作规范
@@ -19,6 +20,17 @@ description: Use when generating or debugging PowerShell 7 commands on Windows, 
 - GNU 单体程序可以从 PowerShell 7 调用，但这不会让 PowerShell 自动支持 Bash 语法。
 
 如果宿主明确使用 Git Bash、CMD 或其他执行器，应按该执行器的语法编写外层命令。只有任务确实需要 PowerShell 语义时，才显式调用 `pwsh.exe`。
+
+## 最小干涉原则
+
+本技能是命令生成前的检查规范，不是输出模板。加载后：
+
+- 本技能一旦在当前会话加载即持续生效，不需要在后续每条命令前重复加载。
+- 宿主已给出环境信息、且待执行命令本身已经正确时，静默通过，直接执行。
+- 不要因为加载了本技能就额外输出规范说明、环境分析或选型理由。
+- 不要重写已经清晰、安全、可用的命令，也不要为了体现 GNU 工具可用而替换正常的 PowerShell 写法。
+- 不要重复执行 `Get-Command`、`$PSVersionTable` 等探测；同一会话内已确认的结论直接复用。
+- 只有命令确实存在解析歧义、跨 Shell 风险或不可逆后果时，才展开说明并调整写法。
 
 ## 能力选择顺序
 
@@ -170,4 +182,4 @@ PowerShell 7 更现代、更强大，但不会自动获得完整 Bash 语法。�
 - 用 `$LASTEXITCODE` 判断 `Copy-Item`、`Remove-Item` 等 cmdlet。
 - 使用固定临时脚本名称，且失败时没有清理。
 - 将带空格或非 ASCII 的路径拼入命令字符串。
-- 为普通代码读取、React 修复或常规测试任务加载并套用跨 Shell 规则。
+- 命令已经正确，却仍被反复重写、反复解释或反复探测环境。
