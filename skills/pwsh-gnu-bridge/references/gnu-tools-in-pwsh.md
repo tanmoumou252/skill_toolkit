@@ -24,7 +24,7 @@ Get-Command awk -All
 用户可能在 PowerShell 7 Profile 中通过 `Remove-Alias` 移除 `ls`、`cp`、`mv`、`rm`、`cat` 别名，使这些名称直接解析到 GNU 工具。此配置仅适用于已确认的个人环境，不得作为通用前提。
 
 - 宿主明确当前会话已加载该 Profile 且 GNU 工具在 PATH 时，可直接使用 GNU 命令，无需重复执行 `Remove-Alias`。
-- 环境未知或首次使用 GNU 参数前，使用 `Get-Command ls,cp,mv,rm,cat -All` 检查实际解析目标。
+- 环境未知或首次使用 GNU 参数前，使用 `Get-Command ls,cp,mv,rm,cat -All` 检查实际解析目标（`Get-Command` 在允许键集内（见 SKILL.md「允许（只读取证与测试，单行平铺直调）」清单）；WHITELIST 下优先以宿主内置 Grep/Glob 完成同款排查）。
 - `pwsh.exe -NoProfile` 不加载 Profile，必须按该会话自己的解析结果处理。
 - 别名移除后 `rm` 可能解析到 GNU `rm.exe`，但删除操作仍须遵守安全规则，不得默认推荐 `rm -rf`。
 - 可移植脚本应使用完整 PowerShell cmdlet 名称或已确认路径的外部程序，不依赖 Profile 状态。
@@ -34,8 +34,8 @@ Get-Command awk -All
 PowerShell 可以把原生程序的文本输出传给 GNU 工具：
 
 ```powershell
-git status --short | grep 'M '
-git log --oneline | awk '{print $1}'
+git status --short | grep 'M '          # 两段均在 allow 键集，正例
+git log --oneline | awk '{print $1}'    # awk* 禁入清单：尾段落 Ask 属预期，禁申请加键；只读首选 grep
 ```
 
 注意以下边界：
@@ -44,6 +44,7 @@ git log --oneline | awk '{print $1}'
 - GNU 工具输出重新进入 PowerShell 后也是文本，不会保留原始 PowerShell 对象类型。
 - 需要结构化属性、排序和筛选时，优先使用 PowerShell 对象管道。
 - 需要逐行正则和传统 UNIX 文本处理时，可以使用 GNU 工具。
+- 白名单边界：`awk*`、`sed*`、`sort*`、`uniq*`、`xargs*` 不得加入宿主 allow 白名单——`xargs` 可执行任意后续命令（如 `xargs rm`）、`sed -i` 原地改写文件、`sort -o` 写出文件、`awk` 可经 `print | "cmd"` 管道间接执行外部命令，均非真只读；保持未命中白名单统一落 Ask 即为期望行为。
 
 ## 引号与变量展开
 
@@ -58,7 +59,7 @@ awk '{print $1}' input.txt
 
 ## 文件修改
 
-不要把 `sed -i` 作为默认文件编辑方式。优先使用宿主的精确编辑工具；如果必须批量修改文件，应先限定目标范围、检查匹配内容、保留可审阅的变更，并在修改后验证结果。
+`sed -i` 属禁入清单（原地改写文件），`rm*` 属 deny 键集——都不要作为默认方式。文件创建与修改一律宿主专用编辑/写入工具；如果必须批量修改，应先限定目标范围、检查匹配内容、保留可审阅的变更，并在修改后验证结果（批量通道仅适用于人工授权场景）。
 
 同样，不要默认推荐 `rm -rf`。递归删除前必须检查绝对路径、验证目标位于预期根目录内，并排除磁盘根目录、用户主目录和工作区根目录。
 

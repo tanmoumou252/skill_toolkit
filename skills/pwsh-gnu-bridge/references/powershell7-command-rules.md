@@ -29,6 +29,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 ```
 
+**白名单注意**：上例仅为演示参数数组写法。实际使用中 `git -C <路径>` 会使命令前缀脱离 `git status*` 等白名单键（整串通配要求前缀逐字一致）而触发 Ask；命令参数中出现的仓库外部路径不受 `external_directory` 放行（该权限仅由 bash 工具的 `workdir` 参数触发，以宿主判别探针实测为准）。跨仓库只读探测请改用 `workdir` 参数指定目标仓库后执行平铺命令。
+
 不要把含用户输入、复杂路径、JSON 或正则的参数拼接成单个命令字符串。不要为了调用普通程序额外套 `cmd.exe /c`。
 
 ## Cmdlet 错误处理
@@ -37,7 +39,7 @@ if ($LASTEXITCODE -ne 0) {
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-Copy-Item -LiteralPath $source -Destination $destination -ErrorAction Stop
+Get-Item -LiteralPath $source -ErrorAction Stop    # 读侧演示终止错误转换；Copy-Item*/Move-Item* 等属 deny 键集，文件操作一律宿主编辑/写入工具，仅在人工授权场景按《高风险文件操作》节执行
 ```
 
 不要使用 `$LASTEXITCODE` 判断 cmdlet、函数或 PowerShell 表达式是否成功。需要捕获错误时使用 `try` 和 `catch`。
@@ -46,7 +48,7 @@ Copy-Item -LiteralPath $source -Destination $destination -ErrorAction Stop
 
 - 单引号字符串按字面值处理，适合不需要 PowerShell 变量展开的正则和 GNU 程序片段。
 - 双引号字符串会展开 `$variable` 和 `$()`，只在确实需要插值时使用。
-- 传给 `awk` 的 `$1`、`$2` 等字段表达式通常需要置于 PowerShell 单引号中。
+- 传给 `awk` 的 `$1`、`$2` 等字段表达式通常需要置于 PowerShell 单引号中（`awk*/sed*` 属禁入清单：只读演示键集外落 Ask 属预期、禁申请加键；`sed -i` 为写操作，一律宿主编辑工具）。
 - 当参数本身包含单引号、多层正则、JSON 或多层 Shell 语法时，优先写临时 `.ps1` 或 `.sh` 文件，不继续堆叠转义。
 
 ```powershell
@@ -97,4 +99,4 @@ pwsh.exe -NoLogo -NoProfile -NonInteractive -File <script.ps1>
 4. 操作前检查目标，操作后验证结果。
 5. 临时资源使用唯一名称，并通过 `try` 和 `finally` 清理。
 
-不要默认推荐 `Remove-Item -Recurse -Force`、`rm -rf`、`sed -i` 或强制覆盖。只有目标已经检查且操作得到授权时才能使用。
+`Remove-Item*`、`rm*`、`Copy-Item*`、`Move-Item*`、`Set-Content*` 等属 deny 键集（自动审批制度不放行），`sed -i` 属禁入清单——不要默认推荐。只有目标已经检查、处于人工授权场景且操作得到授权时才能使用；常规文件变更一律宿主编辑/写入工具。

@@ -1,2 +1,4 @@
 .kilo
 .zcode
+test-artifacts/
+node_modules/
