@@ -202,7 +202,8 @@ export function runAll(files) {
 
         // F5 kilocode 实测雷区（公理 M2 / M7）
         if (plat === 'kilocode') {
-          const bad = KILOCODE_FORBIDDEN_AGENT_KEYS.filter((k) => fm.keys.includes(k));
+          const permTree = fm.tree.permission && typeof fm.tree.permission === 'object' ? fm.tree.permission : {};
+          const bad = KILOCODE_FORBIDDEN_AGENT_KEYS.filter((k) => fm.keys.includes(k) || Object.prototype.hasOwnProperty.call(permTree, k));
           if (bad.length > 0) push('kilocode-m2-no-edit-key', f.path, `MD 内不得声明: ${bad.join(', ')}`);
           for (const k of KILOCODE_MAP_KEYS) {
             const inPerm = fm.tree.permission && typeof fm.tree.permission === 'object' ? fm.tree.permission[k] : undefined;

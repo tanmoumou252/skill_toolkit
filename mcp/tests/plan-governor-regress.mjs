@@ -1232,6 +1232,30 @@ async function main() {
     cleanDir(tmp); cleanDir(outside);
   }
 
+  // —— write_scoped_file 目标文件自身为符号链接时阻断 ——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-filelink-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-fileout-'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+    const targetFile = path.join(plansDir, 'target.md');
+    const outsideFile = path.join(outside, 'secret.txt');
+    fs.writeFileSync(outsideFile, 'original', 'utf8');
+    let linked = false;
+    try { fs.symlinkSync(outsideFile, targetFile, 'file'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'target.md', content: 'hacked' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('write-scoped-file-symlink-deny', sess.responses[1] && sess.responses[1].isError);
+      check('write-scoped-file-symlink-unmodified', fs.readFileSync(outsideFile, 'utf8') === 'original');
+      sess.cleanup();
+    } else {
+      console.log('SKIP write-scoped-file-symlink-deny (file symlink unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
+  }
+
   // —— Windows 终端分流器回归 ——
   if (process.platform === 'win32') {
     // 默认环境无 env 覆盖时，反查发现真实 bash.exe（PortableGit），回报行以 bash.exe 结尾且不包含 cmd.exe
@@ -1455,6 +1479,12 @@ async function main() {
       servedHtml !== null && onDiskHtml !== null && normEol(servedHtml) === normEol(onDiskHtml),
       'served=' + (servedHtml === null ? 'null' : servedHtml.length) + ' onDisk=' + (onDiskHtml === null ? 'null' : onDiskHtml.length));
     cleanDir(isoHome);
+  }
+
+  // —— 代码质量不变量：消除 POSIX 壳解析中的不可达死回退 ——
+  {
+    const serverSrc = fs.readFileSync(SERVER, 'utf8');
+    check('resolve-shell-no-dead-fallback', !serverSrc.includes("'/bin/bash' || '/bin/sh'"));
   }
 
   console.log(fail === 0 ? 'PLAN-GOVERNOR ALL OK' : 'PLAN-GOVERNOR FAILURES=' + fail);

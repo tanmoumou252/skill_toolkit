@@ -894,7 +894,7 @@ function resolveShellForCommand(isPwshCmdlet) {
     return { shell: process.env.MCP_FORCE_SHELL, displayShell: process.env.MCP_FORCE_SHELL };
   }
   if (process.platform !== 'win32') {
-    const sh = process.env.SHELL || '/bin/bash' || '/bin/sh';
+    const sh = process.env.SHELL || '/bin/bash';
     return { shell: sh, displayShell: sh };
   }
   if (isPwshCmdlet) {
@@ -1490,6 +1490,12 @@ function startServer() {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' }] } });
           return;
         }
+        try {
+          if (fs.lstatSync(target).isSymbolicLink()) {
+            send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标文件为符号链接，禁止写入。' }] } });
+            return;
+          }
+        } catch { /* 目标文件不存在时忽略 ENOENT */ }
         const content = String(args.content || '');
         if (Buffer.byteLength(content, 'utf8') > 262144) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 内容超 256KB。' }] } });

@@ -39,4 +39,5 @@ Windows 平台 AI 编程的技能规程、代理流水线与受控 MCP 终端集
 
 ## 上游致谢
 
-- 流程体系基于 SuperPower，终端规范与提交规程承接 PowerShell 7、PortableGit 与 AI Commit。
+- 流程体系基于 [SuperPower](https://github.com/obra/superpowers)，终端规范与提交规程承接 PowerShell 7 [案例](https://github.com/chongchong59699/powershell7-safe-invocation-cn)、PortableGit 与 [AI Commit](https://github.com/Sitoi/ai-commit)。
+- PR 审查规程与判定哲学深度吸纳 [pr-agent](https://github.com/The-PR-Agent/pr-agent)。

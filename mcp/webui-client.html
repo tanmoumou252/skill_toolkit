@@ -1037,7 +1037,7 @@ const ICONS = {
         customAllow.forEach((cmd) => {
           html += '<div class="p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] flex items-center justify-between text-xs font-mono">';
           html += '<span class="text-[var(--syntax-string)] font-semibold">' + esc(cmd) + '</span>';
-          html += '<button onclick="removeWhitelist(state.policy, ' + JSON.stringify(cmd).replace(/"/g, '&quot;') + ')" title="删除此规则" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
+          html += '<button onclick="removeWhitelist(state.policy, ' + esc(JSON.stringify(cmd)) + ')" title="删除此规则" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
           html += '</div>';
         });
       }
@@ -1066,7 +1066,7 @@ const ICONS = {
         customDeny.forEach((cmd) => {
           html += '<div class="p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] flex items-center justify-between text-xs font-mono">';
           html += '<span class="text-[var(--danger-text)] font-semibold">' + esc(cmd) + '</span>';
-          html += '<button onclick="removeBlacklist(state.policy, ' + JSON.stringify(cmd).replace(/"/g, '&quot;') + ')" title="删除此黑名单" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
+          html += '<button onclick="removeBlacklist(state.policy, ' + esc(JSON.stringify(cmd)) + ')" title="删除此黑名单" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
           html += '</div>';
         });
       }

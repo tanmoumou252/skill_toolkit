@@ -49,8 +49,8 @@ check('platform-key-leak-detected', has([{ path: 'kilocode/agents/plan-writer-sp
 const cbFm = ['---', 'name: x', 'description: d', 'model: inherit', 'tools: []', 'agentMode: agentic', 'enabled: true', 'enabledAutoRun: true', '---', ''];
 check('frontmatter-keys-required-detected', has([{ path: 'codebuddy/agents/pr-reviewer-sp.md', text: cbFm.join('\n') }], 'frontmatter-keys-required'));
 
-// 8) M2：kilocode 的 edit 写成 map → 检出
-const m2 = ['---', 'mode: subagent', 'description: d', 'options:', '  id: x', 'permission:', '  read: allow', 'edit:', '  "*": deny', '---', ''];
+// 8) M2：kilocode 的 edit 写成 map（含嵌套在 permission 下） → 检出
+const m2 = ['---', 'mode: subagent', 'description: d', 'options:', '  id: x', 'permission:', '  read: allow', '  edit:', '    "*": deny', '---', ''];
 check('kilocode-m2-edit-map-detected', has([{ path: 'kilocode/agents/plan-reviewer-sp.md', text: m2.join('\n') }], 'kilocode-m2-no-edit-key'));
 
 // 9) M7：bash 写成标量 → 检出；写成 map → 不误报
