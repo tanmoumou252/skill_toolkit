@@ -34,8 +34,8 @@ Get-Command awk -All
 PowerShell 可以把原生程序的文本输出传给 GNU 工具：
 
 ```powershell
-git status --short | grep 'M '          # 两段均在 allow 键集，正例
-git log --oneline | awk '{print $1}'    # awk* 禁入清单：尾段落 Ask 属预期，禁申请加键；只读首选 grep
+git status --short | grep 'M '          # 宿主正例（两段均在 allow 键集）；MCP 受控通道亦放行（纯白名单只读管道例外）
+git log --oneline | awk '{print $1}'    # awk* 禁入清单：宿主落 Ask 属预期，MCP 受控通道直接硬拒（非 Ask），禁申请加键；只读首选 grep
 ```
 
 注意以下边界：

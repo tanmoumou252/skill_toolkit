@@ -1487,6 +1487,13 @@ async function main() {
     check('resolve-shell-no-dead-fallback', !serverSrc.includes("'/bin/bash' || '/bin/sh'"));
   }
 
+  // —— 代码质量不变量：空审计提示判据必须基于审计文件存在性，而非 WebUI 进程自身 env ——
+  {
+    const clientSrc = fs.readFileSync(path.resolve(here, '..', 'webui-client.html'), 'utf8');
+    check('webui-audit-empty-no-self-env-predicate', !clientSrc.includes('state.status.auditEnabled'));
+    check('webui-audit-empty-uses-file-exists', clientSrc.includes('html += (state.status && state.status.auditFileExists)'));
+  }
+
   console.log(fail === 0 ? 'PLAN-GOVERNOR ALL OK' : 'PLAN-GOVERNOR FAILURES=' + fail);
   process.exit(fail === 0 ? 0 : 1);
 }

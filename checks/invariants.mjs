@@ -91,6 +91,9 @@ export function scanFences(text) {
     const info = m[3];
     const ch = marks[0];
     const len = marks.length;
+    // CommonMark：反引号围栏的 info string 不得含反引号（含则该行是行内代码，既不开启也不闭合围栏）；
+    // 波浪号围栏无此限制（info 可含反引号）。
+    if (ch === '`' && info.includes('`')) continue;
     if (stack.length > 0) {
       const top = stack[stack.length - 1];
       if (ch === top.ch && len >= top.len && info.trim() === '') {

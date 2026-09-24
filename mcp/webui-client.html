@@ -963,9 +963,9 @@ const ICONS = {
         html += renderIcon('ShieldCheck', 'w-8 h-8 opacity-40');
         html += '<p class="text-xs font-medium">暂无真实审计记录</p>';
         html += '<p class="text-[11px] max-w-xs text-[var(--text-muted)]">';
-        html += (state.status && state.status.auditEnabled)
-          ? '宿主已以 MCP_AUDIT_LOG=1 注册，执行命令后流水将在此显示。'
-          : '宿主未以 MCP_AUDIT_LOG=1 注册。在宿主 MCP 注册的 environment 增补该 env 并重启宿主后即可开启真实监控。';
+        html += (state.status && state.status.auditFileExists)
+          ? '审计文件已存在但尚无记录，执行命令后流水将在此显示。'
+          : '审计文件尚未创建（宿主未以 MCP_AUDIT_LOG=1 注册或尚无记录落盘）。在宿主 MCP 注册的 environment 增补该 env 并重启宿主后即可开启真实监控。';
         html += '</p></div>';
       } else {
         visible.forEach((s) => {

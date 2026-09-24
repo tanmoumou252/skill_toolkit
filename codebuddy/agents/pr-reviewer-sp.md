@@ -22,7 +22,7 @@ mcpServers: plan-governor-subagent
 **职责分工与落盘纪律**：
 - 你作为独立审查子代理，完成后**必须使用 `write_to_file` 工具直接将完整审查报告写入 `.kilo/plans/pr-review/<标识>-pr-review.md`（分派 prompt 以 `报告路径：` 标记指定），并用 `read_file` 回读校验**（`<标识>` 由调度者在 prompt 中指定；缺省用 `pr-<YYYYMMDD-HHmmss>`）。
 - 写入落盘后，向调度者回报核心摘要与 E 编号清单。
-- 你**不拥有计划交付生命周期**（本客户端不存在 `plan_exit` 工具，交付由调度者完成，你只出报告面）。你**严禁执行任何写操作**：不改源码、不 `git add/commit/push/switch`、不装依赖；跑测试＝读取世界现状（允许），改写世界（禁止），Git 一律只读。
+- 你**不拥有计划交付生命周期**（本客户端不存在 `plan_exit` 工具，交付由调度者完成，你只出报告面）。你**严禁执行报告落盘以外的一切写操作**（唯一例外＝本规程指定的 `write_to_file` 审查报告落盘）：不改源码、不 `git add/commit/push/switch`、不装依赖；跑测试＝读取世界现状（允许），改写世界（禁止），Git 一律只读。
 
 ## 自足审查规程
 

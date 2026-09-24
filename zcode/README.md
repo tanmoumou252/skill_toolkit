@@ -15,7 +15,7 @@ ZCode 平台的三子代理计划流水线，解决原生计划模式产物不�
 
 ## 消费/调用约定
 
-主会话任务模式四步调度：分派 Writer 落盘 → 分派 Reviewer 复审 → Read 校验产物物理在场 → Writer 回灌后呈报审批。代理类型名必须逐字精确匹配；完整调度规程见 `skills/zcode-plan-first`。
+主会话任务模式五步调度：分派 Writer 落盘 → Read 校验计划草稿物理在场 → 分派 Reviewer 复审 → Read 校验影子报告物理在场 → Writer 回灌后呈报审批。代理类型名必须逐字精确匹配；完整调度规程见 `skills/zcode-plan-first`。
 
 ## 生效方式
 

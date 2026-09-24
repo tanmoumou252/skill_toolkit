@@ -1,31 +1,46 @@
 # .coderabbit.yaml
-version: "2"
 language: "zh-CN" # 强制使用中文回答
 
 reviews:
-  profile: "chill" # 模式：chill（只报高确信度问题，大幅降噪）vs assertive（挑刺）
+  profile: "quiet"
   request_changes_workflow: false
   high_level_summary: true
-  
+  poem: false
   # 1. 彻底关掉那些制造噪音的无关工具
   tools:
-    docstring:
-      enabled: false # 关掉那个烦人的 Docstring 覆盖率检查！
     languagetool:
       enabled: false # 关掉拼写和语病挑刺
     markdownlint:
       enabled: false # 关掉 markdown 格式微调
 
-  # 2. 路径过滤：告诉它不要审哪些文件
+  # 2. Docstring 覆盖率 pre-merge 检查开关（reviews.tools.docstring 非 schema 合法键，
+  #    官方支持的关闭路径为 reviews.pre_merge_checks.docstrings.mode）
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  finishing_touches:
+    docstrings:
+      enabled: false
+
+  # 3. 路径过滤：告诉它不要审哪些文件
   path_filters:
     - "!**/*.png"
     - "!test-artifacts/**"
     - "!docs/**" # 如果不想让它审纯文档，可在此排除
 
-  # 3. 把我们的审查规范灌给它（自定义 Prompt / Instructions）
-  instructions: |
-    你是一个针对安全漏洞与真实运行时逻辑缺陷的对抗式审查者。
-    【核心纪律】：
-    1. 严禁提出无实际风险的格式、注释、Docstring 或纯措辞建议；
-    2. 重点关注：权限绕过、路径逃逸、符号链接攻击、命令注入、XSS、AST 逻辑漏洞；
-    3. 不属于 Critical / Major 级别的问题一律不要发表评论，保持最高信噪比。
+  # 4. 把我们的审查规范灌给它（自定义 Prompt / Instructions）
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        你是一个针对安全漏洞与真实运行时逻辑缺陷的对抗式审查者。
+
+        【核心纪律】：
+        1. 严禁提出无实际风险的格式、注释、Docstring 或纯措辞建议；
+        2. 重点关注：权限绕过、路径逃逸、符号链接攻击、命令注入、XSS、AST 逻辑漏洞；
+        3. 不属于 Critical / Major 级别的问题一律不要发表评论，保持最高信噪比。
+
+        【评论聚合纪律】：
+        1. 严禁在一个文件内就琐碎的微调发表多条分散的行内评论（Inline Comments）；
+        2. 如果一个文件有多处次要问题，请统一汇总到一条评论中指出，或者直接忽略；
+        3. 对于小于 50 行的配置文件或脚本，除非存在致命逻辑错误，严禁发表超过 1 条评论；
+        4. 只针对必须修改的代码提供确切的 diff 建议，不提供模棱两可的口头建议。

@@ -48,7 +48,7 @@ Get-Item -LiteralPath $source -ErrorAction Stop    # 读侧演示终止错误转
 
 - 单引号字符串按字面值处理，适合不需要 PowerShell 变量展开的正则和 GNU 程序片段。
 - 双引号字符串会展开 `$variable` 和 `$()`，只在确实需要插值时使用。
-- 传给 `awk` 的 `$1`、`$2` 等字段表达式通常需要置于 PowerShell 单引号中（`awk*/sed*` 属禁入清单：只读演示键集外落 Ask 属预期、禁申请加键；`sed -i` 为写操作，一律宿主编辑工具）。
+- 传给 `awk` 的 `$1`、`$2` 等字段表达式通常需要置于 PowerShell 单引号中（`awk*/sed*` 属禁入清单：宿主落 Ask 属预期、MCP 受控通道直接硬拒（非 Ask）、禁申请加键；`sed -i` 为写操作，一律宿主编辑工具）。
 - 当参数本身包含单引号、多层正则、JSON 或多层 Shell 语法时，优先写临时 `.ps1` 或 `.sh` 文件，不继续堆叠转义。
 
 ```powershell

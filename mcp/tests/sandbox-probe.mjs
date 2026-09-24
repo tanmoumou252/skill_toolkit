@@ -335,8 +335,19 @@ try {
   //   被测内核 WORKSPACE = process.cwd()，进程内 import 时 cwd = 探针进程 cwd，
   //   相对源 mcp/package.json 才能经工作区锁回判定解析成立；沿用 F 组 spawn 模式会因
   //   cwd 为临时目录而必然假红。G4（角色门禁）沿用 F 组 spawn + stdin JSON-RPC 模式。
+  // HOME 隔离：进程内加载前将 HOME/USERPROFILE 重定向到 isoHome 并剥离 MCP_* 前缀键，
+  //   使 gov 的沙箱路径绑定到隔离树，杜绝 G 组写入真实用户级目录（对齐文件头声明；
+  //   spawn 各组经 env 覆盖已有同款隔离）。内核在 require 期一次性绑定路径，
+  //   本进程后续无 HOME 依赖方（后续 spawn 均用预构 execProbeHost），故不回滚 env。
+  for (const gk of Object.keys(process.env)) { if (gk.startsWith('MCP_')) delete process.env[gk]; }
+  process.env.HOME = isoHome;
+  process.env.USERPROFILE = isoHome;
   const { createRequire } = await import('module');
   const gov = createRequire(GOVERNOR)(GOVERNOR);
+
+  check('g-inprocess-home-isolated',
+    path.resolve(gov.VIRTUAL_DRIVE_DIR).toLowerCase().startsWith(isoHome.toLowerCase()),
+    String(gov.VIRTUAL_DRIVE_DIR));
 
   // 探针前置自检：进程内 WORKSPACE 必须包含 mcp/package.json，否则相对源解析会假红
   const govWorkspace = path.resolve(gov.WORKSPACE);

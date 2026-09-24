@@ -1,7 +1,7 @@
 
 # Kilo Code Plan 权限模板与托管配置指南（kilo.jsonc / Kilocode 面板为中心）
 
-本模板提供可直接并入 `kilo.jsonc` 的标准权限配置块，用于解决 Kilo 官方原生 `plan` 模式下 **“无法执行测试用例”** 与 **“Windows/pwsh 原生指令被拦截”** 的问题。经宿主权限探针与受控通道定案：`edit` 的路径级 map 托管在 `kilo.jsonc`（或 Kilocode 权限面板）；三份 `-sp` 代理（`plan-writer-sp` / `plan-reviewer-sp` / `pr-reviewer-sp`）的终端命令全面收口至受控 MCP 双实例（`mcp__plan-governor-*`），采用职责分离双通道架构：主代理 `plan-writer-sp` 放开子代所需通道（`main: allow`、`subagent: ask`/`allow`），两份 Reviewer 子代理对 main 全部键 `deny`、仅 `allow` subagent——各司其职依公理 M8（每工具跨三层取最严、任一 `deny` 即不注入）。命令黑白名单与结构硬闸由 `mcp/plan-governor.js` 单源统一执法。
+本模板提供可直接并入 `kilo.jsonc` 的标准权限配置块，用于解决 Kilo 官方原生 `plan` 模式下 **“无法执行测试用例”** 与 **“Windows/pwsh 原生指令被拦截”** 的问题。经宿主权限探针与受控通道定案：`edit` 的路径级 map 托管在 `kilo.jsonc`（或 Kilocode 权限面板）；三份 `-sp` 代理（`plan-writer-sp` / `plan-reviewer-sp` / `pr-reviewer-sp`）的终端命令以受控 MCP 双实例（`mcp__plan-governor-*`）为默认治理通道（两份 Reviewer 全面收口；`plan-writer-sp` 保留 `bash` ask 兜底残余路径，见文末第 10 条如实声明），采用职责分离双通道架构：主代理 `plan-writer-sp` 放开子代所需通道（`main: allow`、`subagent: ask`/`allow`），两份 Reviewer 子代理对 main 全部键 `deny`、仅 `allow` subagent——各司其职依公理 M8（每工具跨三层取最严、任一 `deny` 即不注入）。命令黑白名单与结构硬闸由 `mcp/plan-governor.js` 单源统一执法。
 
 ---
 
@@ -113,7 +113,7 @@ agent手动设置部分--目前还未完全弄清 Kilocode 权限生效的情况
 关于权限分工 配置其实是三个独立权限世界在并行：
 
 - **code agent**：jsonc 内联 + 逐键覆盖自动审批。例如，自动审批设置某个命令权限是 ask，code 可以直接覆盖为 allow。
-- **plan-writer-sp 等三个 sp**：终端命令全面收口至受控 MCP 双实例通道（Writer 主用 main 实例、并按公理 M8 对子代所需通道不得 `deny`；Reviewer 只 `allow` subagent 实例），原生 edit 维持路径隔离。
+- **plan-writer-sp 等三个 sp**：终端命令以受控 MCP 双实例通道为默认治理面（Writer 主用 main 实例、并按公理 M8 对子代所需通道不得 `deny`，另保留 `bash` ask 兜底残余路径见文末第 10 条；两份 Reviewer 全面收口、只 `allow` subagent 实例），原生 edit 维持路径隔离。
 - **explore / general / debug / ask**：没有配置单独的自定义受控通道，纯靠全局与自动审批配置的权限运作。
 
 ---

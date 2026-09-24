@@ -31,6 +31,14 @@ check('fence-nested-4-3-not-flagged', !has([{ path: skillPath, text: nested }], 
 const inline = [...skillFm, '- 严禁使用 `## 快速起步` 或 ```bash``` 命令块。', ''].join('\n');
 check('fence-inline-triple-backticks-not-flagged', !has([{ path: skillPath, text: inline }], 'fence-all-closed', skillPath));
 
+// 3b) 行首反引号围栏 info 含反引号（CommonMark 非法 info）属行内代码，不得被当作围栏开启
+const infoBacktick = [...skillFm, '```bash`tail', 'plain text', ''].join('\n');
+check('fence-backtick-info-with-backtick-not-flagged', !has([{ path: skillPath, text: infoBacktick }], 'fence-all-closed', skillPath));
+
+// 3c) 正控制：波浪号围栏 info 含反引号仍是合法开启，未闭合必须检出（证明守卫只收反引号族）
+const tildeInfoBacktick = [...skillFm, '~~~bash`tail', 'plain text', ''].join('\n');
+check('fence-tilde-info-backtick-still-opens', has([{ path: skillPath, text: tildeInfoBacktick }], 'fence-all-closed', skillPath));
+
 // 4) 状态机可直接复核：4 反引号外层只应产生 1 对围栏，内层 3 反引号属内容（故不是 2 对）
 const st = scanFences(nested);
 check('scanFences-nested-pairs-1', st.pairs.length === 1 && st.unclosed.length === 0, `pairs=${st.pairs.length}`);
