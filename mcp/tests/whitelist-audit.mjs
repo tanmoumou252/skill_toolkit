@@ -50,6 +50,8 @@ try { reportText = fs.readFileSync(reportPath, 'utf8'); } catch { reportText = '
 const allowSet = new Set(allow);
 // 探针命令归属于哪个 allow 键：精确键按"键 + 空格边界"前缀（含命令参数），* 通配键按 startsWith；
 //   多键重叠时取固定前缀最长（最具体）者。无匹配返回 null。cmdLower 须为已小写的命令串。
+//   命中判定用小写副本 kl，返回值 best 保留 allow 原样大小写（best = k）——与 coverageOf 中逐字 trim 的
+//   key 比对须同大小写；返回小写副本会在 ALLOW_KEYS 引入大写键时使 key!==best 静默漏计（PR#1 review 5313348658）。
 function bestAllowKey(cmdLower) {
   let best = null;
   let bestLen = -1;
@@ -61,7 +63,7 @@ function bestAllowKey(cmdLower) {
     const hit = kl.endsWith('*')
       ? cmdLower.startsWith(prefix)
       : (cmdLower === kl || cmdLower.startsWith(kl + ' '));
-    if (hit && prefix.length > bestLen) { best = kl; bestLen = prefix.length; }
+    if (hit && prefix.length > bestLen) { best = k; bestLen = prefix.length; }
   }
   return best;
 }
