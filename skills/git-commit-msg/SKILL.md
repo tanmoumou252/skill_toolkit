@@ -1,10 +1,11 @@
 ---
 name: git-commit-msg
-allowed-tools: Bash(git add:*), Bash(git commit:*)
-description: 生成 git commit 信息。当用户提到 commit、提交、提交信息、提交消息、写提交、写个提交、写一个提交、生成提交、生成提交信息、生成 commit、生成 commit message、写 commit、写个 commit、写一个 commit、commit message、git commit、git log、git diff 并要求写/生成提交信息时触发。也适用于：把当前未提交的更改写 commit、总结改动写 commit、把改动写到 commit_msg.md、把 commit 写入 .kilo/plans/commit_msg.md、帮我提交、帮我写提交信息、提交代码、总结一下改动并提交、写提交信息到文件、写入并提交等任何涉及生成 git commit message 或执行提交操作的场景。
+description: 生成 git commit 信息。当用户提到 commit、提交、提交信息、提交消息、写提交、写个提交、写一个提交、生成提交、生成提交信息、生成 commit、生成 commit message、写 commit、写个 commit、写一个 commit、commit message、git commit、git log、git diff 并要求写/生成提交信息时触发。也适用于：把当前未提交的更改写 commit、总结改动写 commit、把改动写到 commit_msg.md、把 commit 写入 .kilo/plans/commit_msg.md、帮我写提交信息、写提交信息到文件等任何涉及生成 git commit message 的场景。本技能只生成提交消息，不执行提交。
 ---
 
 # Git Commit Message Guide
+
+> **能力边界（最高优先级）**：本技能是**纯提交消息生成器**，服从三端 `AGENTS.md` Git 绝对只读铁律。Agent 在任何情形下都不执行 `git add` / `git commit` / `git push` 等任何 Git 写操作，即便用户明确要求提交，也仅生成 commit 消息与提交命令原文交人类在宿主终端执行。本技能不产生任何提交行为。
 
 ## Role and Purpose
 
@@ -259,15 +260,16 @@ OUTPUT:
 
 ## 工作流程
 
-1. 运行 `git diff`（或 `git diff --cached`）获取当前未提交的更改
-2. 根据上述规范生成 commit 信息
+1. 运行 `git status --short -uall` 获取全量改动清单（未暂存、已暂存、未跟踪三态），再运行 `git diff` 与 `git diff --cached` 获取具体内容；**未跟踪新文件必须逐一通读**（`git diff` 不显示它们），严禁跳过
+2. 根据上述规范生成 commit 信息，信息覆盖范围＝第 1 步已核实的完整改动集
 3. **处理操作指令**：
    - 若用户仅要求生成信息：直接输出 commit 信息。
    - 若用户要求写入文件（如 `.kilo/plans/commit_msg.md`）：将 commit 信息写入文件，内容**只包含 commit 信息本身**。
-   - 若用户明确要求"提交"或"写入并提交"：
-     - 执行 `git add .` (或指定文件)
-     - 调用 `git commit -F <文件>` 或 `git commit -m "<commit信息>"`
-     - 输出提交结果确认。
+   - 若用户明确要求"提交"或"写入并提交"：输出 commit 信息并附以下提交命令原文，提示用户在宿主终端自行执行（本技能不执行任何 Git 写操作）。暂存范围必须与第 1 步已核实的文件一致，**按名逐一暂存**，严禁 `git add .` 无参形态裹入未检查改动：
+     ```
+     git add <第 1 步已核实的文件路径1> <路径2> ...
+     git commit -m "<生成的commit信息>"
+     ```
 
 ## 输出前自检
 

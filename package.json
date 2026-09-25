@@ -1,0 +1,9 @@
+{
+  "name": "skill-toolkit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "跨工具 agent/skill 规程集与 MCP 受控终端（适配 Kilo Code / ZCode / CodeBuddy 三端，无构建、零依赖）。",
+  "scripts": {
+    "test": "npm test --prefix checks && npm test --prefix mcp"
+  }
+}

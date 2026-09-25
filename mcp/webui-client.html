@@ -1,0 +1,1646 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="slate">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plan-Governor 哨兵控制台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;600&family=Gabarito:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+
+
+/* ===== 内置工具类子集（替代 Tailwind Play CDN：零网络、零构建）=====
+   完整性判据 = regress 断言 webui-utility-subset-presence（presence-only：只保规则在场，不保 @media 包裹语义；
+   其 detail 输出即缺项工作清单）+ webui-utility-rules-nonempty（禁空规则）。
+   展开规范 = 本计划「工具类子集确定性映射表」；表未覆盖的 token 按 Tailwind 对应版本语义（含 v4 别名）展开并记入证据日志。 */
+/* --- 生成区开始 --- */
+/* 最小 preflight（替代 Tailwind Play CDN 注入的基础重置；仅保留本页依赖项）。
+   本页未使用 Play CDN 之外的任何 Tailwind 能力，故以确定性映射表展开工具类子集即可。 */
+*, ::before, ::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: currentColor; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* 布局：display / position / inset / z-index / overflow */
+.block { display: block; }
+.flex { display: flex; }
+.grid { display: grid; }
+.absolute { position: absolute; }
+.relative { position: relative; }
+.fixed { position: fixed; }
+.sticky { position: sticky; }
+.inset-0 { inset: 0; }
+.top-0 { top: 0; }
+.right-0 { right: 0; }
+.right-5 { right: 1.25rem; }
+.bottom-5 { bottom: 1.25rem; }
+.z-30 { z-index: 30; }
+.z-40 { z-index: 40; }
+.z-50 { z-index: 50; }
+.overflow-auto { overflow: auto; }
+.overflow-x-auto { overflow-x: auto; }
+.overflow-y-auto { overflow-y: auto; }
+
+/* Flex / Grid 容器 */
+.flex-1 { flex: 1 1 0%; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.shrink-0 { flex-shrink: 0; }
+.items-start { align-items: flex-start; }
+.items-center { align-items: center; }
+.justify-end { justify-content: flex-end; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.space-x-2 > :not([hidden]) ~ :not([hidden]) { margin-left: 0.5rem; }
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* gap */
+.gap-1 { gap: 0.25rem; }
+.gap-1\.5 { gap: 0.375rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-2\.5 { gap: 0.625rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+.gap-5 { gap: 1.25rem; }
+
+/* padding */
+.p-1 { padding: 0.25rem; }
+.p-1\.5 { padding: 0.375rem; }
+.p-2 { padding: 0.5rem; }
+.p-2\.5 { padding: 0.625rem; }
+.p-3 { padding: 0.75rem; }
+.p-3\.5 { padding: 0.875rem; }
+.p-4 { padding: 1rem; }
+.p-5 { padding: 1.25rem; }
+.p-6 { padding: 1.5rem; }
+.px-1\.5 { padding-left: 0.375rem; padding-right: 0.375rem; }
+.px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.px-2\.5 { padding-left: 0.625rem; padding-right: 0.625rem; }
+.px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+.px-3\.5 { padding-left: 0.875rem; padding-right: 0.875rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
+.py-0\.5 { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-1\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+.py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-2\.5 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.py-5 { padding-top: 1.25rem; padding-bottom: 1.25rem; }
+.py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+.py-10 { padding-top: 2.5rem; padding-bottom: 2.5rem; }
+.py-12 { padding-top: 3rem; padding-bottom: 3rem; }
+.py-20 { padding-top: 5rem; padding-bottom: 5rem; }
+.pt-0\.5 { padding-top: 0.125rem; }
+.pt-1 { padding-top: 0.25rem; }
+.pt-2 { padding-top: 0.5rem; }
+.pb-1\.5 { padding-bottom: 0.375rem; }
+.pb-2 { padding-bottom: 0.5rem; }
+.pr-1 { padding-right: 0.25rem; }
+
+/* margin */
+.mb-0\.5 { margin-bottom: 0.125rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-1\.5 { margin-bottom: 0.375rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-5 { margin-bottom: 1.25rem; }
+.mt-0\.5 { margin-top: 0.125rem; }
+.mt-1 { margin-top: 0.25rem; }
+.mt-1\.5 { margin-top: 0.375rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-auto { margin-top: auto; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+/* sizing */
+.w-1\.5 { width: 0.375rem; }
+.w-2\.5 { width: 0.625rem; }
+.w-3 { width: 0.75rem; }
+.w-3\.5 { width: 0.875rem; }
+.w-4 { width: 1rem; }
+.w-5 { width: 1.25rem; }
+.w-8 { width: 2rem; }
+.w-9 { width: 2.25rem; }
+.w-10 { width: 2.5rem; }
+.w-12 { width: 3rem; }
+.w-48 { width: 12rem; }
+.w-64 { width: 16rem; }
+.w-full { width: 100%; }
+.h-1\.5 { height: 0.375rem; }
+.h-2\.5 { height: 0.625rem; }
+.h-3 { height: 0.75rem; }
+.h-3\.5 { height: 0.875rem; }
+.h-4 { height: 1rem; }
+.h-5 { height: 1.25rem; }
+.h-7 { height: 1.75rem; }
+.h-8 { height: 2rem; }
+.h-9 { height: 2.25rem; }
+.h-10 { height: 2.5rem; }
+.h-11 { height: 2.75rem; }
+.h-12 { height: 3rem; }
+.min-h-screen { min-height: 100vh; }
+.max-h-40 { max-height: 10rem; }
+.max-h-48 { max-height: 12rem; }
+.max-h-\[360px\] { max-height: 360px; }
+.max-h-\[380px\] { max-height: 380px; }
+.max-h-\[460px\] { max-height: 460px; }
+.max-h-\[480px\] { max-height: 480px; }
+.max-w-xs { max-width: 20rem; }
+.max-w-sm { max-width: 24rem; }
+.max-w-md { max-width: 28rem; }
+.max-w-7xl { max-width: 80rem; }
+.max-w-\[100px\] { max-width: 100px; }
+.max-w-\[180px\] { max-width: 180px; }
+
+/* typography */
+.text-xs { font-size: 0.75rem; line-height: 1rem; }
+.text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+.text-base { font-size: 1rem; line-height: 1.5rem; }
+.text-2xl { font-size: 1.5rem; line-height: 2rem; }
+.text-\[9px\] { font-size: 9px; }
+.text-\[10px\] { font-size: 10px; }
+.text-\[11px\] { font-size: 11px; }
+.text-\[13px\] { font-size: 13px; }
+.text-\[14px\] { font-size: 14px; }
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+.text-white { color: #ffffff; }
+.font-normal { font-weight: 400; }
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.leading-tight { line-height: 1.25; }
+.leading-relaxed { line-height: 1.625; }
+.tracking-tight { letter-spacing: -0.025em; }
+.tracking-wide { letter-spacing: 0.025em; }
+.tracking-wider { letter-spacing: 0.05em; }
+.tracking-\[0\.4em\] { letter-spacing: 0.4em; }
+.uppercase { text-transform: uppercase; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.break-all { word-break: break-all; }
+.whitespace-nowrap { white-space: nowrap; }
+.whitespace-pre-wrap { white-space: pre-wrap; }
+.antialiased { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* 背景色工具类 */
+.bg-\[var\(--accent-container\)\] { background-color: var(--accent-container); }
+.bg-\[var\(--accent-primary\)\] { background-color: var(--accent-primary); }
+.bg-\[var\(--bg-canvas\)\] { background-color: var(--bg-canvas); }
+.bg-\[var\(--bg-code-block\)\] { background-color: var(--bg-code-block); }
+.bg-\[var\(--bg-file-viewer\)\] { background-color: var(--bg-file-viewer); }
+.bg-\[var\(--bg-input\)\] { background-color: var(--bg-input); }
+.bg-\[var\(--bg-result-block\)\] { background-color: var(--bg-result-block); }
+.bg-\[var\(--bg-result-success\)\] { background-color: var(--bg-result-success); }
+.bg-\[var\(--bg-surface\)\] { background-color: var(--bg-surface); }
+.bg-\[var\(--bg-surface-elevated\)\] { background-color: var(--bg-surface-elevated); }
+.bg-\[var\(--bg-surface-subtle\)\] { background-color: var(--bg-surface-subtle); }
+.bg-\[var\(--bg-terminal\)\] { background-color: var(--bg-terminal); }
+.bg-\[var\(--danger-accent\)\] { background-color: var(--danger-accent); }
+.bg-\[var\(--danger-container\)\] { background-color: var(--danger-container); }
+.bg-\[var\(--gold-accent\)\] { background-color: var(--gold-accent); }
+.bg-\[var\(--gold-container\)\] { background-color: var(--gold-container); }
+.bg-black\/60 { background-color: rgb(0 0 0 / 0.6); }
+
+/* 文字色工具类 */
+.text-\[var\(--accent-on-primary\)\] { color: var(--accent-on-primary); }
+.text-\[var\(--accent-primary\)\] { color: var(--accent-primary); }
+.text-\[var\(--accent-text\)\] { color: var(--accent-text); }
+.text-\[var\(--danger-accent\)\] { color: var(--danger-accent); }
+.text-\[var\(--danger-text\)\] { color: var(--danger-text); }
+.text-\[var\(--gold-accent\)\] { color: var(--gold-accent); }
+.text-\[var\(--gold-text\)\] { color: var(--gold-text); }
+.text-\[var\(--syntax-key\)\] { color: var(--syntax-key); }
+.text-\[var\(--syntax-number\)\] { color: var(--syntax-number); }
+.text-\[var\(--syntax-string\)\] { color: var(--syntax-string); }
+.text-\[var\(--text-code-block\)\] { color: var(--text-code-block); }
+.text-\[var\(--text-dim\)\] { color: var(--text-dim); }
+.text-\[var\(--text-file-viewer\)\] { color: var(--text-file-viewer); }
+.text-\[var\(--text-main\)\] { color: var(--text-main); }
+.text-\[var\(--text-muted\)\] { color: var(--text-muted); }
+.text-\[var\(--text-result-block\)\] { color: var(--text-result-block); }
+.text-\[var\(--text-result-success\)\] { color: var(--text-result-success); }
+.text-\[var\(--text-terminal\)\] { color: var(--text-terminal); }
+.text-\[var\(--text-terminal-dim\)\] { color: var(--text-terminal-dim); }
+
+/* 边框宽度 / 颜色 */
+.border { border-width: 1px; }
+.border-b { border-bottom-width: 1px; }
+.border-t { border-top-width: 1px; }
+.border-\[var\(--accent-primary\)\] { border-color: var(--accent-primary); }
+.border-\[var\(--border-code-block\)\] { border-color: var(--border-code-block); }
+.border-\[var\(--border-file-viewer\)\] { border-color: var(--border-file-viewer); }
+.border-\[var\(--border-main\)\] { border-color: var(--border-main); }
+.border-\[var\(--border-result-block\)\] { border-color: var(--border-result-block); }
+.border-\[var\(--border-result-success\)\] { border-color: var(--border-result-success); }
+.border-\[var\(--border-subtle\)\] { border-color: var(--border-subtle); }
+.border-\[var\(--border-terminal\)\] { border-color: var(--border-terminal); }
+.border-\[var\(--danger-accent\)\] { border-color: var(--danger-accent); }
+.border-\[var\(--gold-accent\)\] { border-color: var(--gold-accent); }
+
+/* 圆角 */
+.rounded { border-radius: 0.25rem; }
+.rounded-xl { border-radius: 0.75rem; }
+.rounded-2xl { border-radius: 1rem; }
+.rounded-full { border-radius: 9999px; }
+.rounded-\[6px\] { border-radius: 6px; }
+.rounded-\[8px\] { border-radius: 8px; }
+.rounded-\[10px\] { border-radius: 10px; }
+.rounded-\[14px\] { border-radius: 14px; }
+.rounded-\[18px\] { border-radius: 18px; }
+.rounded-\[24px\] { border-radius: 24px; }
+
+/* 阴影 / 透明度 / 背景模糊 */
+.shadow-2xs { box-shadow: 0 1px rgb(0 0 0 / 0.05); }
+.shadow-xs { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+.shadow-sm { box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1); }
+.shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+.opacity-40 { opacity: 0.4; }
+.opacity-70 { opacity: 0.7; }
+.opacity-80 { opacity: 0.8; }
+.backdrop-blur-md { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+
+/* 过渡 */
+.transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-colors { transition-property: color, background-color, border-color, text-decoration-color, fill, stroke; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-opacity { transition-property: opacity; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-transform { transition-property: transform; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.duration-200 { transition-duration: 200ms; }
+
+/* 光标 / 动画（动画类必须同时定义 @keyframes，禁只写 animation 引用） */
+.cursor-pointer { cursor: pointer; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: 0.5; } }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+/* 伪类变体 */
+.hover\:bg-\[var\(--bg-surface-elevated\)\]:hover { background-color: var(--bg-surface-elevated); }
+.hover\:bg-\[var\(--bg-surface-subtle\)\]:hover { background-color: var(--bg-surface-subtle); }
+.hover\:border-\[var\(--accent-primary\)\]:hover { border-color: var(--accent-primary); }
+.hover\:opacity-90:hover { opacity: 0.9; }
+.hover\:text-\[var\(--danger-accent\)\]:hover { color: var(--danger-accent); }
+.hover\:text-\[var\(--text-main\)\]:hover { color: var(--text-main); }
+.hover\:underline:hover { text-decoration-line: underline; }
+.focus\:border-\[var\(--accent-primary\)\]:focus { border-color: var(--accent-primary); }
+.focus\:border-\[var\(--danger-accent\)\]:focus { border-color: var(--danger-accent); }
+.focus\:outline-none:focus { outline: 2px solid transparent; outline-offset: 2px; }
+.disabled\:opacity-50:disabled { opacity: 0.5; }
+.last\:border-b-0:last-child { border-bottom-width: 0px; }
+.group:hover .group-hover\:text-\[var\(--accent-primary\)\] { color: var(--accent-primary); }
+.group:hover .group-hover\:text-\[var\(--accent-text\)\] { color: var(--accent-text); }
+
+/* 响应式变体（sm:640px / lg:1024px） */
+@media (min-width: 640px) {
+  .sm\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sm\:px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .sm\:text-base { font-size: 1rem; line-height: 1.5rem; }
+  .sm\:text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+}
+@media (min-width: 1024px) {
+  .lg\:col-span-5 { grid-column: span 5 / span 5; }
+  .lg\:col-span-7 { grid-column: span 7 / span 7; }
+  .lg\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lg\:grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+}
+
+/* 审出漏检补遗（PR 审查 E2）：无标记单 token 类——位于多 token JS 串的第二 token 且无 `-`/`:`/`[`
+   标记，故 webui-utility-subset-presence 的 MARK 过滤不覆盖；由人工超集扫描（.kilo/probe-sweep-tokens.mjs）审出。 */
+.italic { font-style: italic; }
+.rotate-180 { transform: rotate(180deg); }
+
+/* --- 生成区结束 --- */
+
+@layer base {
+  :root {
+    --font-fraunces: 'Fraunces', serif;
+    --font-gabarito: 'Gabarito', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  /* 默认：深空极简暗黑 Slate Obsidian (高对比度、现代纯黑灰蓝底、翡翠高光) */
+  :root, [data-theme="slate"] {
+    --bg-canvas: #0d1119;
+    --bg-surface: #131b28;
+    --bg-surface-elevated: #1e293b;
+    --bg-surface-subtle: #273549;
+    --bg-input: #172235;
+    --border-main: #334155;
+    --border-subtle: #1e293b;
+    --text-main: #dde5ee;
+    --text-muted: #a9b6c6;
+    --text-dim: #7c8b9e;
+    --accent-primary: #10b981;
+    --accent-on-primary: #022c22;
+    --accent-container: #064e3b;
+    --accent-text: #a7f3d0;
+    --gold-accent: #f59e0b;
+    --gold-container: #78350f;
+    --gold-text: #fde68a;
+    --danger-accent: #f43f5e;
+    --danger-container: #881337;
+    --danger-text: #ffe4e6;
+
+    /* 终端、JSON、文件预览与执行结果专用变量 */
+    --bg-terminal: #070a10;
+    --text-terminal: #f8fafc;
+    --text-terminal-muted: #cbd5e1;
+    --text-terminal-dim: #64748b;
+    --border-terminal: #1e293b;
+    --bg-code-block: #070a10;
+    --text-code-block: #f8fafc;
+    --border-code-block: #1e293b;
+    --syntax-key: #38bdf8;
+    --syntax-string: #34d399;
+    --syntax-number: #fbbf24;
+    --syntax-comment: #64748b;
+    --bg-file-viewer: #070a10;
+    --text-file-viewer: #f8fafc;
+    --border-file-viewer: #1e293b;
+    --bg-result-success: rgba(6, 78, 59, 0.4);
+    --border-result-success: rgba(16, 185, 129, 0.6);
+    --text-result-success: #a7f3d0;
+    --bg-result-block: rgba(136, 19, 55, 0.4);
+    --border-result-block: rgba(244, 63, 94, 0.6);
+    --text-result-block: #ffe4e6;
+  }
+
+  /* 钛金工业灰 Titanium Zinc */
+  [data-theme="zinc"] {
+    --bg-canvas: #09090b;
+    --bg-surface: #18181b;
+    --bg-surface-elevated: #27272a;
+    --bg-surface-subtle: #3f3f46;
+    --bg-input: #27272a;
+    --border-main: #3f3f46;
+    --border-subtle: #27272a;
+    --text-main: #fafafa;
+    --text-muted: #d4d4d8;
+    --text-dim: #a1a1aa;
+    --accent-primary: #fafafa;
+    --accent-on-primary: #09090b;
+    --accent-container: #3f3f46;
+    --accent-text: #ffffff;
+    --gold-accent: #fbbf24;
+    --gold-container: #78350f;
+    --gold-text: #fef08a;
+    --danger-accent: #f87171;
+    --danger-container: #991b1b;
+    --danger-text: #fee2e2;
+
+    /* 终端、JSON、文件预览与执行结果专用变量 */
+    --bg-terminal: #09090b;
+    --text-terminal: #fafafa;
+    --text-terminal-muted: #d4d4d8;
+    --text-terminal-dim: #71717a;
+    --border-terminal: #27272a;
+    --bg-code-block: #09090b;
+    --text-code-block: #fafafa;
+    --border-code-block: #27272a;
+    --syntax-key: #e4e4e7;
+    --syntax-string: #a1a1aa;
+    --syntax-number: #fbbf24;
+    --syntax-comment: #52525b;
+    --bg-file-viewer: #09090b;
+    --text-file-viewer: #fafafa;
+    --border-file-viewer: #27272a;
+    --bg-result-success: rgba(63, 63, 70, 0.5);
+    --border-result-success: rgba(161, 161, 170, 0.6);
+    --text-result-success: #ffffff;
+    --bg-result-block: rgba(153, 27, 27, 0.4);
+    --border-result-block: rgba(248, 113, 113, 0.6);
+    --text-result-block: #fee2e2;
+  }
+
+  /* 深空赛博蓝 Cyber Indigo */
+  [data-theme="cyber"] {
+    --bg-canvas: #070b16;
+    --bg-surface: #0f172a;
+    --bg-surface-elevated: #1e293b;
+    --bg-surface-subtle: #293548;
+    --bg-input: #182236;
+    --border-main: #334155;
+    --border-subtle: #1e293b;
+    --text-main: #f1f5f9;
+    --text-muted: #cbd5e1;
+    --text-dim: #94a3b8;
+    --accent-primary: #38bdf8;
+    --accent-on-primary: #082f49;
+    --accent-container: #0369a1;
+    --accent-text: #bae6fd;
+    --gold-accent: #38bdf8;
+    --gold-container: #075985;
+    --gold-text: #e0f2fe;
+    --danger-accent: #fb7185;
+    --danger-container: #9f1239;
+    --danger-text: #ffe4e6;
+
+    /* 终端、JSON、文件预览与执行结果专用变量 */
+    --bg-terminal: #030712;
+    --text-terminal: #f1f5f9;
+    --text-terminal-muted: #93c5fd;
+    --text-terminal-dim: #60a5fa;
+    --border-terminal: #1e293b;
+    --bg-code-block: #030712;
+    --text-code-block: #f1f5f9;
+    --border-code-block: #1e293b;
+    --syntax-key: #38bdf8;
+    --syntax-string: #a7f3d0;
+    --syntax-number: #fde047;
+    --syntax-comment: #64748b;
+    --bg-file-viewer: #030712;
+    --text-file-viewer: #f1f5f9;
+    --border-file-viewer: #1e293b;
+    --bg-result-success: rgba(3, 105, 161, 0.4);
+    --border-result-success: rgba(56, 189, 248, 0.6);
+    --text-result-success: #bae6fd;
+    --bg-result-block: rgba(159, 18, 57, 0.4);
+    --border-result-block: rgba(251, 113, 133, 0.6);
+    --text-result-block: #ffe4e6;
+  }
+
+  /* 黑金控制台 Amber Gold */
+  [data-theme="amber"] {
+    --bg-canvas: #0f0e0b;
+    --bg-surface: #1a1813;
+    --bg-surface-elevated: #26231c;
+    --bg-surface-subtle: #363228;
+    --bg-input: #2a261e;
+    --border-main: #544937;
+    --border-subtle: #3d3527;
+    --text-main: #fef3c7;
+    --text-muted: #fde68a;
+    --text-dim: #d97706;
+    --accent-primary: #fbbf24;
+    --accent-on-primary: #451a03;
+    --accent-container: #78350f;
+    --accent-text: #fef08a;
+    --gold-accent: #f59e0b;
+    --gold-container: #78350f;
+    --gold-text: #fef3c7;
+    --danger-accent: #f87171;
+    --danger-container: #991b1b;
+    --danger-text: #fee2e2;
+
+    /* 终端、JSON、文件预览与执行结果专用变量 */
+    --bg-terminal: #080705;
+    --text-terminal: #fef3c7;
+    --text-terminal-muted: #fde68a;
+    --text-terminal-dim: #d97706;
+    --border-terminal: #3d3527;
+    --bg-code-block: #080705;
+    --text-code-block: #fef3c7;
+    --border-code-block: #3d3527;
+    --syntax-key: #fbbf24;
+    --syntax-string: #fef08a;
+    --syntax-number: #f59e0b;
+    --syntax-comment: #78350f;
+    --bg-file-viewer: #080705;
+    --text-file-viewer: #fef3c7;
+    --border-file-viewer: #3d3527;
+    --bg-result-success: rgba(120, 53, 15, 0.4);
+    --border-result-success: rgba(251, 191, 36, 0.6);
+    --text-result-success: #fef08a;
+    --bg-result-block: rgba(153, 27, 27, 0.4);
+    --border-result-block: rgba(248, 113, 113, 0.6);
+    --text-result-block: #fee2e2;
+  }
+
+  /* 明亮极简白 Studio Light */
+  [data-theme="light"] {
+    --bg-canvas: #f8fafc;
+    --bg-surface: #ffffff;
+    --bg-surface-elevated: #f1f5f9;
+    --bg-surface-subtle: #e2e8f0;
+    --bg-input: #f8fafc;
+    --border-main: #cbd5e1;
+    --border-subtle: #e2e8f0;
+    --text-main: #0f172a;
+    --text-muted: #334155;
+    --text-dim: #64748b;
+    --accent-primary: #059669;
+    --accent-on-primary: #ffffff;
+    --accent-container: #d1fae5;
+    --accent-text: #065f46;
+    --gold-accent: #d97706;
+    --gold-container: #fef3c7;
+    --gold-text: #78350f;
+    --danger-accent: #e11d48;
+    --danger-container: #ffe4e6;
+    --danger-text: #9f1239;
+
+    /* 终端、JSON、文件预览与执行结果专用变量 (在浅色模式下提供高清晰度的专业代码容器) */
+    --bg-terminal: #0f172a;
+    --text-terminal: #f8fafc;
+    --text-terminal-muted: #cbd5e1;
+    --text-terminal-dim: #94a3b8;
+    --border-terminal: #334155;
+    --bg-code-block: #0f172a;
+    --text-code-block: #f8fafc;
+    --border-code-block: #334155;
+    --syntax-key: #38bdf8;
+    --syntax-string: #34d399;
+    --syntax-number: #fbbf24;
+    --syntax-comment: #94a3b8;
+    --bg-file-viewer: #0f172a;
+    --text-file-viewer: #f8fafc;
+    --border-file-viewer: #334155;
+    --bg-result-success: #ecfdf5;
+    --border-result-success: #a7f3d0;
+    --text-result-success: #065f46;
+    --bg-result-block: #fff1f2;
+    --border-result-block: #fecdd3;
+    --text-result-block: #9f1239;
+  }
+
+  body {
+    font-family: var(--font-gabarito);
+    background-color: var(--bg-canvas);
+    color: var(--text-main);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* 全局可读性提升：rem 基准放大一档（text-xs 12→13.5px，text-sm 14→15.75px） */
+  html { font-size: 112.5%; }
+
+  h1, h2, h3, h4, .font-serif-title {
+    font-family: var(--font-fraunces);
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* 强制所有按钮内的文字和图标垂直/水平居中 */
+  button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    line-height: 1;
+  }
+}
+
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+    .animate-in { animation: fadeIn .15s ease-out, zoomIn .15s ease-out; }
+    .scrollbar-none::-webkit-scrollbar { display: none; }
+    .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border-main); border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen bg-[var(--bg-canvas)] text-[var(--text-main)] flex flex-col antialiased transition-colors duration-200">
+  <div id="root" class="flex flex-col min-h-screen"></div>
+
+  <script>
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const ICONS = {
+  AlertTriangle: [["path",{"d":"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"}],["path",{"d":"M12 9v4"}],["path",{"d":"M12 17h.01"}]],
+  ArrowRight: [["path",{"d":"M5 12h14"}],["path",{"d":"m12 5 7 7-7 7"}]],
+  ArrowUpRight: [["path",{"d":"M7 7h10v10"}],["path",{"d":"M7 17 17 7"}]],
+  Check: [["path",{"d":"M20 6 9 17l-5-5"}]],
+  CheckCircle2: [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"m9 12 2 2 4-4"}]],
+  ChevronDown: [["path",{"d":"m6 9 6 6 6-6"}]],
+  Clock: [["path",{"d":"M12 6v6l4 2"}],["circle",{"cx":"12","cy":"12","r":"10"}]],
+  Copy: [["rect",{"width":"14","height":"14","x":"8","y":"8","rx":"2","ry":"2"}],["path",{"d":"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"}]],
+  Download: [["path",{"d":"M12 15V3"}],["path",{"d":"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}],["path",{"d":"m7 10 5 5 5-5"}]],
+  FileCheck: [["path",{"d":"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"}],["path",{"d":"M14 2v4a2 2 0 0 0 2 2h4"}],["path",{"d":"m9 15 2 2 4-4"}]],
+  FileCode: [["path",{"d":"M10 12.5 8 15l2 2.5"}],["path",{"d":"m14 12.5 2 2.5-2 2.5"}],["path",{"d":"M14 2v4a2 2 0 0 0 2 2h4"}],["path",{"d":"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"}]],
+  FileJson: [["path",{"d":"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"}],["path",{"d":"M14 2v4a2 2 0 0 0 2 2h4"}],["path",{"d":"M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"}],["path",{"d":"M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"}]],
+  FileText: [["path",{"d":"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"}],["path",{"d":"M14 2v4a2 2 0 0 0 2 2h4"}],["path",{"d":"M10 9H8"}],["path",{"d":"M16 13H8"}],["path",{"d":"M16 17H8"}]],
+  Fingerprint: [["path",{"d":"M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"}],["path",{"d":"M14 13.12c0 2.38 0 6.38-1 8.88"}],["path",{"d":"M17.29 21.02c.12-.6.43-2.3.5-3.02"}],["path",{"d":"M2 12a10 10 0 0 1 18-6"}],["path",{"d":"M2 16h.01"}],["path",{"d":"M21.8 16c.2-2 .131-5.354 0-6"}],["path",{"d":"M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"}],["path",{"d":"M8.65 22c.21-.66.45-1.32.57-2"}],["path",{"d":"M9 6.8a6 6 0 0 1 9 5.2v2"}]],
+  HardDrive: [["line",{"x1":"22","x2":"2","y1":"12","y2":"12"}],["path",{"d":"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"}],["line",{"x1":"6","x2":"6.01","y1":"16","y2":"16"}],["line",{"x1":"10","x2":"10.01","y1":"16","y2":"16"}]],
+  Info: [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"M12 16v-4"}],["path",{"d":"M12 8h.01"}]],
+  Key: [["path",{"d":"m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"}],["path",{"d":"m21 2-9.6 9.6"}],["circle",{"cx":"7.5","cy":"15.5","r":"5.5"}]],
+  Layers: [["path",{"d":"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"}],["path",{"d":"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"}],["path",{"d":"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"}]],
+  Lock: [["rect",{"width":"18","height":"11","x":"3","y":"11","rx":"2","ry":"2"}],["path",{"d":"M7 11V7a5 5 0 0 1 10 0v4"}]],
+  Palette: [["path",{"d":"M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"}],["circle",{"cx":"13.5","cy":"6.5","r":".5","fill":"currentColor"}],["circle",{"cx":"17.5","cy":"10.5","r":".5","fill":"currentColor"}],["circle",{"cx":"6.5","cy":"12.5","r":".5","fill":"currentColor"}],["circle",{"cx":"8.5","cy":"7.5","r":".5","fill":"currentColor"}]],
+  Play: [["path",{"d":"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"}]],
+  Plus: [["path",{"d":"M5 12h14"}],["path",{"d":"M12 5v14"}]],
+  Radio: [["path",{"d":"M16.247 7.761a6 6 0 0 1 0 8.478"}],["path",{"d":"M19.075 4.933a10 10 0 0 1 0 14.134"}],["path",{"d":"M4.925 19.067a10 10 0 0 1 0-14.134"}],["path",{"d":"M7.753 16.239a6 6 0 0 1 0-8.478"}],["circle",{"cx":"12","cy":"12","r":"2"}]],
+  RotateCcw: [["path",{"d":"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"}],["path",{"d":"M3 3v5h5"}]],
+  RotateCw: [["path",{"d":"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"}],["path",{"d":"M21 3v5h-5"}]],
+  Search: [["path",{"d":"m21 21-4.34-4.34"}],["circle",{"cx":"11","cy":"11","r":"8"}]],
+  Server: [["rect",{"width":"20","height":"8","x":"2","y":"2","rx":"2","ry":"2"}],["rect",{"width":"20","height":"8","x":"2","y":"14","rx":"2","ry":"2"}],["line",{"x1":"6","x2":"6.01","y1":"6","y2":"6"}],["line",{"x1":"6","x2":"6.01","y1":"18","y2":"18"}]],
+  ShieldAlert: [["path",{"d":"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"}],["path",{"d":"M12 8v4"}],["path",{"d":"M12 16h.01"}]],
+  ShieldCheck: [["path",{"d":"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"}],["path",{"d":"m9 12 2 2 4-4"}]],
+  Sliders: [["path",{"d":"M10 8h4"}],["path",{"d":"M12 21v-9"}],["path",{"d":"M12 8V3"}],["path",{"d":"M17 16h4"}],["path",{"d":"M19 12V3"}],["path",{"d":"M19 21v-5"}],["path",{"d":"M3 14h4"}],["path",{"d":"M5 10V3"}],["path",{"d":"M5 21v-7"}]],
+  Sparkles: [["path",{"d":"M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"}],["path",{"d":"M20 2v4"}],["path",{"d":"M22 4h-4"}],["circle",{"cx":"4","cy":"20","r":"2"}]],
+  Split: [["path",{"d":"M16 3h5v5"}],["path",{"d":"M8 3H3v5"}],["path",{"d":"M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"}],["path",{"d":"m15 9 6-6"}]],
+  Terminal: [["path",{"d":"M12 19h8"}],["path",{"d":"m4 17 6-6-6-6"}]],
+  TestTube2: [["path",{"d":"M21 7 6.82 21.18a2.83 2.83 0 0 1-3.99-.01a2.83 2.83 0 0 1 0-4L17 3"}],["path",{"d":"m16 2 6 6"}],["path",{"d":"M12 16H4"}]],
+  Trash2: [["path",{"d":"M10 11v6"}],["path",{"d":"M14 11v6"}],["path",{"d":"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"}],["path",{"d":"M3 6h18"}],["path",{"d":"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"}]],
+  X: [["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],
+  XCircle: [["circle",{"cx":"12","cy":"12","r":"10"}],["path",{"d":"m15 9-6 6"}],["path",{"d":"m9 9 6 6"}]],
+  Zap: [["path",{"d":"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"}]]
+};
+
+    function renderIcon(name, cls, strokeWidth) {
+      const node = ICONS[name];
+      if (!node) return '';
+      const sw = strokeWidth === undefined ? 2 : strokeWidth;
+      const body = node.map(function (pair) {
+        const tag = pair[0];
+        const attrs = pair[1];
+        const a = Object.keys(attrs).filter((k) => k !== 'key').map((k) => k + '="' + esc(attrs[k]) + '"').join(' ');
+        return '<' + tag + ' ' + a + '></' + tag + '>';
+      }).join('');
+      return '<svg class="' + (cls || 'w-4 h-4') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + sw + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+    }
+
+    const THEMES = [
+      { id: 'slate', name: '深空极简暗黑', badge: 'Slate Obsidian', tag: '翡翠绿', accent: '#10b981', bg: '#0d1119' },
+      { id: 'zinc', name: '钛金工业灰', badge: 'Titanium Zinc', tag: '钛金白', accent: '#fafafa', bg: '#09090b' },
+      { id: 'cyber', name: '深空赛博蓝', badge: 'Cyber Indigo', tag: '电光蓝', accent: '#38bdf8', bg: '#070b16' },
+      { id: 'amber', name: '黑金控制台', badge: 'Amber Gold', tag: '琥珀金', accent: '#fbbf24', bg: '#0f0e0b' },
+      { id: 'light', name: '明亮极简白', badge: 'Studio Light', tag: '极简白', accent: '#059669', bg: '#ffffff' }
+    ];
+
+    const TABS = [
+      { id: 'governor', label: 'Playground', icon: 'ShieldCheck' },
+      { id: 'policy', label: '策略配置', icon: 'Sliders' },
+      { id: 'terminal', label: '受控终端', icon: 'Terminal' },
+      { id: 'tests', label: '回归验证', icon: 'TestTube2' }
+    ];
+
+    const PRESETS = [
+      { label: '安全只读 (git status)', cmd: 'git status', desc: '白名单命令直通' },
+      { label: '白名单管道 (git log | head)', cmd: 'git log --oneline | head -5', desc: '安全管道流' },
+      { label: '黑名单攻击 (rm -rf)', cmd: 'rm -rf .', desc: '命中全模式黑名单阻断' },
+      { label: '结构硬闸 (复合命令 ;|)', cmd: 'git status; rm -rf src', desc: '复合连接符拦截' },
+      { label: '包装闸 (pwsh -c)', cmd: 'powershell -c "Get-Process"', desc: '包装内联执行拦截' },
+      { label: '时钟写入闸 (date -s)', cmd: 'date -s "2020-01-01"', desc: '时钟写操作阻断 (防新鲜度破坏)' },
+      { label: '写逃逸参数 (--output)', cmd: 'git diff --output=/etc/passwd', desc: '输出重定向写逃逸' },
+      { label: '跨区路径闸 (C:)', cmd: 'cat C:/Windows/win.ini', desc: '跨工作区绝对路径实解析拦截' }
+    ];
+
+    const state = {
+      tab: 'governor',
+      theme: localStorage.getItem('pg_theme') || 'slate',
+      token: localStorage.getItem('pg_admin_token') || '',
+      policySubTab: 'matrix',
+      policy: null,
+      isHydratingPolicy: true,
+      status: null,
+      auditLogs: [],
+      sessions: [],
+      auditFilterSid: '',
+      playgroundInput: 'git diff HEAD~1',
+      playgroundResult: null,
+      playgroundHistory: [],
+      matrixTestCmd: 'bash test_script.sh',
+      newWhiteCmd: '',
+      newWhiteDesc: '',
+      newBlackCmd: '',
+      newBlackDesc: '',
+      challengeModal: null,
+      confirmDialog: null,
+      toast: null,
+      terminalInput: 'git status',
+      terminalHistory: [],
+      terminalFiles: [
+        { path: 'package.json', size: 512, content: '{\n  "name": "mcp-sandbox",\n  "version": "1.0.0"\n}' },
+        { path: 'src/index.js', size: 128, content: 'console.log("Hello from T:\\ virtual drive!");' },
+        { path: 'app.log', size: 48, content: '2026-09-17 00:00:00 [INFO] Sandbox initialized\n' }
+      ],
+      terminalSelectedFile: null,
+      terminalNewFileOpen: false,
+      terminalNewFilePath: '',
+      terminalNewFileContent: '',
+      regressRunning: false,
+      regressJobId: null,
+      regressResult: null,
+      themeMenuOpen: false
+    };
+
+    function showToast(text, type) {
+      state.toast = { text: text, type: type || 'success' };
+      render();
+      setTimeout(() => {
+        if (state.toast && state.toast.text === text) {
+          state.toast = null;
+          render();
+        }
+      }, 3500);
+    }
+
+    function setTheme(t) {
+      state.theme = t;
+      state.themeMenuOpen = false;
+      localStorage.setItem('pg_theme', t);
+      document.documentElement.setAttribute('data-theme', t);
+      render();
+    }
+
+    async function apiFetch(p, opts) {
+      opts = opts || {};
+      const headers = { 'Content-Type': 'application/json' };
+      if (opts.headers) Object.assign(headers, opts.headers);
+      if (state.token) headers['Authorization'] = 'Bearer ' + state.token;
+      return fetch(p, Object.assign({}, opts, { headers: headers }));
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await apiFetch('/api/status');
+        if (res.ok) state.status = await res.json();
+      } catch (e) {}
+    }
+
+    async function loadPolicy() {
+      state.isHydratingPolicy = true;
+      render();
+      try {
+        const res = await apiFetch('/api/policy');
+        if (res.ok) state.policy = await res.json();
+      } catch (e) {}
+      state.isHydratingPolicy = false;
+      render();
+    }
+
+    async function loadAuditLogs(silent) {
+      try {
+        const res = await apiFetch('/api/audit-logs');
+        if (res.ok) {
+          const data = await res.json();
+          state.auditLogs = data.logs || [];
+          state.sessions = data.sessions || [];
+          // 轮询调用（silent=true）仅在数据有变化且当前正处于 Playground 页时重绘，
+          //   避免周期性全量重绘让结果卡动画反复重放（闪烁根因）。
+          const raw = JSON.stringify(data.logs);
+          const changed = raw !== (state.__lastLogsRaw || '');
+          state.__lastLogsRaw = raw;
+          if (!silent || (changed && state.tab === 'governor')) render();
+        }
+      } catch (e) {}
+    }
+
+    async function runPlayground(cmd) {
+      const c = cmd !== undefined ? cmd : state.playgroundInput;
+      state.playgroundInput = c;
+      try {
+        const res = await apiFetch('/api/audit', {
+          method: 'POST',
+          body: JSON.stringify({ command: c })
+        });
+        const data = await res.json();
+        const rec = Object.assign({ command: c, timestamp: new Date().toLocaleTimeString() }, data);
+        state.playgroundResult = rec;
+        state.playgroundHistory.unshift(rec);
+        if (state.playgroundHistory.length > 50) state.playgroundHistory.pop();
+        render();
+      } catch (err) {
+        showToast('审计请求失败: ' + err.message, 'error');
+      }
+    }
+
+    async function updatePolicy(customAllow, customDeny) {
+      try {
+        const res = await apiFetch('/api/policy', {
+          method: 'PUT',
+          body: JSON.stringify({ customAllow: customAllow, customDeny: customDeny })
+        });
+        const data = await res.json();
+        if (res.status === 202) {
+          state.challengeModal = {
+            challengeId: data.challengeId,
+            message: data.message,
+            code: '',
+            error: ''
+          };
+          render();
+          return;
+        }
+        if (res.ok) {
+          showToast('策略已原子落盘并通过 HMAC-SHA256 签名');
+          await loadPolicy();
+        } else {
+          showToast(data.error || '策略保存失败', 'error');
+        }
+      } catch (e) {
+        showToast('网络错误: ' + e.message, 'error');
+      }
+    }
+
+    async function confirmChallenge() {
+      if (!state.challengeModal) return;
+      const challengeId = state.challengeModal.challengeId;
+      const code = state.challengeModal.code;
+      try {
+        const res = await apiFetch('/api/policy/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ challengeId: challengeId, code: code })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          state.challengeModal = null;
+          showToast('放宽验证通过，策略已签名生效');
+          await loadPolicy();
+        } else {
+          state.challengeModal.error = data.error || '验证失败';
+          render();
+        }
+      } catch (e) {
+        state.challengeModal.error = '网络错误: ' + e.message;
+        render();
+      }
+    }
+
+    async function triggerRegress() {
+      if (state.regressRunning) return;
+      state.regressRunning = true;
+      state.regressResult = null;
+      render();
+      try {
+        const res = await apiFetch('/api/run-regress', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          state.regressRunning = false;
+          showToast(data.error || '触发回归失败', 'error');
+          render();
+          return;
+        }
+        const jobId = data.jobId;
+        state.regressJobId = jobId;
+        const poll = setInterval(async () => {
+          try {
+            const r = await apiFetch('/api/run-regress/' + jobId);
+            if (!r.ok) return;
+            const job = await r.json();
+            state.regressResult = job;
+            if (job.status === 'done' || job.status === 'error') {
+              clearInterval(poll);
+              state.regressRunning = false;
+              render();
+            }
+          } catch (e) {}
+        }, 1000);
+      } catch (e) {
+        state.regressRunning = false;
+        showToast('无法启动回归作业: ' + e.message, 'error');
+        render();
+      }
+    }
+
+    function computeSpecificity(cmd, allowList, denyList) {
+      const t = String(cmd || '').trim();
+      let bestWhite = null, bestWhiteScore = -1;
+      let bestBlack = null, bestBlackScore = -1;
+
+      (allowList || []).forEach((w) => {
+        if (w.endsWith('*')) {
+          const p = w.slice(0, -1);
+          if (t.startsWith(p) && p.length > bestWhiteScore) { bestWhite = w; bestWhiteScore = p.length; }
+        } else if ((t === w || t.startsWith(w + ' ')) && (w.length + 100) > bestWhiteScore) {
+          bestWhite = w; bestWhiteScore = w.length + 100;
+        }
+      });
+
+      (denyList || []).forEach((b) => {
+        if (b.endsWith('*')) {
+          const p = b.slice(0, -1);
+          if (t.startsWith(p) && p.length > bestBlackScore) { bestBlack = b; bestBlackScore = p.length; }
+        } else if ((t === b || t.startsWith(b + ' ') || t.includes(b)) && (b.length + 100) > bestBlackScore) {
+          bestBlack = b; bestBlackScore = b.length + 100;
+        }
+      });
+
+      let verdict;
+      if (bestWhiteScore > bestBlackScore && bestWhiteScore >= 0) {
+        verdict = '白名单特异性更高 (' + bestWhiteScore + ' > ' + (bestBlackScore >= 0 ? bestBlackScore : 0) + ') -> 放行';
+      } else if (bestBlackScore > bestWhiteScore && bestBlackScore >= 0) {
+        verdict = '黑名单特异性更高 (' + bestBlackScore + ' > ' + (bestWhiteScore >= 0 ? bestWhiteScore : 0) + ') -> 拦截';
+      } else if (bestWhite && !bestBlack) {
+        verdict = '仅匹配白名单 -> 放行';
+      } else if (bestBlack && !bestWhite) {
+        verdict = '仅匹配黑名单 -> 拦截';
+      } else {
+        verdict = '未触发自定义特例（按出厂基线策略判定）';
+      }
+      return { bestWhite: bestWhite, bestWhiteScore: bestWhiteScore, bestBlack: bestBlack, bestBlackScore: bestBlackScore, verdict: verdict };
+    }
+
+    function highlightJson(obj) {
+      const json = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
+      const RE = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
+      let out = '';
+      let last = 0;
+      let m;
+      while ((m = RE.exec(json)) !== null) {
+        out += esc(json.slice(last, m.index));
+        let cls = 'text-[var(--syntax-number)]';
+        if (/^"/.test(m[0])) {
+          if (/:$/.test(m[0])) cls = 'text-[var(--syntax-key)] font-semibold';
+          else cls = 'text-[var(--syntax-string)]';
+        } else if (/true|false/.test(m[0])) {
+          cls = 'text-[var(--gold-accent)] font-semibold';
+        } else if (/null/.test(m[0])) {
+          cls = 'text-[var(--text-dim)] italic';
+        }
+        out += '<span class="' + cls + '">' + esc(m[0]) + '</span>';
+        last = m.index + m[0].length;
+      }
+      out += esc(json.slice(last));
+      return out;
+    }
+
+    function addWhitelist(p) {
+      const cmd = state.newWhiteCmd.trim();
+      if (!cmd) { showToast('请输入白名单命令', 'error'); return; }
+      const next = (p.customAllow || []).slice();
+      if (next.indexOf(cmd) !== -1) { showToast('该命令已存在于白名单', 'error'); return; }
+      next.push(cmd);
+      state.newWhiteCmd = '';
+      state.newWhiteDesc = '';
+      updatePolicy(next, p.customDeny || []);
+    }
+
+    function addBlacklist(p) {
+      const cmd = state.newBlackCmd.trim();
+      if (!cmd) { showToast('请输入黑名单特征', 'error'); return; }
+      const next = (p.customDeny || []).slice();
+      if (next.indexOf(cmd) !== -1) { showToast('该命令已存在于黑名单', 'error'); return; }
+      next.push(cmd);
+      state.newBlackCmd = '';
+      state.newBlackDesc = '';
+      updatePolicy(p.customAllow || [], next);
+    }
+
+    function removeWhitelist(p, cmd) {
+      state.confirmDialog = {
+        title: '确认删除白名单规则？',
+        message: '确认从自定义白名单中移除 "' + cmd + '" 吗？此操作为收紧变更，无需动态码。',
+        onConfirm: function () {
+          const next = (p.customAllow || []).filter((c) => c !== cmd);
+          updatePolicy(next, p.customDeny || []);
+        }
+      };
+      render();
+    }
+
+    function removeBlacklist(p, cmd) {
+      state.confirmDialog = {
+        title: '确认删除黑名单规则？',
+        message: '删除 "' + cmd + '" 属权限放宽操作，将触发终端 2-Step 动态验证码确认。确认继续？',
+        onConfirm: function () {
+          const next = (p.customDeny || []).filter((c) => c !== cmd);
+          updatePolicy(p.customAllow || [], next);
+        }
+      };
+      render();
+    }
+
+    function tFind(p) {
+      const norm = String(p || '').trim().replace(/^['"]|['"]$/g, '').replace(/^\.\//, '').replace(/^T:[\\/]?/i, '').replace(/\//g, '\\');
+      return state.terminalFiles.filter((x) => x.path.toLowerCase() === norm.toLowerCase())[0] || null;
+    }
+    function tAdd(relPath, content, isDir) {
+      const norm = String(relPath).replace(/^[/\\]+/, '').replace(/\//g, '\\');
+      let f = tFind(norm);
+      if (f) { f.content = content; f.size = content.length; f.updatedAt = Date.now(); }
+      else state.terminalFiles.push({ path: norm, size: content.length, content: content, isDirectory: !!isDir, updatedAt: Date.now() });
+      if (!isDir && norm.indexOf('\\') !== -1) {
+        const dir = norm.split('\\').slice(0, -1).join('\\');
+        if (dir && !tFind(dir)) tAdd(dir, '', true);
+      }
+    }
+    function tRemove(pattern) {
+      const clean = String(pattern).trim().replace(/^['"]|['"]$/g, '');
+      if (clean === '.*' || clean === '*' || clean === './*' || clean === 'T:\\*' || clean === 'T:\\*.*' || clean === './' || clean === '.') {
+        state.terminalFiles.length = 0; return;
+      }
+      const target = clean.replace(/^\.\//, '').replace(/\//g, '\\');
+      const lower = target.toLowerCase();
+      for (let i = state.terminalFiles.length - 1; i >= 0; i--) {
+        const p = state.terminalFiles[i].path.toLowerCase();
+        if (p === lower || p.startsWith(lower + '\\')) state.terminalFiles.splice(i, 1);
+      }
+    }
+    function simulateBashWork(cmd) {
+      const trimmed = cmd.trim();
+      const echoRedirectMatch = trimmed.match(/^echo\s+(["']?)(.*?)\1\s*(>|>>)\s*(.+)$/i);
+      if (echoRedirectMatch) {
+        const content = echoRedirectMatch[2];
+        const isAppend = echoRedirectMatch[3] === '>>';
+        const targetFile = echoRedirectMatch[4].trim();
+        const existing = (tFind(targetFile) || { content: '' }).content || '';
+        const newContent = isAppend ? (existing ? existing + '\n' + content : content) : content;
+        tAdd(targetFile, newContent);
+        return { stdout: '[浏览器仿真·未执行] [T:\\ 写入成功] ' + targetFile + ' (' + newContent.length + ' 字节)', stderr: '', exitCode: 0 };
+      }
+      if (trimmed.startsWith('rm ')) {
+        const parts = trimmed.split(/\s+/);
+        const target = parts[parts.length - 1];
+        tRemove(target);
+        return { stdout: '[浏览器仿真·未执行] [T:\\ 物理清理] 成功移除: ' + target, stderr: '', exitCode: 0 };
+      }
+      if (trimmed.startsWith('mkdir ')) {
+        const parts = trimmed.split(/\s+/);
+        const dirName = parts[parts.length - 1];
+        tAdd(dirName, '', true);
+        return { stdout: '[浏览器仿真·未执行] [T:\\ 目录创建] 成功建立目录: T:\\' + dirName, stderr: '', exitCode: 0 };
+      }
+      if (trimmed.startsWith('ls')) {
+        const fileList = state.terminalFiles.map((f) => (f.isDirectory ? 'drwxr-xr-x' : '-rw-r--r--') + ' 1 node dev ' + String(f.size).padStart(6) + ' ' + new Date(f.updatedAt || Date.now()).toLocaleTimeString() + ' T:\\' + f.path);
+        return { stdout: 'total ' + state.terminalFiles.length + '\n' + fileList.join('\n'), stderr: '', exitCode: 0 };
+      }
+      if (trimmed.startsWith('cat ')) {
+        const target = trimmed.replace(/^cat\s+/, '').trim();
+        const f = tFind(target);
+        return f ? { stdout: f.content || '(empty file)', stderr: '', exitCode: 0 } : { stdout: '', stderr: 'cat: ' + target + ': No such file in T:\\', exitCode: 1 };
+      }
+      if (trimmed.indexOf('npm test') !== -1 || trimmed.indexOf('npx vitest') !== -1 || trimmed.indexOf('jest') !== -1) {
+        return { stdout: '[浏览器仿真·未执行] > isolated-test-fixture@1.0.0 test T:\\\n> node --test\n\n✔ Sandbox root confinement test (2.1ms)\n✔ Memory limits & IO constraints (1.4ms)\n✔ CWD locked to T:\\ (0.8ms)\nℹ tests 3\nℹ pass 3\nℹ fail 0', stderr: '', exitCode: 0 };
+      }
+      if (trimmed.startsWith('node ')) {
+        return { stdout: '[浏览器仿真·未执行] [Node.js in T:\\] Execution complete inside virtual root. USERPROFILE=T:\\, HOME=/t.', stderr: '', exitCode: 0 };
+      }
+      if (trimmed.indexOf('..') !== -1) {
+        return { stdout: '[浏览器仿真·未执行] [Ceiling Reached] subst T: 物理天花板生效：父级目录已到达 T:\\ 根目录，无法越界至宿主机驱动器。\nCurrent CWD: T:\\', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '[模拟回执·非真实执法] 本面板为浏览器端模拟沙箱，未调用服务端内核 /api/sandbox/exec，判定结论不代表内核真实执法结果。命令: "' + trimmed + '"', stderr: '', exitCode: 0 };
+    }
+    const TERMINAL_PRESETS = [
+      { label: '安全查看', cmd: 'git status', category: 'safe', hint: '白名单只读命令' },
+      { label: '写入日志', cmd: 'echo "system audit record" > app.log', category: 'write', hint: 'T:\\ 内部写入' },
+      { label: '查看内容', cmd: 'cat app.log', category: 'read', hint: '读取沙箱文件' },
+      { label: '跑测试套件', cmd: 'npm test', category: 'test', hint: '隔离执行单元测试' },
+      { label: '清空根目录', cmd: 'rm -rf ./*', category: 'danger', hint: '受限于 T:\\ 不碰 C:\\' },
+      { label: '跨盘符攻击', cmd: 'cat C:\\Windows\\System32\\drivers\\etc\\hosts', category: 'attack', hint: '触碰物理盘符天花板' },
+      { label: '高危解释器', cmd: 'powershell -c "Get-Process"', category: 'attack', hint: '黑名单解释器击杀' },
+      { label: '自定义白名单', cmd: 'cargo check', category: 'custom', hint: '策略库扩展规则' }
+    ];
+    function presetCategoryStyle(cat) {
+      if (cat === 'safe' || cat === 'test') return 'bg-[var(--accent-container)] text-[var(--accent-text)] border-[var(--accent-primary)]';
+      if (cat === 'write') return 'bg-[var(--gold-container)] text-[var(--gold-text)] border-[var(--gold-accent)]';
+      if (cat === 'danger' || cat === 'attack') return 'bg-[var(--danger-container)] text-[var(--danger-text)] border-[var(--danger-accent)]';
+      return 'bg-[var(--bg-surface-subtle)] text-[var(--text-muted)] border-[var(--border-main)]';
+    }
+    async function runTerminalCommand(modeToRun, cmdToRun) {
+      const cmd = String(cmdToRun !== undefined ? cmdToRun : state.terminalInput).trim();
+      if (!cmd) return;
+      if (cmdToRun !== undefined) state.terminalInput = cmdToRun;
+      const t0 = Date.now();
+      if (modeToRun === 'mock') {
+        try {
+          const res = await apiFetch('/api/audit', { method: 'POST', body: JSON.stringify({ command: cmd }) });
+          const data = await res.json();
+          const blocked = !data.ok;
+          state.terminalHistory.unshift({ cmd: cmd, mode: 'mock', blocked: blocked, exitCode: blocked ? 1 : 0,
+            out: blocked ? '' : '✔ 结论: 主通道预检通过；本面板不对 T 盘沙箱执行结果作任何预测（沙箱另有展开构造、销毁、路径三道闸）',
+            blockReason: blocked ? '[MOCK 预检拦截 - 0风险]\n• 状态: 预检失败 (BLOCKED)\n• 闸位: ' + (data.gateType || '-') + '\n• 阻断原因: ' + (data.reason || '被拦截') + '\n• 保护效果: 主通道判定为拒绝（本面板不预测沙箱裁决），宿主工作区未被触碰\n• 审计流: 模拟预检不入审计流（零执行零写入）' : '',
+            gateType: data.gateType, time: new Date().toLocaleTimeString(), durationMs: (data.durationMs || Date.now() - t0 + 8) });
+        } catch (e) { showToast('预检请求失败: ' + e.message, 'error'); return; }
+      } else {
+        const r = simulateBashWork(cmd);
+        state.terminalHistory.unshift({ cmd: cmd, mode: 'execute', blocked: false, exitCode: r.exitCode,
+          out: r.stdout, stderr: r.stderr, blockReason: '',
+          time: new Date().toLocaleTimeString(), durationMs: Date.now() - t0 + 24 });
+      }
+      if (state.terminalHistory.length > 50) state.terminalHistory.pop();
+      state.terminalSelectedFile = null;
+      render();
+    }
+
+    
+
+    function saveTerminalFile() {
+      const p = state.terminalNewFilePath.trim();
+      if (!p) { showToast('请输入文件路径', 'error'); return; }
+      state.terminalFiles.push({ path: p, size: state.terminalNewFileContent.length, content: state.terminalNewFileContent });
+      state.terminalNewFileOpen = false;
+      state.terminalNewFilePath = '';
+      state.terminalNewFileContent = '';
+      render();
+    }
+
+    function copyRegressReport(res) {
+      const report = 'Plan-Governor Regression Report\nTimestamp: ' + new Date().toISOString() + '\nExitCode: ' + (res.exitCode || 0) + '\n\n--- STDOUT ---\n' + (res.stdout || '') + '\n--- STDERR ---\n' + (res.stderr || '');
+      navigator.clipboard.writeText(report);
+      showToast('测试报告已复制到剪贴板');
+    }
+
+    function downloadPolicyJson(p) {
+      const blob = new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' });
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = u;
+      a.download = 'governor-policy.json';
+      a.click();
+    }
+
+    // ---------- 视图渲染 ----------
+
+    function renderHeader(activeTheme) {
+      let html = '';
+      html += '<header class="bg-[var(--bg-surface)] border-b border-[var(--border-main)] sticky top-0 z-30 transition-colors">';
+      html += '<div class="max-w-7xl mx-auto px-4 sm:px-6">';
+
+      html += '<div class="py-3 border-b border-[var(--border-subtle)] flex flex-wrap items-center justify-between gap-3">';
+      html += '<div class="flex items-center gap-3">';
+      html += '<div class="w-9 h-9 rounded-full bg-[var(--accent-container)] text-[var(--accent-primary)] border border-[var(--accent-primary)] flex items-center justify-center">' + renderIcon('ShieldCheck', 'w-5 h-5') + '</div>';
+      html += '<div>';
+      html += '<div class="flex items-center gap-2"><h1 class="text-base sm:text-lg font-normal tracking-wide text-[var(--text-main)] font-serif-title">Plan-Governor</h1>';
+      html += '<span class="text-[10px] px-2 py-0.5 rounded-full bg-[var(--accent-container)] text-[var(--accent-text)] font-mono border border-[var(--accent-primary)]">' + esc(activeTheme.badge) + '</span></div>';
+      html += '<p class="text-[11px] text-[var(--text-muted)]">零依赖自足 · 真实黑白名单热重载 · 全量审计流水 · 零构建步骤</p>';
+      html += '</div></div>';
+
+      html += '<div class="flex items-center gap-2 text-xs">';
+      html += '<div class="relative">';
+      html += '<button onclick="state.themeMenuOpen = !state.themeMenuOpen; render();" title="切换应用色彩主题" class="px-3 py-1.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-xs flex items-center gap-2 hover:border-[var(--accent-primary)] hover:bg-[var(--bg-surface-subtle)] transition-all cursor-pointer shadow-xs focus:outline-none">';
+      html += '<span class="w-2.5 h-2.5 rounded-full shrink-0 shadow-xs" style="background: ' + activeTheme.accent + '"></span>';
+      html += renderIcon('Palette', 'w-3.5 h-3.5 text-[var(--accent-primary)]');
+      html += '<span class="text-[var(--text-main)] font-medium tracking-tight text-xs">' + esc(activeTheme.name) + '</span>';
+      html += renderIcon('ChevronDown', 'w-3 h-3 text-[var(--text-dim)] transition-transform duration-200' + (state.themeMenuOpen ? ' rotate-180 text-[var(--accent-primary)]' : ''));
+      html += '</button>';
+      if (state.themeMenuOpen) {
+        html += '<div class="fixed inset-0 z-40" onclick="state.themeMenuOpen = false; render();"></div>';
+        html += '<div class="absolute right-0 mt-2 w-64 rounded-2xl bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] shadow-2xl p-2 z-50 animate-in backdrop-blur-md">';
+        html += '<div class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)] border-b border-[var(--border-subtle)] mb-1.5 flex items-center justify-between"><span>切换界面配色</span><span class="font-mono text-[9px] px-1.5 py-0.5 rounded-full bg-[var(--bg-surface-subtle)] text-[var(--text-muted)]">5 Themes</span></div>';
+        THEMES.forEach((th) => {
+          const sel = th.id === state.theme;
+          html += '<button onclick="setTheme(\'' + th.id + '\')" class="w-full text-left px-2.5 py-2 rounded-xl text-xs flex items-center justify-between transition-all ' + (sel ? 'bg-[var(--accent-container)] text-[var(--accent-text)] font-semibold shadow-xs' : 'text-[var(--text-main)] hover:bg-[var(--bg-surface-subtle)]') + '">';
+          html += '<span class="flex items-center gap-2.5">';
+          html += '<span class="w-3 h-3 rounded-full shrink-0 shadow-xs" style="background: ' + th.accent + '; border: 1px solid rgba(255,255,255,0.2);"></span>';
+          html += '<span class="flex flex-col text-left"><span class="leading-tight">' + esc(th.name) + '</span><span class="text-[10px] opacity-70 font-mono">' + esc(th.badge) + '</span></span>';
+          html += '</span>';
+          html += sel ? renderIcon('Check', 'w-4 h-4 text-[var(--accent-primary)] shrink-0') : '';
+          html += '</button>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+
+      html += '<div class="px-2.5 py-1.5 rounded-full bg-[var(--bg-surface-elevated)] text-[var(--gold-text)] border border-[var(--border-main)] text-[11px] font-mono flex items-center gap-1.5" title="WebUI 为管理控制台：Playground 演练经 /api/audit 调用生产内核 auditCommand 只读裁决；策略修改限 127.0.0.1，放宽类需终端 2-Step 动态码。会话模式分叉执法由宿主 MCP 实例承担，不在本页面。">';
+      html += '<span class="w-1.5 h-1.5 rounded-full bg-[var(--gold-accent)] animate-pulse"></span><span>演练 · 只读裁决</span></div>';
+
+      html += '<div class="px-2.5 py-1.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-[11px] font-mono flex items-center gap-1.5 text-[var(--text-muted)]" title="T: 盘为 MCP exec_sandboxed_command 通道的执行盘（物理 ~/.config/kilo/virtual-t/）。WebUI 页面内的 T:\\ 终端为内存 Mock，不共用该盘。">';
+      html += renderIcon('HardDrive', 'w-3.5 h-3.5');
+      html += '<span>T: 盘 (Mounted)</span></div>';
+
+      const auditInfo = state.status ? { exists: state.status.auditFileExists, count: (state.status.auditRecordCount === null || state.status.auditRecordCount === undefined) ? -1 : state.status.auditRecordCount } : { exists: false, count: 0 };
+      const auditTone = auditInfo.count > 0 ? 'text-[var(--accent-text)]' : 'text-[var(--text-dim)]';
+      const auditLabel = auditInfo.count < 0 ? '审计流 (不可读)' : (auditInfo.count > 0 ? ('审计流 ON (' + auditInfo.count + ' 条)') : (auditInfo.exists ? '审计流 (待首条记录)' : '审计流 (无记录)'));
+      html += '<div class="px-2.5 py-1.5 rounded-full bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-[11px] flex items-center gap-1.5 ' + auditTone + '" title="判据 = 审计文件 governor-audit.jsonl 是否存在且有内容（唯一事实）。文件由宿主 MCP 实例在其 env 配置 MCP_AUDIT_LOG=1 后，于 AI 命令经 exec_guarded_command 通道执行时写入。无记录表示：宿主未配置 / 宿主未重启加载新配置 / 尚无命令经过 MCP 通道——三者之一，与 WebUI 自身进程 env 无关。">';
+      html += renderIcon('Radio', 'w-3.5 h-3.5');
+      html += '<span>' + auditLabel + '</span></div>';
+      html += '</div>';
+      html += '</div>';
+
+      html += '<nav class="flex items-center space-x-2 py-2 overflow-x-auto scrollbar-none">';
+      TABS.forEach((tab) => {
+        const active = state.tab === tab.id;
+        html += '<button onclick="state.tab = \'' + tab.id + '\'; render();" class="px-4 py-1.5 text-xs flex items-center gap-1.5 transition-all ' + (active ? 'bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold shadow-sm rounded-full' : 'bg-[var(--bg-surface-elevated)] text-[var(--text-muted)] hover:text-[var(--text-main)] border border-[var(--border-main)] rounded-full') + '">';
+        html += renderIcon(tab.icon, 'w-4 h-4');
+        html += '<span>' + esc(tab.label) + '</span></button>';
+      });
+      html += '</nav>';
+      html += '</div></header>';
+      return html;
+    }
+
+    function renderPlaygroundTab() {
+      // —— 治理引擎状态监控统计卡（充实首页首屏）——
+      const pol = state.policy || {};
+      const statCards = [
+        { icon: 'Sliders', label: '结构硬闸', value: ((pol.structureGates || []).length || 15) + ' 族', desc: 'Fatal 底线恒启用', tone: 'danger' },
+        { icon: 'ShieldCheck', label: '白名单基线', value: ((pol.allow || []).length) + ' 条', desc: '只读取证与测试放行', tone: 'accent' },
+        { icon: 'ShieldAlert', label: '黑名单基线', value: ((pol.deny || []).length) + ' 键', desc: '破坏性写操作死拦', tone: 'gold' },
+        { icon: 'Radio', label: '真实审计流', value: (state.status && state.status.auditRecordCount === null) ? '不可读' : (((state.status && state.status.auditRecordCount) || 0) + ' 条'), desc: (state.status && state.status.auditRecordCount === null) ? (state.status.auditFileExists === false ? '审计文件不存在' : 'webui 进程未开启 MCP_AUDIT_LOG=1（仅影响本状态位）') : 'governor-audit.jsonl 实际记录数', tone: ((state.status && state.status.auditRecordCount) || 0) > 0 ? 'accent' : 'dim' }
+      ];
+      let html = '<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">';
+      const toneCls = (t) => t === 'danger' ? 'text-[var(--danger-accent)] bg-[var(--danger-container)]' : t === 'gold' ? 'text-[var(--gold-accent)] bg-[var(--gold-container)]' : t === 'accent' ? 'text-[var(--accent-primary)] bg-[var(--accent-container)]' : 'text-[var(--text-dim)] bg-[var(--bg-surface-elevated)]';
+      statCards.forEach((c) => {
+        html += '<div class="bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-2.5">';
+        html += '<div class="flex items-center justify-between"><span class="text-xs text-[var(--text-muted)] font-medium">' + esc(c.label) + '</span>';
+        html += '<span class="w-8 h-8 rounded-[8px] flex items-center justify-center ' + toneCls(c.tone) + '">' + renderIcon(c.icon, 'w-4 h-4') + '</span></div>';
+        html += '<div class="text-2xl font-semibold font-serif-title text-[var(--text-main)]">' + esc(c.value) + '</div>';
+        html += '<div class="text-[11px] text-[var(--text-dim)]">' + esc(c.desc) + '</div></div>';
+      });
+      html += '</div>';
+
+      html += '<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">';
+
+      html += '<div class="lg:col-span-7 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-5 flex flex-col gap-4">';
+      html += '<div class="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">';
+      html += '<div class="flex items-center gap-2">' + renderIcon('Terminal', 'w-4 h-4 text-[var(--accent-primary)]') + '<h3 class="text-sm font-semibold font-serif-title text-[var(--text-main)]">命令演练与拦截测试</h3></div>';
+      html += '<span class="text-[11px] font-mono text-[var(--text-dim)]">生产内核实时裁决</span></div>';
+
+      html += '<div class="flex gap-2">';
+      html += '<input value="' + esc(state.playgroundInput) + '" oninput="state.playgroundInput = this.value" onkeydown="if(event.key===\'Enter\') runPlayground();" placeholder="输入待测试命令，例如：git status 或 rm -rf /" class="flex-1 h-10 px-3 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+      html += '<button onclick="runPlayground()" class="px-4 h-10 rounded-[6px] bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold text-xs flex items-center gap-1.5 hover:opacity-90 transition-opacity shadow-sm">' + renderIcon('Play', 'w-3.5 h-3.5') + '<span>测试执行</span></button>';
+      html += '</div>';
+
+      html += '<div><div class="text-[11px] text-[var(--text-muted)] font-medium mb-2">快速攻防用例测试：</div><div class="grid grid-cols-1 sm:grid-cols-2 gap-2">';
+      PRESETS.forEach((p) => {
+        html += '<button onclick="runPlayground(' + JSON.stringify(p.cmd).replace(/"/g, '&quot;') + ')" class="text-left p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] hover:border-[var(--accent-primary)] transition-all group flex flex-col">';
+        html += '<div class="flex items-center justify-between"><span class="text-xs font-medium text-[var(--text-main)] group-hover:text-[var(--accent-text)]">' + esc(p.label) + '</span>';
+        html += renderIcon('ArrowRight', 'w-3 h-3 text-[var(--text-dim)] group-hover:text-[var(--accent-primary)]');
+        html += '</div>';
+        html += '<code class="text-[10px] font-mono text-[var(--syntax-key)] mt-1 truncate block">' + esc(p.cmd) + '</code>';
+        html += '<span class="text-[10px] text-[var(--text-dim)] mt-0.5">' + esc(p.desc) + '</span>';
+        html += '</button>';
+      });
+      html += '</div></div>';
+
+      if (state.playgroundResult) {
+        const r = state.playgroundResult;
+        const ok = !!r.ok;
+        html += '<div class="p-4 rounded-[8px] border ' + (ok ? 'bg-[var(--bg-result-success)] border-[var(--border-result-success)] text-[var(--text-result-success)]' : 'bg-[var(--bg-result-block)] border-[var(--border-result-block)] text-[var(--text-result-block)]') + '">';
+        html += '<div class="flex items-center justify-between mb-1.5"><div class="flex items-center gap-1.5 font-semibold text-xs">';
+        html += renderIcon(ok ? 'CheckCircle2' : 'ShieldAlert', 'w-4 h-4');
+        html += '<span>判定结果: ' + (ok ? '放行 (ALLOW)' : '安全拦截阻断 (BLOCK)') + '</span></div>';
+        html += '<span class="text-[10px] font-mono opacity-80">耗时: ' + (r.durationMs || 1) + 'ms · 闸位: ' + esc(r.gateType) + '</span></div>';
+        html += '<div class="text-xs font-mono break-all">' + esc(r.reason) + '</div></div>';
+      }
+      html += '</div>';
+
+      html += '<div class="lg:col-span-5 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-5 flex flex-col gap-3">';
+      html += '<div class="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">';
+      html += '<div class="flex items-center gap-2">' + renderIcon('ShieldAlert', 'w-4 h-4 text-[var(--gold-accent)]') + '<h3 class="text-sm font-semibold font-serif-title text-[var(--text-main)]">真实 Bash 审计流水</h3></div>';
+      html += '<button onclick="loadAuditLogs()" class="text-[11px] text-[var(--accent-text)] hover:underline flex items-center gap-1">' + renderIcon('RotateCw', 'w-3 h-3') + '<span>刷新</span></button></div>';
+
+      html += '<input value="' + esc(state.auditFilterSid) + '" oninput="state.auditFilterSid = this.value; render();" placeholder="按会话 ID 过滤流水..." class="w-full h-8 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-[11px] font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+
+      html += '<div class="max-h-[480px] overflow-y-auto scrollbar-thin flex flex-col gap-2.5 pr-1">';
+      const visible = state.sessions.filter((s) => !state.auditFilterSid || String(s.sessionId || '').indexOf(state.auditFilterSid) !== -1);
+      if (visible.length === 0) {
+        html += '<div class="py-12 text-center text-[var(--text-dim)] flex flex-col items-center gap-2">';
+        html += renderIcon('ShieldCheck', 'w-8 h-8 opacity-40');
+        html += '<p class="text-xs font-medium">暂无真实审计记录</p>';
+        html += '<p class="text-[11px] max-w-xs text-[var(--text-muted)]">';
+        html += (state.status && state.status.auditFileExists)
+          ? '审计文件已存在但尚无记录，执行命令后流水将在此显示。'
+          : '审计文件尚未创建（宿主未以 MCP_AUDIT_LOG=1 注册或尚无记录落盘）。在宿主 MCP 注册的 environment 增补该 env 并重启宿主后即可开启真实监控。';
+        html += '</p></div>';
+      } else {
+        visible.forEach((s) => {
+          const sidDisplay = s.sessionId ? String(s.sessionId).slice(0, 10) + '...' : '未归属会话';
+          const sessionLogs = state.auditLogs.filter((l) => (l.sessionId || null) === s.sessionId);
+          html += '<div class="rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] p-2.5">';
+          html += '<div class="flex items-center justify-between pb-1.5 border-b border-[var(--border-subtle)] text-[11px]">';
+          html += '<div class="flex items-center gap-1.5 font-mono">';
+          html += s.sessionId === null ? renderIcon('AlertTriangle', 'w-3.5 h-3.5 text-[var(--gold-accent)]') : renderIcon('Server', 'w-3.5 h-3.5 text-[var(--accent-primary)]');
+          html += '<span class="font-semibold text-[var(--text-main)]">' + esc(sidDisplay) + '</span></div>';
+          html += '<div class="flex items-center gap-1.5 text-[10px]">';
+          html += '<span class="px-1.5 py-0.5 rounded bg-[var(--accent-container)] text-[var(--accent-text)]">ALLOW ' + s.allowed + '</span>';
+          html += '<span class="px-1.5 py-0.5 rounded bg-[var(--danger-container)] text-[var(--danger-text)]">DENY ' + s.denied + '</span>';
+          html += '</div></div>';
+          html += '<div class="mt-2 flex flex-col gap-1.5 max-h-48 overflow-y-auto scrollbar-thin">';
+          sessionLogs.slice(0, 20).forEach((l) => {
+            html += '<div class="text-[10px] font-mono p-1.5 rounded bg-[var(--bg-terminal)] text-[var(--text-terminal)] border border-[var(--border-terminal)]">';
+            html += '<div class="flex items-center justify-between text-[var(--text-dim)] mb-0.5"><span>' + esc(l.event) + ' · ' + esc(l.role || 'main') + '</span><span>' + esc(l.timestamp ? new Date(l.timestamp).toLocaleString('zh-CN', { hour12: false }) : '') + '</span></div>';
+            html += '<div class="text-[var(--syntax-key)] truncate font-semibold">$ ' + esc(l.command) + '</div>';
+            html += '<div class="flex items-center justify-between mt-1 text-[var(--text-muted)]"><span class="truncate max-w-[180px]">' + esc(l.reason || (l.allowed ? '放行' : '阻断')) + '</span>';
+            html += '<span class="' + (l.allowed ? 'text-[var(--accent-primary)]' : 'text-[var(--danger-accent)]') + ' font-semibold">' + (l.allowed ? 'ALLOW' : 'DENY') + '</span></div>';
+            html += '</div>';
+          });
+          html += '</div></div>';
+        });
+      }
+      html += '</div></div></div>';
+      return html;
+    }
+
+    function renderMatrixSubTab(p) {
+      const arb = computeSpecificity(state.matrixTestCmd, p.customAllow, p.customDeny);
+      let html = '<div class="flex flex-col gap-4">';
+      html += '<div class="p-4 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)]">';
+      html += '<h4 class="text-xs font-semibold font-serif-title text-[var(--text-main)] mb-1">黑白名单特异性例外覆盖机制说明 (Specificity Principles)</h4>';
+      html += '<p class="text-[11px] text-[var(--text-muted)]">仲裁引擎基于特异性加权打分算法：具体明确的子命令具有更高权重，优先覆盖宽泛的通配符规则。出厂 15 族结构硬闸为绝对安全底线，任何自定义白名单均无法豁免。</p></div>';
+
+      html += '<div class="p-4 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-col gap-3">';
+      html += '<div class="flex items-center gap-2">' + renderIcon('Split', 'w-4 h-4 text-[var(--accent-primary)]') + '<h4 class="text-xs font-semibold text-[var(--text-main)]">特异性仲裁实时计算器 (演练·不写入策略)</h4></div>';
+      html += '<input value="' + esc(state.matrixTestCmd) + '" oninput="state.matrixTestCmd = this.value; render();" placeholder="输入测试命令，例如：bash dangerous.sh 或 cargo check" class="h-9 px-3 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+      html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">';
+      html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)]"><span class="text-[11px] text-[var(--text-dim)]">匹配白名单规则:</span><div class="font-mono mt-1 text-[var(--syntax-string)]">' + (arb.bestWhite ? esc(arb.bestWhite) + ' (得分: ' + arb.bestWhiteScore + ')' : '无匹配') + '</div></div>';
+      html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)]"><span class="text-[11px] text-[var(--text-dim)]">匹配黑名单规则:</span><div class="font-mono mt-1 text-[var(--danger-text)]">' + (arb.bestBlack ? esc(arb.bestBlack) + ' (得分: ' + arb.bestBlackScore + ')' : '无匹配') + '</div></div>';
+      html += '</div>';
+      html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)]">' + esc(arb.verdict) + '</div>';
+      html += '</div></div>';
+      return html;
+    }
+
+    function renderWhitelistsSubTab(p) {
+      const customAllow = p.customAllow || [];
+      let html = '<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">';
+      html += '<div class="lg:col-span-5 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<h4 class="text-xs font-semibold text-[var(--text-main)] flex items-center gap-1.5">' + renderIcon('Plus', 'w-4 h-4 text-[var(--accent-primary)]') + '<span>添加自定义白名单放行指令</span></h4>';
+      html += '<div><label class="text-[11px] text-[var(--text-muted)] block mb-1">放行命令前缀 / 通配符 (支持 bash* 等):</label>';
+      html += '<input value="' + esc(state.newWhiteCmd) + '" oninput="state.newWhiteCmd = this.value" placeholder="如: cargo check 或 npm run build" class="w-full h-8 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+      html += '</div>';
+      html += '<div><label class="text-[11px] text-[var(--text-muted)] block mb-1">用途说明:</label>';
+      html += '<input value="' + esc(state.newWhiteDesc) + '" oninput="state.newWhiteDesc = this.value" placeholder="如: 代码构建与类型检查" class="w-full h-8 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" /></div>';
+      html += '<button onclick="addWhitelist(state.policy)" class="mt-2 h-9 rounded-[6px] bg-[var(--accent-primary)] text-[var(--accent-on-primary)] text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm">' + renderIcon('Plus', 'w-3.5 h-3.5') + '<span>确认添加至白名单 (放宽·需 2-Step)</span></button>';
+      html += '</div>';
+
+      html += '<div class="lg:col-span-7 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<h4 class="text-xs font-semibold text-[var(--text-main)]">已生效自定义白名单清单 (' + customAllow.length + ')</h4>';
+      html += '<div class="flex flex-col gap-2 max-h-[380px] overflow-y-auto scrollbar-thin pr-1">';
+      if (customAllow.length === 0) {
+        html += '<div class="py-8 text-center text-xs text-[var(--text-dim)]">暂无自定义白名单规则，请使用左侧表单添加</div>';
+      } else {
+        customAllow.forEach((cmd) => {
+          html += '<div class="p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] flex items-center justify-between text-xs font-mono">';
+          html += '<span class="text-[var(--syntax-string)] font-semibold">' + esc(cmd) + '</span>';
+          html += '<button onclick="removeWhitelist(state.policy, ' + esc(JSON.stringify(cmd)) + ')" title="删除此规则" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
+          html += '</div>';
+        });
+      }
+      html += '</div></div></div>';
+      return html;
+    }
+
+    function renderBlacklistsSubTab(p) {
+      const customDeny = p.customDeny || [];
+      let html = '<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">';
+      html += '<div class="lg:col-span-5 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<h4 class="text-xs font-semibold text-[var(--text-main)] flex items-center gap-1.5">' + renderIcon('Plus', 'w-4 h-4 text-[var(--danger-accent)]') + '<span>添加自定义拦截黑名单规则</span></h4>';
+      html += '<div><label class="text-[11px] text-[var(--text-muted)] block mb-1">待拦截命令特征 / 通配符 (支持 bash* 等):</label>';
+      html += '<input value="' + esc(state.newBlackCmd) + '" oninput="state.newBlackCmd = this.value" placeholder="如: docker* 或 curl 或 kubectl" class="w-full h-8 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--danger-accent)]" /></div>';
+      html += '<div><label class="text-[11px] text-[var(--text-muted)] block mb-1">拦截原因说明:</label>';
+      html += '<input value="' + esc(state.newBlackDesc) + '" oninput="state.newBlackDesc = this.value" placeholder="如: 禁止容器特权调用" class="w-full h-8 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs text-[var(--text-main)] focus:outline-none focus:border-[var(--danger-accent)]" /></div>';
+      html += '<button onclick="addBlacklist(state.policy)" class="mt-2 h-9 rounded-[6px] bg-[var(--danger-accent)] text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm">' + renderIcon('ShieldAlert', 'w-3.5 h-3.5') + '<span>确认添加至黑名单 (收紧·立即落盘)</span></button>';
+      html += '</div>';
+
+      html += '<div class="lg:col-span-7 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<h4 class="text-xs font-semibold text-[var(--text-main)]">当前生效拦截黑名单 (' + customDeny.length + ')</h4>';
+      html += '<div class="flex flex-col gap-2 max-h-[380px] overflow-y-auto scrollbar-thin pr-1">';
+      if (customDeny.length === 0) {
+        html += '<div class="py-8 text-center text-xs text-[var(--text-dim)]">暂无自定义黑名单规则</div>';
+      } else {
+        customDeny.forEach((cmd) => {
+          html += '<div class="p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] flex items-center justify-between text-xs font-mono">';
+          html += '<span class="text-[var(--danger-text)] font-semibold">' + esc(cmd) + '</span>';
+          html += '<button onclick="removeBlacklist(state.policy, ' + esc(JSON.stringify(cmd)) + ')" title="删除此黑名单" class="p-1 text-[var(--text-dim)] hover:text-[var(--danger-accent)] transition-colors">' + renderIcon('Trash2', 'w-3.5 h-3.5') + '</button>';
+          html += '</div>';
+        });
+      }
+      html += '</div></div></div>';
+      return html;
+    }
+
+    function renderStructureSubTab(p) {
+      let html = '<div class="flex flex-col gap-3">';
+      html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface)] border border-[var(--border-main)] text-xs text-[var(--text-muted)]">以下规则为 Plan-Governor 的结构硬闸基线，为系统绝对安全底线（Fatal Baseline Floor），任何自定义策略均不可禁用，此处仅作只读展示。</div>';
+      html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">';
+      (p.structureGates || []).forEach((g) => {
+        html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-col justify-between gap-2">';
+        html += '<div class="flex items-start justify-between gap-2"><div>';
+        html += '<div class="text-xs font-semibold text-[var(--text-main)]">' + esc(g.name) + '</div>';
+        html += '<code class="text-[10px] font-mono text-[var(--syntax-key)]">' + esc(g.pattern) + '</code></div>';
+        html += '<span class="text-[9px] px-1.5 py-0.5 rounded bg-[var(--danger-container)] text-[var(--danger-text)] font-semibold whitespace-nowrap">系统底线</span></div>';
+        html += '<p class="text-[11px] text-[var(--text-dim)]">' + esc(g.desc) + '</p>';
+        html += '<div class="flex items-center justify-between pt-1 border-t border-[var(--border-subtle)] text-[10px] text-[var(--text-dim)]"><span>状态: 恒定启用 (Fatal Floor)</span><span class="w-3 h-3 rounded-full bg-[var(--accent-container)] flex items-center justify-center text-white">&check;</span></div>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+      return html;
+    }
+
+    function renderJsonSubTab(p) {
+      let html = '<div class="p-4 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-col gap-3">';
+      html += '<div class="flex items-center justify-between"><h4 class="text-xs font-semibold text-[var(--text-main)]">governor-policy.json (当前生效策略对象)</h4>';
+      html += '<button onclick="downloadPolicyJson(state.policy)" class="text-xs px-2.5 py-1 rounded bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-[var(--text-main)] hover:border-[var(--accent-primary)] flex items-center gap-1">' + renderIcon('Download', 'w-3 h-3') + ' 导出 JSON</button></div>';
+      html += '<pre class="p-3.5 rounded-[8px] bg-[var(--bg-code-block)] border border-[var(--border-code-block)] text-[var(--text-code-block)] text-xs font-mono max-h-[480px] overflow-auto scrollbar-thin">' + highlightJson(p) + '</pre>';
+      html += '</div>';
+      return html;
+    }
+
+    function renderPolicyTab() {
+      if (state.isHydratingPolicy && !state.policy) {
+        return '<div class="py-20 text-center flex flex-col items-center gap-3 animate-pulse"><div class="w-12 h-12 rounded-full bg-[var(--bg-surface-elevated)]"></div><div class="h-4 w-48 bg-[var(--bg-surface-elevated)] rounded"></div><p class="text-xs text-[var(--text-dim)]">正在从本地同步真实策略...</p></div>';
+      }
+      const p = state.policy || { allow: [], deny: [], customAllow: [], customDeny: [], structureGates: [] };
+      const subs = [
+        { id: 'matrix', label: '特例仲裁矩阵', icon: 'Split' },
+        { id: 'whitelists', label: '放行白名单 (' + (p.customAllow || []).length + ')', icon: 'ShieldCheck' },
+        { id: 'blacklists', label: '拦截黑名单 (' + (p.customDeny || []).length + ')', icon: 'ShieldAlert' },
+        { id: 'structure', label: '结构硬闸 (' + ((p.structureGates || []).length) + ')', icon: 'Sliders' },
+        { id: 'json', label: '策略 JSON', icon: 'FileJson' }
+      ];
+
+      let html = '<div class="flex flex-col gap-4">';
+      html += '<div class="p-3.5 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-wrap items-center justify-between gap-3">';
+      html += '<div class="flex items-center gap-2 text-xs">' + renderIcon('Key', 'w-4 h-4 text-[var(--gold-accent)]') + '<span class="font-semibold text-[var(--text-main)]">Admin Bearer Token 凭证</span><span class="text-[11px] text-[var(--text-muted)]">(启动时生成于 ~/.config/kilo/webui-token.txt，守卫策略修改与回归触发；与终端控制台横幅输出一致)</span></div>';
+      html += '<div class="flex items-center gap-2">';
+      html += '<input type="password" value="' + esc(state.token) + '" oninput="state.token = this.value; localStorage.setItem(\'pg_admin_token\', this.value);" placeholder="粘贴 64 位十六进制 Token..." class="h-8 w-64 px-2.5 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-[11px] font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+      html += '<button onclick="showToast(\'Token 已保存至本地缓存\'); loadPolicy();" class="px-3 h-8 rounded-[6px] bg-[var(--accent-primary)] text-[var(--accent-on-primary)] text-xs font-medium">保存</button></div></div>';
+
+      html += '<div class="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-[var(--border-main)]">';
+      html += '<div class="flex items-center gap-2"><span class="text-xs font-mono text-[var(--text-dim)]">HMAC-SHA256:</span>';
+      html += '<code class="text-[11px] font-mono px-2 py-0.5 rounded bg-[var(--bg-surface-elevated)] text-[var(--syntax-string)] border border-[var(--border-main)] truncate max-w-xs">' + esc(p.sig || '未签名') + '</code>';
+      html += p.signatureValid
+        ? '<span class="text-[10px] px-2 py-0.5 rounded bg-[var(--accent-container)] text-[var(--accent-text)] font-semibold flex items-center gap-1">' + renderIcon('ShieldCheck', 'w-3 h-3') + ' 签名有效</span>'
+        : (p.sigPersisted
+          ? '<span class="text-[10px] px-2 py-0.5 rounded bg-[var(--danger-container)] text-[var(--danger-text)] font-semibold flex items-center gap-1" title="磁盘策略文件验签失败。可重新执行任意策略保存操作：保存会以 ~/.config/kilo/policy-key 重新 HMAC 签名并原子落盘，即完成重签。">' + renderIcon('AlertTriangle', 'w-3 h-3') + ' 验签失败（重存策略即自动重签）</span>'
+          : '<span class="text-[10px] px-2 py-0.5 rounded bg-[var(--bg-surface-elevated)] text-[var(--text-dim)] border border-[var(--border-main)] font-semibold flex items-center gap-1" title="尚未持久化自定义策略：当前生效的是出厂基线（只读）。属正常初始态，无需修复；在策略页增删任意规则保存后，会自动 HMAC 签名落盘 governor-policy.json。">' + renderIcon('FileJson', 'w-3 h-3') + ' 未落盘（出厂基线生效中）</span>');
+      html += '</div>';
+
+      html += '<div class="flex items-center gap-1 bg-[var(--bg-surface-elevated)] p-1 rounded-[8px] border border-[var(--border-main)] text-xs">';
+      subs.forEach((st) => {
+        const active = state.policySubTab === st.id;
+        html += '<button onclick="state.policySubTab = \'' + st.id + '\'; render();" class="px-2.5 py-1 rounded-[6px] flex items-center gap-1.5 transition-colors ' + (active ? 'bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold' : 'text-[var(--text-muted)] hover:text-[var(--text-main)]') + '">';
+        html += renderIcon(st.icon, 'w-3.5 h-3.5') + '<span>' + esc(st.label) + '</span></button>';
+      });
+      html += '</div></div>';
+
+      if (state.policySubTab === 'matrix') html += renderMatrixSubTab(p);
+      else if (state.policySubTab === 'whitelists') html += renderWhitelistsSubTab(p);
+      else if (state.policySubTab === 'blacklists') html += renderBlacklistsSubTab(p);
+      else if (state.policySubTab === 'structure') html += renderStructureSubTab(p);
+      else if (state.policySubTab === 'json') html += renderJsonSubTab(p);
+
+      html += '</div>';
+      return html;
+    }
+
+    function renderTerminalTab() {
+      let html = '<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">';
+      html += '<div class="lg:col-span-7 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<div class="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">';
+      html += '<div class="flex items-center gap-2">' + renderIcon('Terminal', 'w-4 h-4 text-[var(--accent-primary)]') + '<h3 class="text-sm font-semibold font-serif-title text-[var(--text-main)]">受控终端沙箱 (Bash & Node)</h3></div>';
+      html += '<span class="text-[11px] font-mono text-[var(--text-dim)]">工作目录: T:\\ (内存虚拟盘·不触真盘)</span></div>';
+
+      html += '<div class="flex gap-2">';
+      html += '<input value="' + esc(state.terminalInput) + '" oninput="state.terminalInput = this.value" onkeydown="if(event.key===\'Enter\') runTerminalCommand(\'execute\');" placeholder="输入命令（如：echo \'ok\' > a.txt 或 rm -rf / 或 git status）" class="flex-1 h-9 px-3 rounded-[6px] bg-[var(--bg-input)] border border-[var(--border-main)] text-xs font-mono text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" />';
+      html += '<button onclick="runTerminalCommand(\'mock\')" title="安全裁决预检（真实生产内核·零执行零落盘）" class="px-3 h-9 rounded-[6px] bg-[var(--gold-container)] text-[var(--gold-text)] border border-[var(--gold-accent)] font-medium text-xs flex items-center gap-1">' + renderIcon('Sparkles', 'w-3 h-3') + '<span>模拟预检（主通道）</span></button>';
+      html += '<button onclick="runTerminalCommand(\'execute\')" class="px-3.5 h-9 rounded-[6px] bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold text-xs flex items-center gap-1 shadow-sm">' + renderIcon('Play', 'w-3 h-3') + '<span>模拟执行</span></button></div>';
+
+      html += '<div class="flex flex-col gap-2"><div class="flex items-center justify-between text-[11px] text-[var(--text-muted)] font-medium"><span>快捷攻防与常用命令预设：</span><span class="text-[10px] text-[var(--text-dim)]">点击命令填入，或直接点预检/执行</span></div>';
+      html += '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">';
+      TERMINAL_PRESETS.forEach((p, pi) => {
+        html += '<div class="p-2.5 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] hover:border-[var(--accent-primary)] transition-all flex flex-col justify-between gap-2 shadow-2xs">';
+        html += '<div class="flex items-center justify-between gap-1.5"><div class="flex items-center gap-1.5 truncate">';
+        html += '<span class="text-[10px] px-1.5 py-0.5 rounded font-mono border font-medium shrink-0 ' + presetCategoryStyle(p.category) + '">' + esc(p.category) + '</span>';
+        html += '<span class="text-xs text-[var(--text-main)] font-semibold truncate">' + esc(p.label) + '</span></div>';
+        html += '<span class="text-[10px] text-[var(--text-dim)] truncate max-w-[100px]" title="' + esc(p.hint) + '">' + esc(p.hint) + '</span></div>';
+        html += '<button onclick="state.terminalInput = TERMINAL_PRESETS[' + pi + '].cmd; render();" class="w-full text-left font-mono text-[11px] text-[var(--syntax-key)] bg-[var(--bg-input)] hover:opacity-90 px-2 py-1.5 rounded border border-[var(--border-subtle)] truncate cursor-pointer transition-colors" title="点击填入命令">$ ' + esc(p.cmd) + '</button>';
+        html += '<div class="flex items-center justify-end gap-1.5 pt-0.5">';
+        html += '<button onclick="runTerminalCommand(\'mock\', TERMINAL_PRESETS[' + pi + '].cmd)" title="模拟预检 (仅判决·不实际执行·不入审计流)" class="px-2.5 py-1 rounded text-[10px] bg-[var(--gold-container)] hover:opacity-90 text-[var(--gold-text)] font-medium flex items-center gap-1 border border-[var(--gold-accent)]">' + renderIcon('Sparkles', 'w-3 h-3') + '<span>预检</span></button>';
+        html += '<button onclick="runTerminalCommand(\'execute\', TERMINAL_PRESETS[' + pi + '].cmd)" title="模拟执行 (浏览器端模拟·不调用内核·不入审计流)" class="px-2.5 py-1 rounded text-[10px] bg-[var(--accent-container)] hover:opacity-90 text-[var(--accent-text)] font-semibold flex items-center gap-1 border border-[var(--accent-primary)]">' + renderIcon('Play', 'w-3 h-3') + '<span>执行</span></button>';
+        html += '</div></div>';
+      });
+      html += '</div></div>';
+
+      html += '<div class="flex flex-col gap-2"><div class="flex items-center justify-between text-[11px] text-[var(--text-dim)]"><span>终端历史流与预检记录</span><button onclick="state.terminalHistory = []; render();" class="hover:text-[var(--danger-accent)]">清空</button></div>';
+      html += '<div class="p-3 rounded-[8px] bg-[var(--bg-terminal)] text-[var(--text-terminal)] border border-[var(--border-terminal)] max-h-[360px] overflow-y-auto scrollbar-thin text-xs font-mono flex flex-col gap-2">';
+      if (state.terminalHistory.length === 0) {
+        html += '<div class="py-10 text-center text-[var(--text-dim)]"><p class="text-[14px] font-semibold text-[var(--text-terminal)]">终端沙箱就绪，工作目录锁定在 T:\\</p><p class="text-[13px] mt-1 text-[var(--text-terminal-dim)]">点击【主通道预检】按主通道闸门裁决（真实内核·零执行），点击【终端仿真】查看浏览器端模拟回执</p></div>';
+      } else {
+        state.terminalHistory.forEach((h) => {
+          html += '<div class="border-b border-[var(--border-terminal)] pb-2 last:border-b-0 flex flex-col gap-1.5">';
+          html += '<div class="flex items-center justify-between gap-2 text-[10px]">';
+          html += '<div class="flex items-center gap-2 truncate"><span class="px-2 py-0.5 rounded text-[9px] font-bold tracking-wider shrink-0 ' + (h.mode === 'mock' ? 'bg-[var(--gold-container)] text-[var(--gold-text)]' : 'bg-[var(--accent-container)] text-[var(--accent-text)]') + '">' + (h.mode === 'mock' ? 'MOCK 预检' : '终端仿真') + '</span><span class="text-[var(--syntax-key)] font-bold truncate">$ ' + esc(h.cmd) + '</span></div>';
+          html += '<span class="text-[var(--text-terminal-dim)] shrink-0">' + esc(h.time || '') + ' · ' + (h.durationMs || 0) + 'ms</span></div>';
+          if (h.blocked) {
+            html += '<div class="p-2.5 rounded-[6px] bg-[var(--bg-result-block)] border border-[var(--border-result-block)] text-[var(--text-result-block)] text-[11px] whitespace-pre-wrap leading-relaxed"><b>' + (h.mode === 'mock' ? '[MOCK 预检拒绝] 命中安全策略/权限不足' : '[SECURITY BLOCKED] 防御拦截击杀') + '</b>\n' + esc(h.blockReason || '') + '</div>';
+          } else {
+            html += '<div class="text-[var(--text-terminal)] whitespace-pre-wrap bg-[var(--bg-code-block)] p-2.5 rounded-[6px] border border-[var(--border-terminal)]">' + esc(h.out || '') + (h.stderr ? '<span class="text-[var(--danger-text)]">' + esc(h.stderr) + '</span>' : '') + '</div>';
+          }
+          html += '</div>';
+        });
+      }
+      html += '</div></div></div>';
+
+      // 右侧：T:\ 虚拟文件浏览器（5列）
+      html += '<div class="lg:col-span-5 bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] p-4 flex flex-col gap-3">';
+      html += '<div class="flex items-center justify-between pb-2 border-b border-[var(--border-subtle)]">';
+      html += '<div class="flex items-center gap-2">' + renderIcon('HardDrive', 'w-4 h-4 text-[var(--gold-accent)]') + '<h3 class="text-sm font-semibold font-serif-title text-[var(--text-main)]">T:\\ 虚拟文件浏览器</h3></div>';
+      html += '<button onclick="state.terminalNewFileOpen = !state.terminalNewFileOpen; render();" class="text-xs px-2 py-0.5 rounded bg-[var(--accent-container)] text-[var(--accent-text)] flex items-center gap-1">' + renderIcon('Plus', 'w-3 h-3') + ' 新建文件</button></div>';
+
+      if (state.terminalNewFileOpen) {
+        html += '<div class="p-3 rounded-[8px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] flex flex-col gap-2 text-xs">';
+        html += '<input value="' + esc(state.terminalNewFilePath) + '" oninput="state.terminalNewFilePath = this.value" placeholder="文件路径 (例如: test.js)" class="h-7 px-2 rounded bg-[var(--bg-input)] border border-[var(--border-main)] font-mono text-[11px]" />';
+        html += '<textarea rows="3" oninput="state.terminalNewFileContent = this.value" placeholder="文件内容..." class="p-2 rounded bg-[var(--bg-input)] border border-[var(--border-main)] font-mono text-[11px]">' + esc(state.terminalNewFileContent) + '</textarea>';
+        html += '<div class="flex justify-end gap-2"><button onclick="state.terminalNewFileOpen = false; render();" class="px-2 py-1 text-[11px] text-[var(--text-dim)]">取消</button><button onclick="saveTerminalFile()" class="px-3 py-1 text-[11px] rounded bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold">保存</button></div></div>';
+      }
+
+      html += '<div class="flex flex-col gap-1.5 max-h-48 overflow-y-auto scrollbar-thin">';
+      state.terminalFiles.forEach((f, i) => {
+        const sel = state.terminalSelectedFile && state.terminalSelectedFile.path === f.path;
+        html += '<button onclick="state.terminalSelectedFile = state.terminalFiles[' + i + ']; render();" class="text-left p-2 rounded-[6px] bg-[var(--bg-surface-elevated)] border ' + (sel ? 'border-[var(--accent-primary)]' : 'border-[var(--border-main)]') + ' flex items-center justify-between text-xs font-mono">';
+        html += '<div class="flex items-center gap-2 truncate">' + renderIcon('FileText', 'w-3.5 h-3.5 text-[var(--gold-accent)]') + '<span class="text-[var(--text-main)] truncate">' + esc(f.path) + '</span></div>';
+        html += '<span class="text-[10px] text-[var(--text-dim)]">' + f.size + ' B</span></button>';
+      });
+      html += '</div>';
+
+      if (state.terminalSelectedFile) {
+        html += '<div class="mt-2 flex flex-col gap-1"><div class="text-[11px] text-[var(--text-dim)] font-mono truncate">预览: ' + esc(state.terminalSelectedFile.path) + '</div>';
+        html += '<pre class="p-2.5 rounded-[6px] bg-[var(--bg-file-viewer)] border border-[var(--border-file-viewer)] text-[11px] font-mono text-[var(--text-file-viewer)] max-h-40 overflow-auto scrollbar-thin">' + esc(state.terminalSelectedFile.content) + '</pre></div>';
+      }
+      html += '</div></div>';
+      return html;
+    }
+
+    
+
+    function renderTestsTab() {
+      const res = state.regressResult;
+      let passCount = 0, failCount = 0;
+      if (res && res.stdout) {
+        const ok = res.stdout.match(/^OK\s/gm);
+        const no = res.stdout.match(/^FAIL\s/gm);
+        passCount = ok ? ok.length : 0;
+        failCount = no ? no.length : 0;
+      }
+
+      let html = '<div class="flex flex-col gap-4">';
+      html += '<div class="p-5 rounded-[18px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-wrap items-center justify-between gap-4">';
+      html += '<div class="flex items-center gap-3"><div class="w-10 h-10 rounded-full bg-[var(--accent-container)] text-[var(--accent-primary)] flex items-center justify-center">' + renderIcon('TestTube2', 'w-5 h-5') + '</div><div>';
+      html += '<div class="flex items-center gap-2"><h2 class="text-sm sm:text-base font-semibold font-serif-title text-[var(--text-main)]">安全回归测试（实机真实执行）</h2>';
+      if (res) {
+        html += '<span class="text-[11px] px-2 py-0.5 rounded-full font-semibold ' + (res.exitCode === 0 ? 'bg-[var(--accent-container)] text-[var(--accent-text)]' : 'bg-[var(--danger-container)] text-[var(--danger-text)]') + '">' + (res.exitCode === 0 ? 'ALL OK (' + passCount + ' passed)' : 'FAILURES (' + failCount + ' failed)') + '</span>';
+      }
+      html += '</div><p class="text-[11px] text-[var(--text-muted)]">真实派生子进程运行 mcp/tests/plan-governor-regress.mjs，覆盖双实例能力绑定、模式可信验真与 15 族结构硬闸。</p></div></div>';
+
+      html += '<div class="flex items-center gap-2">';
+      if (res) {
+        html += '<button onclick="copyRegressReport(state.regressResult)" class="px-3 h-9 rounded-[6px] bg-[var(--bg-surface-elevated)] border border-[var(--border-main)] text-xs text-[var(--text-main)] hover:border-[var(--accent-primary)] flex items-center gap-1.5">' + renderIcon('Copy', 'w-3.5 h-3.5') + '<span>复制报告</span></button>';
+      }
+      html += '<button onclick="triggerRegress()" ' + (state.regressRunning ? 'disabled' : '') + ' class="px-4 h-9 rounded-[6px] bg-[var(--accent-primary)] text-[var(--accent-on-primary)] font-semibold text-xs flex items-center gap-1.5 shadow-sm hover:opacity-90 disabled:opacity-50">';
+      html += renderIcon('RotateCw', 'w-3.5 h-3.5 ' + (state.regressRunning ? 'animate-spin' : ''));
+      html += '<span>' + (state.regressRunning ? '正在实机执行回归套件...' : '运行真实回归测试') + '</span></button></div></div>';
+
+      if (res) {
+        html += '<div class="p-4 rounded-[18px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-col gap-2 animate-in">';
+        html += '<div class="flex items-center justify-between text-xs pb-2 border-b border-[var(--border-subtle)]">';
+        html += '<div class="flex items-center gap-1.5 font-semibold text-[var(--text-main)]">' + renderIcon(res.exitCode === 0 ? 'CheckCircle2' : 'XCircle', 'w-4 h-4 ' + (res.exitCode === 0 ? 'text-[var(--accent-primary)]' : 'text-[var(--danger-accent)]')) + '<span>套件执行输出 (plan-governor-regress.mjs)</span></div>';
+        html += '<div class="text-[11px] font-mono text-[var(--text-dim)]">耗时: ' + (res.durationMs || 0) + 'ms · 退出代码: ' + (res.exitCode !== null ? res.exitCode : '运行中') + (res.truncated ? ' ⚠ 输出已截断' : '') + '</div></div>';
+        html += '<pre class="p-3.5 rounded-[8px] bg-[var(--bg-surface-elevated)] text-xs font-mono max-h-[460px] overflow-y-auto scrollbar-thin text-[var(--text-main)] whitespace-pre-wrap">' + esc(res.stdout || '(无标准输出)') + (res.stderr ? '\n--- STDERR ---\n' + esc(res.stderr) : '') + '</pre></div>';
+      } else {
+        html += '<div class="py-20 text-center text-[var(--text-dim)] bg-[var(--bg-surface)] rounded-[18px] border border-[var(--border-main)] flex flex-col items-center gap-2">';
+        html += renderIcon('Lock', 'w-8 h-8 opacity-40');
+        html += '<p class="text-xs font-medium">尚未执行真实回归</p>';
+        html += '<p class="text-[11px] max-w-sm text-[var(--text-muted)]">点击上方按钮将派生独立 Node 进程运行全量回归套件（耗时分钟量级），结果逐行实时捕获展示。</p></div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function renderChallengeDialog() {
+      const ch = state.challengeModal;
+      let html = '<div class="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 animate-in">';
+      html += '<div class="bg-[var(--bg-surface)] border border-[var(--border-main)] rounded-[24px] p-6 max-w-md w-full shadow-2xl flex flex-col gap-4">';
+      html += '<div class="flex items-start justify-between"><div class="flex items-center gap-3">';
+      html += '<div class="w-10 h-10 rounded-[14px] bg-[var(--gold-container)] text-[var(--gold-accent)] flex items-center justify-center">' + renderIcon('AlertTriangle', 'w-5 h-5') + '</div>';
+      html += '<div><h3 class="text-sm font-semibold text-[var(--text-main)]">权限放宽二次确认 (2-Step)</h3><p class="text-[11px] text-[var(--text-muted)]">动态码 60 秒内有效</p></div></div>';
+      html += '<button onclick="state.challengeModal = null; render();" class="text-[var(--text-dim)] hover:text-[var(--text-main)]">' + renderIcon('X', 'w-4 h-4') + '</button></div>';
+      html += '<p class="text-xs text-[var(--text-muted)]">' + esc(ch.message) + '</p>';
+      html += '<div><input value="' + esc(ch.code) + '" oninput="state.challengeModal.code = this.value.toUpperCase();" maxlength="6" placeholder="输入 6 位动态验证码" class="w-full h-11 px-3 rounded-[8px] bg-[var(--bg-input)] border border-[var(--border-main)] text-center text-sm font-mono tracking-[0.4em] uppercase text-[var(--text-main)] focus:outline-none focus:border-[var(--accent-primary)]" autofocus />';
+      if (ch.error) html += '<p class="text-[11px] text-[var(--danger-accent)] mt-1.5 font-medium">' + esc(ch.error) + '</p>';
+      html += '</div>';
+      html += '<div class="flex justify-end gap-2 pt-2 border-t border-[var(--border-subtle)]">';
+      html += '<button onclick="state.challengeModal = null; render();" class="px-4 py-2 rounded-full text-xs font-semibold text-[var(--text-dim)] hover:bg-[var(--bg-surface-elevated)]">取消</button>';
+      html += '<button onclick="confirmChallenge()" class="px-5 py-2 rounded-full text-xs font-semibold bg-[var(--accent-primary)] text-[var(--accent-on-primary)] shadow-sm">提交确认码</button></div></div></div>';
+      return html;
+    }
+
+    function renderConfirmDialog() {
+      const cd = state.confirmDialog;
+      let html = '<div class="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 animate-in">';
+      html += '<div class="bg-[var(--bg-surface)] border border-[var(--border-main)] rounded-[24px] p-6 max-w-md w-full shadow-2xl flex flex-col gap-4">';
+      html += '<div class="flex items-start justify-between"><h3 class="text-sm font-semibold text-[var(--text-main)]">' + esc(cd.title) + '</h3>';
+      html += '<button onclick="state.confirmDialog = null; render();" class="text-[var(--text-dim)] hover:text-[var(--text-main)]">' + renderIcon('X', 'w-4 h-4') + '</button></div>';
+      html += '<p class="text-xs text-[var(--text-muted)]">' + esc(cd.message) + '</p>';
+      html += '<div class="flex justify-end gap-2 pt-2 border-t border-[var(--border-subtle)]">';
+      html += '<button onclick="state.confirmDialog = null; render();" class="px-4 py-2 rounded-full text-xs font-semibold text-[var(--text-dim)] hover:bg-[var(--bg-surface-elevated)]">取消</button>';
+      html += '<button onclick="var fn = state.confirmDialog.onConfirm; state.confirmDialog = null; if(fn) fn(); render();" class="px-5 py-2 rounded-full text-xs font-semibold bg-[var(--danger-accent)] text-white shadow-sm">确认</button></div></div></div>';
+      return html;
+    }
+
+    function render() {
+      const root = document.getElementById('root');
+      if (!root) return;
+      const activeTheme = THEMES.filter((t) => t.id === state.theme)[0] || THEMES[0];
+
+      let html = renderHeader(activeTheme);
+      html += '<main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5">';
+      if (state.tab === 'governor') html += renderPlaygroundTab();
+      else if (state.tab === 'policy') html += renderPolicyTab();
+      else if (state.tab === 'terminal') html += renderTerminalTab();
+      else if (state.tab === 'tests') html += renderTestsTab();
+      html += '</main>';
+      html += '<footer class="mt-auto border-t border-[var(--border-main)] bg-[var(--bg-surface)] py-3 px-4 text-center text-xs text-[var(--text-dim)]">Plan-Governor 哨兵 · 双实例 RBAC 隔离 · 黑白名单具体特例覆盖 · 全量审计流水 · 零构建步骤</footer>';
+
+      if (state.toast) {
+        const err = state.toast.type === 'error';
+        html += '<div class="fixed bottom-5 right-5 z-50 max-w-md px-4 py-2.5 rounded-[10px] text-xs font-medium shadow-2xl flex items-center gap-2 animate-in ' + (err ? 'bg-[var(--danger-container)] text-[var(--danger-text)] border border-[var(--danger-accent)]' : 'bg-[var(--accent-container)] text-[var(--accent-text)] border border-[var(--accent-primary)]') + '">';
+        html += renderIcon(err ? 'AlertTriangle' : 'CheckCircle2', 'w-4 h-4') + '<span>' + esc(state.toast.text) + '</span></div>';
+      }
+      if (state.challengeModal) html += renderChallengeDialog();
+      if (state.confirmDialog) html += renderConfirmDialog();
+
+      root.innerHTML = html;
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+      setTheme(state.theme);
+      await loadStatus();
+      await loadPolicy();
+      await loadAuditLogs();
+      setInterval(() => loadAuditLogs(true), 10000);
+    });
+  </script>
+</body>
+</html>
