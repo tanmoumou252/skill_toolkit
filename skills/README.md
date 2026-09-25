@@ -25,4 +25,4 @@
 
 - `zcode-plan-first` 自足内含三闸门分离语义，仅供 ZCode 主会话/任务模式使用。
 - `git-commit-msg` 是纯提交消息生成器：仅输出 commit 正文与提交命令原文，不执行任何 Git 写操作；提交/推送恒为人类在宿主终端的特权。
-- 《命令边界总表》在 `pwsh-gnu-bridge` 与 `plan-file-first` 中作为参考性设计基线维护；终端放行与拦截的单源权威为 `mcp/plan-governor.js`，新增或调整命令以 `plan-governor.js` 为准，无需执行多源同步。
+- 《命令边界总表》在 `pwsh-gnu-bridge` 与 `plan-file-first` 中作为参考性设计基线维护；终端放行与拦截的单源权威为 `mcp/plan-governor.js`，新增或调整命令以 `plan-governor.js` 为准，无需执行多源同步。此「无需多源同步」仅豁免 skills 文档里的参考性命令基线表，**不豁免运行时被消费的展示元数据**——例如 `mcp/webui.js` 的 `STRUCTURE_GATES` 显示闸清单由 WebUI 实际渲染供操作者安全自审，必须与 `plan-governor.js` 执法闸逐一同步，并由不变量断言钉死防漂移。

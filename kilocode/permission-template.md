@@ -28,7 +28,7 @@
 
 定位到 `"agent"` 节点，以下为实测通过的全量托管结构（可将你的各 agent 块并入同构节点，或在 Kilocode 权限面板配出等价内容，保存后由宿主自动后置写入本文件）：
 
-自动审批 需要关闭 且`bash": {"*": "ask"}`是**agent ask 行为的唯一来源，勿删勿改**
+自动审批 需要关闭 且`bash": {"*": "ask"}`是**agent ask 行为的来源（顶层 permission 与下方各 agent 块的同名键同义生效），勿删勿改**
 之所以这么设计选择有二，一是设为allow就没有闸门效果，二是设为deny就直接不注入edit工具使得子代理无法从合法途径编辑任何文件--哪怕是处于deny例外区的文件也碰不了，因为edit在抓包里可以看到根本没被注入
 
 ```jsonc
@@ -80,12 +80,13 @@ agent手动设置部分--目前还未完全弄清 Kilocode 权限生效的情况
   "agent": {    
     "code": {
       "permission": {
-        "edit": { "*": "allow" },
+        "edit": { "*": "ask" },
         // `~/.config/kilo/` 同时存放 HMAC 策略签名密钥 `policy-key`、策略文件 `governor-policy.json` 与 WebUI token。
         // 此处只放行沙箱物理根 `virtual-t/**`，其余一律回落到 `ask`——预授权整个信任根会让「模型无法读取密钥」的假设失效。
         "external_directory": { "*": "ask", "~/.config/kilo/virtual-t/**": "allow" },
         "bash": {
-          "*": "allow","Remove-Item*": "ask", "Move-Item*": "ask",
+          // "*": "ask" 已覆盖下列全部破坏性条目；显式枚举保留为文档性冗余（与 mcp/plan-governor.js 的 DENY_KEYS 对照阅读）。
+          "*": "ask","Remove-Item*": "ask", "Move-Item*": "ask",
           "Copy-Item*": "ask", "rm*": "ask", "del*": "ask", "rd*": "ask",
           "rmdir*": "ask", "xcopy*": "ask", "robocopy*": "ask","git*": "ask"
         }

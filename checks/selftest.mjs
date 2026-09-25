@@ -2,6 +2,7 @@
 // 全部分支以合成文件集驱动 runAll（不读磁盘），故可在真实仓库之外独立验证。
 // 每个 FAIL 行都对应一条真实断言失败；红灯即证明检测器未生效。
 import { runAll, scanFences } from './invariants.mjs';
+import { attackLedger, checkReportFormat, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES } from './attack-ledger.mjs';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -111,6 +112,104 @@ check(
   'clean-skill-no-violations',
   runAll([{ path: skillPath, text: cleanSkill }]).filter((v) => v.path === skillPath).length === 0,
 );
+
+// 16-28) 攻击面台账机械对账器（流程补强）：合规零违反 + 违规必咬 + 报告对账不随计划类型短路 + 围栏掩蔽
+// 空桩阶段 17-21、23、25、26、27 共 9 条必 FAIL；16/22/24/28 为负控制类（空桩即 PASS），不得据其判定红灯充足。
+const ledgerRow = (c) => [
+  '- 台账行',
+  '  - 类别：' + c,
+  '  - 处置：block@gate-' + c,
+  '  - 攻击样本：atk-' + c,
+  '  - 对照样本：ctl-' + c,
+  '  - 断言名：assert-' + c,
+  '  - 探针回执：`probe-cmd` Exit 1',
+].join('\n');
+const planLedgerGood = [
+  '# p', '', '## Files', '', '| Modify | `' + 'mcp/plan-governor.js' + '` | x |', '', '## 攻击面台账', '',
+  ATTACK_CLASSES.map(ledgerRow).join('\n'), '',
+].join('\n');
+const implGood = ATTACK_CLASSES.map((c) => 'gate-' + c).join('\n');
+const testGood = ATTACK_CLASSES.map((c) => "check('assert-" + c + "', true);").join('\n');
+check('ledger-clean-plan-no-violations', attackLedger(planLedgerGood, { implText: implGood, testText: testGood }).length === 0);
+const planLedgerMissing = planLedgerGood.replace(ledgerRow(ATTACK_CLASSES[ATTACK_CLASSES.length - 1]), '');
+check('ledger-missing-class-detected', attackLedger(planLedgerMissing, { implText: implGood, testText: testGood }).some((v) => v.msg.includes('台账缺类别行')));
+check('ledger-bogus-assertion-detected', (() => {
+  const t = testGood.replace("check('assert-" + ATTACK_CLASSES[0], "check('bogus-");
+  return attackLedger(planLedgerGood, { implText: implGood, testText: t }).some((v) => v.msg.includes('断言名'));
+})());
+check('ledger-probe-without-exitcode-detected', (() => {
+  const p = planLedgerGood.replace('探针回执：`probe-cmd` Exit 1', '探针回执：应拦');
+  return attackLedger(p, { implText: implGood, testText: testGood }).some((v) => v.msg.includes('探针回执'));
+})());
+check('ledger-exclude-without-evidence-detected', (() => {
+  const p = '# p\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n\n## 攻击面台账\n\n- 台账行\n  - 类别：' + '展开与 token 边界改写' + '\n  - 处置：exclude: 无实例\n  - 证据：-\n';
+  return attackLedger(p, { implText: implGood, testText: testGood }).some((v) => v.msg.includes('证据'));
+})());
+check('ledger-section-absent-detected', attackLedger('# p\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
+check('ledger-nonsecurity-plan-exempt', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', {}).length === 0);
+check('ledger-report-zero-go-echo-required', attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO' }).some((v) => v.msg.includes('ECHO-RISK')));
+check('ledger-report-zero-go-echo-annotated-ok', !attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nECHO-RISK' }).some((v) => v.msg.includes('ECHO-RISK')));
+check('ledger-nonsecurity-report-still-checked', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'VERDICT: GO' }).some((v) => v.msg.includes('ATTACKS=')));
+check('ledger-files-title-trailing-note-detected', attackLedger('# p\n## Files（批间互斥）\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
+check('ledger-fenced-fake-files-section-denied', attackLedger('# p\n\n```md\n## Files\n| Modify | `README.md` | x |\n```\n\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
+check('ledger-fenced-contract-example-ignored', attackLedger('# p\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n\n## 格式契约示例（围栏内不参与结构判定）\n\n```md\n## 攻击面台账\n\n- 台账行\n  - 类别：<占位>\n```\n\n## 攻击面台账\n\n' + ATTACK_CLASSES.map(ledgerRow).join('\n') + '\n', { implText: implGood, testText: testGood }).length === 0);
+
+// 29-48) 报告侧攻击配额机器对账（配额去自声明 / 击穿入 E 清单 / 实弹姿态可核 / 标记行锚定 / 末次取值 / 未闭合围栏）
+// 空桩阶段（countAttackRows 返回 []、checkReportFormat 未补强、登记表未含对账器）必 FAIL：
+//   30-38、40-46、48 共 17 条属 [PASS-RED] 断言比对失败；29、39、47 为负控制类（空桩即 PASS），不得据其判定红灯充足。
+const RECEIPT = '自检：`npm test --prefix checks/ledger`（退出码 0）';
+const atkRow = (n, indent) => (indent || '') + '- 攻击行: 序号=' + n + ' | 类别=外衣化 | 靶点=checks/attack-ledger.mjs:102 | 构造=c' + n + ' | 探针=`npm test --prefix checks` Exit 0 | 判定=拦截';
+const quietRow = (n, indent) => atkRow(n, indent).replace('`npm test --prefix checks` Exit 0', '静态推演');
+const REPORT_OK = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+const F34 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```', '', RECEIPT, 'ATTACKS=4', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+const F44 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```'].join('\n');
+const F45 = [quietRow(1, '  '), quietRow(2, '  '), '', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+const F48 = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO', '', '```text', 'terminal output', '', 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+const rv = (text) => { const v = []; checkReportFormat(text, v); return v; };
+const rvSome = (text, frag) => rv(text).some((x) => x.msg.includes(frag));
+const auditorPlan = '# p\n## Files\n| Modify | `checks/attack-ledger.mjs` | x |\n';
+
+// 29（负控制）合规最小报告零违反
+check('ledger-report-quota-clean-ok', rv(REPORT_OK).length === 0, 'n=' + rv(REPORT_OK).length);
+// 30 配额灌水：声明 9 / 登记行实数 2
+check('ledger-report-attacks-inflated-detected', rvSome(REPORT_OK.replace('ATTACKS=2', 'ATTACKS=9'), '攻击行实数'));
+// 31 纯散文自声明：ATTACKS=24 / 登记行 0
+check('ledger-report-attacks-selfdeclared-detected', rvSome(['# r', '', '### 攻击 1：散文推演', '', RECEIPT, 'ATTACKS=24', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '自声明'));
+// 32 序号重复灌水
+check('ledger-report-row-seq-duplicate-detected', rvSome([atkRow(1), atkRow(1), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '序号重复'));
+// 33 两方言混用
+check('ledger-report-row-dialect-mixed-detected', rvSome(['- 攻击行: 序号=1 | 判定=拦截', '', '| A-2 | x | y |', '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '方言混用'));
+// 34 闭合围栏内伪行不得计入实数（声明 4，围栏外真 2）
+check('ledger-report-fenced-rows-not-counted', rvSome(F34, '与攻击行实数 2 不一致'));
+// 35 击穿未入 E 清单
+check('ledger-report-pen-without-eid-detected', rvSome([atkRow(1), atkRow(2), atkRow(3), '', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=3', 'VERDICT: NO-GO'].join('\n'), 'E 清单编号'));
+// 36 PEN 大于 ATTACKS
+check('ledger-report-pen-gt-attacks-detected', rvSome([atkRow(1), atkRow(2), atkRow(3), '', '- E-1 x', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=7', 'VERDICT: NO-GO'].join('\n'), '大于 ATTACKS'));
+// 37 实弹姿态缺失（探针字段全为静态推演且未标 OFFLINE）
+check('ledger-report-probe-posture-missing-detected', rvSome([quietRow(1), quietRow(2), '', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'PROBE=OFFLINE'));
+// 38 零实弹 GO 必须标 ECHO-RISK
+check('ledger-report-offline-go-echo-required', rvSome([atkRow(1), atkRow(2), '', 'PROBE=OFFLINE', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '零实弹'));
+// 39（负控制）散文引用两标记字面量不得构成姿态声明（误伤对照）
+check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；契约另要求零攻击 GO 标注 ECHO-RISK。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n')).length === 0);
+// 40 格式行末次取值：前塞裸行遮蔽尾部真值
+check('ledger-report-format-line-last-wins', rvSome(['# r', '', 'ATTACKS=9', '', '## 格式行', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
+// 41 ECHO-RISK 散文撞词不足以免标
+check('ledger-report-echo-prose-mention-insufficient', rvSome(['# r', '', '按契约「零攻击 GO 必须另行标注 ECHO-RISK」，本报告合规。', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
+// 42 对账器自身入登记表
+check('ledger-enforcement-registry-covers-auditor', ENFORCEMENT_FILES.includes('checks/attack-ledger.mjs'));
+// 43 仅涉对账器的计划同样触发台账义务
+check('ledger-auditor-plan-requires-ledger', attackLedger(auditorPlan, {}).some((v) => v.msg.includes('攻击面台账')));
+// 44 计数助手可直接复核：围栏外 2 行 + 闭合围栏内 2 行 ⇒ 只数到 2，方言 line-row
+const counted = countAttackRows(F44);
+check('ledger-count-attack-rows-fence-masked', counted.length === 2 && counted.every((r) => r.anchor === 'line-row'), 'rows=' + counted.length);
+// 45 缩进 0-3 空格的合规登记行必须计入（声明 3 / 缩进真行 2 ⇒ 报"实数 2"而非"自声明"）
+check('ledger-report-indented-rows-counted', rvSome(F45, '与攻击行实数 2 不一致'));
+// 46 行首解释句不得冒充 ECHO-RISK 标注（装饰前缀 + 无冒号引导的后缀）
+check('ledger-report-marker-explanation-not-counted', rvSome(['# r', '', '- **ECHO-RISK** 语义说明：本标记仅在零攻击时使用', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
+// 47（负控制）带列表符/加粗/冒号说明的标记行仍然有效（严格化不得误伤合法装饰形态）
+check('ledger-report-decorated-marker-counted', rv([atkRow(1), atkRow(2), '', '- **PROBE=OFFLINE**：本代理无沙箱权限', '', '- ECHO-RISK：纸面放行已明示', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n')).length === 0);
+// 48 未闭合围栏使其后内容整段不可信 ⇒ 直接判红
+check('ledger-report-unclosed-fence-detected', rvSome(F48, '未闭合'));
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

@@ -7,9 +7,307 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;600&family=Gabarito:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
   <style>
 
+
+/* ===== 内置工具类子集（替代 Tailwind Play CDN：零网络、零构建）=====
+   完整性判据 = regress 断言 webui-utility-subset-presence（presence-only：只保规则在场，不保 @media 包裹语义；
+   其 detail 输出即缺项工作清单）+ webui-utility-rules-nonempty（禁空规则）。
+   展开规范 = 本计划「工具类子集确定性映射表」；表未覆盖的 token 按 Tailwind 对应版本语义（含 v4 别名）展开并记入证据日志。 */
+/* --- 生成区开始 --- */
+/* 最小 preflight（替代 Tailwind Play CDN 注入的基础重置；仅保留本页依赖项）。
+   本页未使用 Play CDN 之外的任何 Tailwind 能力，故以确定性映射表展开工具类子集即可。 */
+*, ::before, ::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: currentColor; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* 布局：display / position / inset / z-index / overflow */
+.block { display: block; }
+.flex { display: flex; }
+.grid { display: grid; }
+.absolute { position: absolute; }
+.relative { position: relative; }
+.fixed { position: fixed; }
+.sticky { position: sticky; }
+.inset-0 { inset: 0; }
+.top-0 { top: 0; }
+.right-0 { right: 0; }
+.right-5 { right: 1.25rem; }
+.bottom-5 { bottom: 1.25rem; }
+.z-30 { z-index: 30; }
+.z-40 { z-index: 40; }
+.z-50 { z-index: 50; }
+.overflow-auto { overflow: auto; }
+.overflow-x-auto { overflow-x: auto; }
+.overflow-y-auto { overflow-y: auto; }
+
+/* Flex / Grid 容器 */
+.flex-1 { flex: 1 1 0%; }
+.flex-col { flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.shrink-0 { flex-shrink: 0; }
+.items-start { align-items: flex-start; }
+.items-center { align-items: center; }
+.justify-end { justify-content: flex-end; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.space-x-2 > :not([hidden]) ~ :not([hidden]) { margin-left: 0.5rem; }
+.grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* gap */
+.gap-1 { gap: 0.25rem; }
+.gap-1\.5 { gap: 0.375rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-2\.5 { gap: 0.625rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+.gap-5 { gap: 1.25rem; }
+
+/* padding */
+.p-1 { padding: 0.25rem; }
+.p-1\.5 { padding: 0.375rem; }
+.p-2 { padding: 0.5rem; }
+.p-2\.5 { padding: 0.625rem; }
+.p-3 { padding: 0.75rem; }
+.p-3\.5 { padding: 0.875rem; }
+.p-4 { padding: 1rem; }
+.p-5 { padding: 1.25rem; }
+.p-6 { padding: 1.5rem; }
+.px-1\.5 { padding-left: 0.375rem; padding-right: 0.375rem; }
+.px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+.px-2\.5 { padding-left: 0.625rem; padding-right: 0.625rem; }
+.px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+.px-3\.5 { padding-left: 0.875rem; padding-right: 0.875rem; }
+.px-4 { padding-left: 1rem; padding-right: 1rem; }
+.px-5 { padding-left: 1.25rem; padding-right: 1.25rem; }
+.py-0\.5 { padding-top: 0.125rem; padding-bottom: 0.125rem; }
+.py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+.py-1\.5 { padding-top: 0.375rem; padding-bottom: 0.375rem; }
+.py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.py-2\.5 { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.py-3 { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+.py-5 { padding-top: 1.25rem; padding-bottom: 1.25rem; }
+.py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+.py-10 { padding-top: 2.5rem; padding-bottom: 2.5rem; }
+.py-12 { padding-top: 3rem; padding-bottom: 3rem; }
+.py-20 { padding-top: 5rem; padding-bottom: 5rem; }
+.pt-0\.5 { padding-top: 0.125rem; }
+.pt-1 { padding-top: 0.25rem; }
+.pt-2 { padding-top: 0.5rem; }
+.pb-1\.5 { padding-bottom: 0.375rem; }
+.pb-2 { padding-bottom: 0.5rem; }
+.pr-1 { padding-right: 0.25rem; }
+
+/* margin */
+.mb-0\.5 { margin-bottom: 0.125rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-1\.5 { margin-bottom: 0.375rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-5 { margin-bottom: 1.25rem; }
+.mt-0\.5 { margin-top: 0.125rem; }
+.mt-1 { margin-top: 0.25rem; }
+.mt-1\.5 { margin-top: 0.375rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-auto { margin-top: auto; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+/* sizing */
+.w-1\.5 { width: 0.375rem; }
+.w-2\.5 { width: 0.625rem; }
+.w-3 { width: 0.75rem; }
+.w-3\.5 { width: 0.875rem; }
+.w-4 { width: 1rem; }
+.w-5 { width: 1.25rem; }
+.w-8 { width: 2rem; }
+.w-9 { width: 2.25rem; }
+.w-10 { width: 2.5rem; }
+.w-12 { width: 3rem; }
+.w-48 { width: 12rem; }
+.w-64 { width: 16rem; }
+.w-full { width: 100%; }
+.h-1\.5 { height: 0.375rem; }
+.h-2\.5 { height: 0.625rem; }
+.h-3 { height: 0.75rem; }
+.h-3\.5 { height: 0.875rem; }
+.h-4 { height: 1rem; }
+.h-5 { height: 1.25rem; }
+.h-7 { height: 1.75rem; }
+.h-8 { height: 2rem; }
+.h-9 { height: 2.25rem; }
+.h-10 { height: 2.5rem; }
+.h-11 { height: 2.75rem; }
+.h-12 { height: 3rem; }
+.min-h-screen { min-height: 100vh; }
+.max-h-40 { max-height: 10rem; }
+.max-h-48 { max-height: 12rem; }
+.max-h-\[360px\] { max-height: 360px; }
+.max-h-\[380px\] { max-height: 380px; }
+.max-h-\[460px\] { max-height: 460px; }
+.max-h-\[480px\] { max-height: 480px; }
+.max-w-xs { max-width: 20rem; }
+.max-w-sm { max-width: 24rem; }
+.max-w-md { max-width: 28rem; }
+.max-w-7xl { max-width: 80rem; }
+.max-w-\[100px\] { max-width: 100px; }
+.max-w-\[180px\] { max-width: 180px; }
+
+/* typography */
+.text-xs { font-size: 0.75rem; line-height: 1rem; }
+.text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+.text-base { font-size: 1rem; line-height: 1.5rem; }
+.text-2xl { font-size: 1.5rem; line-height: 2rem; }
+.text-\[9px\] { font-size: 9px; }
+.text-\[10px\] { font-size: 10px; }
+.text-\[11px\] { font-size: 11px; }
+.text-\[13px\] { font-size: 13px; }
+.text-\[14px\] { font-size: 14px; }
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+.text-white { color: #ffffff; }
+.font-normal { font-weight: 400; }
+.font-medium { font-weight: 500; }
+.font-semibold { font-weight: 600; }
+.font-bold { font-weight: 700; }
+.leading-tight { line-height: 1.25; }
+.leading-relaxed { line-height: 1.625; }
+.tracking-tight { letter-spacing: -0.025em; }
+.tracking-wide { letter-spacing: 0.025em; }
+.tracking-wider { letter-spacing: 0.05em; }
+.tracking-\[0\.4em\] { letter-spacing: 0.4em; }
+.uppercase { text-transform: uppercase; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.break-all { word-break: break-all; }
+.whitespace-nowrap { white-space: nowrap; }
+.whitespace-pre-wrap { white-space: pre-wrap; }
+.antialiased { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* 背景色工具类 */
+.bg-\[var\(--accent-container\)\] { background-color: var(--accent-container); }
+.bg-\[var\(--accent-primary\)\] { background-color: var(--accent-primary); }
+.bg-\[var\(--bg-canvas\)\] { background-color: var(--bg-canvas); }
+.bg-\[var\(--bg-code-block\)\] { background-color: var(--bg-code-block); }
+.bg-\[var\(--bg-file-viewer\)\] { background-color: var(--bg-file-viewer); }
+.bg-\[var\(--bg-input\)\] { background-color: var(--bg-input); }
+.bg-\[var\(--bg-result-block\)\] { background-color: var(--bg-result-block); }
+.bg-\[var\(--bg-result-success\)\] { background-color: var(--bg-result-success); }
+.bg-\[var\(--bg-surface\)\] { background-color: var(--bg-surface); }
+.bg-\[var\(--bg-surface-elevated\)\] { background-color: var(--bg-surface-elevated); }
+.bg-\[var\(--bg-surface-subtle\)\] { background-color: var(--bg-surface-subtle); }
+.bg-\[var\(--bg-terminal\)\] { background-color: var(--bg-terminal); }
+.bg-\[var\(--danger-accent\)\] { background-color: var(--danger-accent); }
+.bg-\[var\(--danger-container\)\] { background-color: var(--danger-container); }
+.bg-\[var\(--gold-accent\)\] { background-color: var(--gold-accent); }
+.bg-\[var\(--gold-container\)\] { background-color: var(--gold-container); }
+.bg-black\/60 { background-color: rgb(0 0 0 / 0.6); }
+
+/* 文字色工具类 */
+.text-\[var\(--accent-on-primary\)\] { color: var(--accent-on-primary); }
+.text-\[var\(--accent-primary\)\] { color: var(--accent-primary); }
+.text-\[var\(--accent-text\)\] { color: var(--accent-text); }
+.text-\[var\(--danger-accent\)\] { color: var(--danger-accent); }
+.text-\[var\(--danger-text\)\] { color: var(--danger-text); }
+.text-\[var\(--gold-accent\)\] { color: var(--gold-accent); }
+.text-\[var\(--gold-text\)\] { color: var(--gold-text); }
+.text-\[var\(--syntax-key\)\] { color: var(--syntax-key); }
+.text-\[var\(--syntax-number\)\] { color: var(--syntax-number); }
+.text-\[var\(--syntax-string\)\] { color: var(--syntax-string); }
+.text-\[var\(--text-code-block\)\] { color: var(--text-code-block); }
+.text-\[var\(--text-dim\)\] { color: var(--text-dim); }
+.text-\[var\(--text-file-viewer\)\] { color: var(--text-file-viewer); }
+.text-\[var\(--text-main\)\] { color: var(--text-main); }
+.text-\[var\(--text-muted\)\] { color: var(--text-muted); }
+.text-\[var\(--text-result-block\)\] { color: var(--text-result-block); }
+.text-\[var\(--text-result-success\)\] { color: var(--text-result-success); }
+.text-\[var\(--text-terminal\)\] { color: var(--text-terminal); }
+.text-\[var\(--text-terminal-dim\)\] { color: var(--text-terminal-dim); }
+
+/* 边框宽度 / 颜色 */
+.border { border-width: 1px; }
+.border-b { border-bottom-width: 1px; }
+.border-t { border-top-width: 1px; }
+.border-\[var\(--accent-primary\)\] { border-color: var(--accent-primary); }
+.border-\[var\(--border-code-block\)\] { border-color: var(--border-code-block); }
+.border-\[var\(--border-file-viewer\)\] { border-color: var(--border-file-viewer); }
+.border-\[var\(--border-main\)\] { border-color: var(--border-main); }
+.border-\[var\(--border-result-block\)\] { border-color: var(--border-result-block); }
+.border-\[var\(--border-result-success\)\] { border-color: var(--border-result-success); }
+.border-\[var\(--border-subtle\)\] { border-color: var(--border-subtle); }
+.border-\[var\(--border-terminal\)\] { border-color: var(--border-terminal); }
+.border-\[var\(--danger-accent\)\] { border-color: var(--danger-accent); }
+.border-\[var\(--gold-accent\)\] { border-color: var(--gold-accent); }
+
+/* 圆角 */
+.rounded { border-radius: 0.25rem; }
+.rounded-xl { border-radius: 0.75rem; }
+.rounded-2xl { border-radius: 1rem; }
+.rounded-full { border-radius: 9999px; }
+.rounded-\[6px\] { border-radius: 6px; }
+.rounded-\[8px\] { border-radius: 8px; }
+.rounded-\[10px\] { border-radius: 10px; }
+.rounded-\[14px\] { border-radius: 14px; }
+.rounded-\[18px\] { border-radius: 18px; }
+.rounded-\[24px\] { border-radius: 24px; }
+
+/* 阴影 / 透明度 / 背景模糊 */
+.shadow-2xs { box-shadow: 0 1px rgb(0 0 0 / 0.05); }
+.shadow-xs { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+.shadow-sm { box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1); }
+.shadow-2xl { box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+.opacity-40 { opacity: 0.4; }
+.opacity-70 { opacity: 0.7; }
+.opacity-80 { opacity: 0.8; }
+.backdrop-blur-md { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+
+/* 过渡 */
+.transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-colors { transition-property: color, background-color, border-color, text-decoration-color, fill, stroke; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-opacity { transition-property: opacity; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.transition-transform { transition-property: transform; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+.duration-200 { transition-duration: 200ms; }
+
+/* 光标 / 动画（动画类必须同时定义 @keyframes，禁只写 animation 引用） */
+.cursor-pointer { cursor: pointer; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: 0.5; } }
+.animate-spin { animation: spin 1s linear infinite; }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+
+/* 伪类变体 */
+.hover\:bg-\[var\(--bg-surface-elevated\)\]:hover { background-color: var(--bg-surface-elevated); }
+.hover\:bg-\[var\(--bg-surface-subtle\)\]:hover { background-color: var(--bg-surface-subtle); }
+.hover\:border-\[var\(--accent-primary\)\]:hover { border-color: var(--accent-primary); }
+.hover\:opacity-90:hover { opacity: 0.9; }
+.hover\:text-\[var\(--danger-accent\)\]:hover { color: var(--danger-accent); }
+.hover\:text-\[var\(--text-main\)\]:hover { color: var(--text-main); }
+.hover\:underline:hover { text-decoration-line: underline; }
+.focus\:border-\[var\(--accent-primary\)\]:focus { border-color: var(--accent-primary); }
+.focus\:border-\[var\(--danger-accent\)\]:focus { border-color: var(--danger-accent); }
+.focus\:outline-none:focus { outline: 2px solid transparent; outline-offset: 2px; }
+.disabled\:opacity-50:disabled { opacity: 0.5; }
+.last\:border-b-0:last-child { border-bottom-width: 0px; }
+.group:hover .group-hover\:text-\[var\(--accent-primary\)\] { color: var(--accent-primary); }
+.group:hover .group-hover\:text-\[var\(--accent-text\)\] { color: var(--accent-text); }
+
+/* 响应式变体（sm:640px / lg:1024px） */
+@media (min-width: 640px) {
+  .sm\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sm\:px-6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .sm\:text-base { font-size: 1rem; line-height: 1.5rem; }
+  .sm\:text-lg { font-size: 1.125rem; line-height: 1.75rem; }
+}
+@media (min-width: 1024px) {
+  .lg\:col-span-5 { grid-column: span 5 / span 5; }
+  .lg\:col-span-7 { grid-column: span 7 / span 7; }
+  .lg\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .lg\:grid-cols-12 { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+}
+
+/* 审出漏检补遗（PR 审查 E2）：无标记单 token 类——位于多 token JS 串的第二 token 且无 `-`/`:`/`[`
+   标记，故 webui-utility-subset-presence 的 MARK 过滤不覆盖；由人工超集扫描（.kilo/probe-sweep-tokens.mjs）审出。 */
+.italic { font-style: italic; }
+.rotate-180 { transform: rotate(180deg); }
+
+/* --- 生成区结束 --- */
 
 @layer base {
   :root {
@@ -624,18 +922,26 @@ const ICONS = {
 
     function highlightJson(obj) {
       const json = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2);
-      return esc(json).replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
+      const RE = /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g;
+      let out = '';
+      let last = 0;
+      let m;
+      while ((m = RE.exec(json)) !== null) {
+        out += esc(json.slice(last, m.index));
         let cls = 'text-[var(--syntax-number)]';
-        if (/^"/.test(match)) {
-          if (/:$/.test(match)) cls = 'text-[var(--syntax-key)] font-semibold';
+        if (/^"/.test(m[0])) {
+          if (/:$/.test(m[0])) cls = 'text-[var(--syntax-key)] font-semibold';
           else cls = 'text-[var(--syntax-string)]';
-        } else if (/true|false/.test(match)) {
+        } else if (/true|false/.test(m[0])) {
           cls = 'text-[var(--gold-accent)] font-semibold';
-        } else if (/null/.test(match)) {
+        } else if (/null/.test(m[0])) {
           cls = 'text-[var(--text-dim)] italic';
         }
-        return '<span class="' + cls + '">' + match + '</span>';
-      });
+        out += '<span class="' + cls + '">' + esc(m[0]) + '</span>';
+        last = m.index + m[0].length;
+      }
+      out += esc(json.slice(last));
+      return out;
     }
 
     function addWhitelist(p) {
@@ -897,7 +1203,7 @@ const ICONS = {
       // —— 治理引擎状态监控统计卡（充实首页首屏）——
       const pol = state.policy || {};
       const statCards = [
-        { icon: 'Sliders', label: '结构硬闸', value: ((pol.structureGates || []).length || 14) + ' 族', desc: 'Fatal 底线恒启用', tone: 'danger' },
+        { icon: 'Sliders', label: '结构硬闸', value: ((pol.structureGates || []).length || 15) + ' 族', desc: 'Fatal 底线恒启用', tone: 'danger' },
         { icon: 'ShieldCheck', label: '白名单基线', value: ((pol.allow || []).length) + ' 条', desc: '只读取证与测试放行', tone: 'accent' },
         { icon: 'ShieldAlert', label: '黑名单基线', value: ((pol.deny || []).length) + ' 键', desc: '破坏性写操作死拦', tone: 'gold' },
         { icon: 'Radio', label: '真实审计流', value: (state.status && state.status.auditRecordCount === null) ? '不可读' : (((state.status && state.status.auditRecordCount) || 0) + ' 条'), desc: (state.status && state.status.auditRecordCount === null) ? (state.status.auditFileExists === false ? '审计文件不存在' : 'webui 进程未开启 MCP_AUDIT_LOG=1（仅影响本状态位）') : 'governor-audit.jsonl 实际记录数', tone: ((state.status && state.status.auditRecordCount) || 0) > 0 ? 'accent' : 'dim' }
@@ -1001,7 +1307,7 @@ const ICONS = {
       let html = '<div class="flex flex-col gap-4">';
       html += '<div class="p-4 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)]">';
       html += '<h4 class="text-xs font-semibold font-serif-title text-[var(--text-main)] mb-1">黑白名单特异性例外覆盖机制说明 (Specificity Principles)</h4>';
-      html += '<p class="text-[11px] text-[var(--text-muted)]">仲裁引擎基于特异性加权打分算法：具体明确的子命令具有更高权重，优先覆盖宽泛的通配符规则。出厂 14 族结构硬闸为绝对安全底线，任何自定义白名单均无法豁免。</p></div>';
+      html += '<p class="text-[11px] text-[var(--text-muted)]">仲裁引擎基于特异性加权打分算法：具体明确的子命令具有更高权重，优先覆盖宽泛的通配符规则。出厂 15 族结构硬闸为绝对安全底线，任何自定义白名单均无法豁免。</p></div>';
 
       html += '<div class="p-4 rounded-[10px] bg-[var(--bg-surface)] border border-[var(--border-main)] flex flex-col gap-3">';
       html += '<div class="flex items-center gap-2">' + renderIcon('Split', 'w-4 h-4 text-[var(--accent-primary)]') + '<h4 class="text-xs font-semibold text-[var(--text-main)]">特异性仲裁实时计算器 (演练·不写入策略)</h4></div>';
@@ -1246,7 +1552,7 @@ const ICONS = {
       if (res) {
         html += '<span class="text-[11px] px-2 py-0.5 rounded-full font-semibold ' + (res.exitCode === 0 ? 'bg-[var(--accent-container)] text-[var(--accent-text)]' : 'bg-[var(--danger-container)] text-[var(--danger-text)]') + '">' + (res.exitCode === 0 ? 'ALL OK (' + passCount + ' passed)' : 'FAILURES (' + failCount + ' failed)') + '</span>';
       }
-      html += '</div><p class="text-[11px] text-[var(--text-muted)]">真实派生子进程运行 mcp/tests/plan-governor-regress.mjs，覆盖双实例能力绑定、模式可信验真与 14 族结构硬闸。</p></div></div>';
+      html += '</div><p class="text-[11px] text-[var(--text-muted)]">真实派生子进程运行 mcp/tests/plan-governor-regress.mjs，覆盖双实例能力绑定、模式可信验真与 15 族结构硬闸。</p></div></div>';
 
       html += '<div class="flex items-center gap-2">';
       if (res) {

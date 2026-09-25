@@ -7,7 +7,7 @@
   "description": "双实例能力绑定 + 恒定最严档执法的受控终端与写面蜜罐引导闸 MCP server（零外部依赖）",
   "main": "plan-governor.js",
   "scripts": {
-    "test": "node tests/plan-governor-regress.mjs",
+    "test": "node tests/plan-governor-regress.mjs && node tests/whitelist-audit.mjs",
     "probe": "node tests/live-probe.mjs",
     "probe:sandbox": "node tests/sandbox-probe.mjs",
     "webui": "node webui.js"

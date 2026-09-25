@@ -83,13 +83,14 @@ let regressJob = null;
 // 去重防漂移）；本文件仅经 governor.* 调用。
 // webui.js 的 VIRTUAL_DRIVE_LETTER 旧死常量（无任何引用）随迁移一并删除。
 
-// 14 族结构硬闸出厂元数据（只读展示，锁定不可禁用）
+// 15 族结构硬闸出厂元数据（只读展示，锁定不可禁用）
 const STRUCTURE_GATES = [
   { id: 'gate-0.5', name: '展开构造硬闸 ($ / 反引号)', pattern: '$ 或 `', desc: 'bash 展开可改写命令 token 边界，一律拒绝', fatal: true },
   { id: 'gate-0.5b', name: '花括号 / 浪号 / 通配符展开硬闸 ({a,b} ~ * ?)', pattern: '展开族元字符', desc: '执行时刻展开令裁决视图与执行视图分叉，一律拒绝', fatal: true },
   { id: 'gate-0.5c', name: '前置环境变量赋值闸 (VAR=val)', pattern: '^VAR=val', desc: 'GIT_PAGER / PAGER / BASH_ENV 可绕过参数闸派生外部进程，一律拒绝', fatal: true },
   { id: 'gate-0.6', name: '命令包装前缀闸 (command/env/nohup/eval/sh/bash)', pattern: '包装前缀族', desc: '把真命令推到参数位使黑名单前缀匹配失效，一律拒绝', fatal: true },
   { id: 'gate-0', name: 'pwsh / powershell -c 包装闸', pattern: 'powershell -c', desc: '解释器内联执行即任意命令通道，逐段拦截', fatal: true },
+  { id: 'gate-0.7', name: 'pwsh 子表达式 / 脚本块 / @ 包裹构造闸', pattern: '[(){}@]（pwsh 掩码视图）', desc: 'pwsh 参数位 ( ) 立即求值、{ } 延迟绑定执行、@( / @{ 包裹构造，可在参数位执行任意命令；仅 cmdlet 路由段判定，引号内为 pwsh 字面量', fatal: true },
   { id: 'gate-1', name: '黑名单绝对阻断闸 (' + governor.DENY_KEYS.length + ' 键)', pattern: 'DENY_KEYS (' + governor.DENY_KEYS.length + ')', desc: '破坏性与状态写操作严禁执行，全角色全模式死拦', fatal: true },
   { id: 'gate-1.5', name: 'Git 别名执行面写入闸 (git config 写形态)', pattern: 'git config 写形态', desc: '防止定义 !cmd 别名形成任意命令通道', fatal: true },
   { id: 'gate-2', name: '禁入清单绝对阻断闸 (' + governor.FORBIDDEN_KEYS.length + ' 键)', pattern: 'FORBIDDEN_KEYS (' + governor.FORBIDDEN_KEYS.length + ')', desc: '隐式写能力或管道任意执行风险，一律 deny', fatal: true },
@@ -110,15 +111,21 @@ function cleanExpiredChallenges() {
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let buf = '';
+    // 累积 Buffer 而非字符串：`buf += d`（String + Buffer）会对每个 data 分片独立
+    // toString('utf8')，多字节字符跨 TCP 分片边界时被裂成 U+FFFD。改为攒 Buffer、
+    // 末尾一次性 concat + 解码，保证 UTF-8 字节序列完整还原。上限按字节计。
+    const chunks = [];
+    let size = 0;
     req.on('data', (d) => {
-      buf += d;
-      if (buf.length > 1024 * 1024) {
+      chunks.push(d);
+      size += d.length;
+      if (size > 1024 * 1024) {
         req.destroy();
         reject(new Error('请求体过大（上限 1MB）'));
+        return;
       }
     });
-    req.on('end', () => resolve(buf));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
 }
@@ -490,9 +497,11 @@ const server = http.createServer(async (req, res) => {
 
       let child;
       try {
-        // 显式置空审计/强制壳/钉 Git Bash 三 env，防子进程继承宿主 MCP 执行上下文
-        // （regress harness 已全量剥离 MCP_* 前缀，此处为 webui 侧防御纵深）。
-        child = spawn(process.execPath, [scriptPath], { cwd: REPO_ROOT, env: Object.assign({}, process.env, { MCP_ROLE: 'main', MCP_AUDIT_LOG: '', MCP_FORCE_SHELL: '', MCP_GIT_BASH: '' }) });
+        // 子进程 env 白名单化：全量剥离 MCP_* 前缀（仅覆写 4 键会漏其余 MCP_* 变量，
+        //   任何受控上下文都可能经 webui→node 一跳被继承而污染角色钉定），再显式钉入回归所需角色。
+        const _childEnv = {};
+        for (const k of Object.keys(process.env)) if (!/^MCP_/.test(k)) _childEnv[k] = process.env[k];
+        child = spawn(process.execPath, [scriptPath], { cwd: REPO_ROOT, env: Object.assign(_childEnv, { MCP_ROLE: 'main' }) });
       } catch (e) {
         regressJob.status = 'error';
         regressJob.stderr = e.message;

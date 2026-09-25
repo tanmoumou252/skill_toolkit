@@ -149,3 +149,12 @@ mcpServers: plan-governor-main, plan-governor-subagent
 - **主代理（本文件）可用**：`list_dir` `search_file` `search_content` `read_file` `read_lints` `replace_in_file` `write_to_file` `lsp` `connect_cloud_service` `preview_url` `web_fetch` `use_skill` `read_rules` `web_search` `RAG_search` `ask_followup_question` `task` `automation_update` `send_message` `team_create` `team_delete` `mcp_get_tool_description` `mcp_call_tool` 及 `cloud_studio_*` 系列。（其中 `mcp_get_tool_description` / `mcp_call_tool` 随 frontmatter `mcpServers` 注入，不在 `tools:` 中枚举；`cloud_studio_*` 同属宿主注入族。）
 - **子代理（plan-reviewer-sp / pr-reviewer-sp）可用 13 个**：`list_dir` `search_file` `search_content` `read_file` `read_lints` `replace_in_file` `write_to_file` `lsp` `use_skill` `read_rules` `send_message` `mcp_get_tool_description` `mcp_call_tool`；**没有** `task`（子代理不可再派子代理）、**没有** `ask_followup_question`（有疑问回报主编排器转问用户）、**没有** `delete_file`（reviewer 为只读评估角色，无删除权限；主代理为计划角色亦无删除权限）、**没有** `web_fetch` / `web_search` / `connect_cloud_service` / `preview_url` / `automation_update`（与 kilocode 基准 reviewer `webfetch: deny` 对齐的裁剪面）、**没有** `team_create` / `RAG_search` / `cloud_studio_*`；MCP 仅挂 `plan-governor-subagent`（main 实例整体不注入，隔离等级高于逐键 deny）。
 - **内置 code-explorer 子代理**：仅 `search_file` `search_content` `read_file` `read_lints` `lsp`，纯只读，不能落盘也不能跑命令。
+
+## 攻击面台账与探针先行律（安全执法类计划硬产物）
+
+适用范围：计划 Files 声明命中登记执法实现文件（登记表 = `checks/attack-ledger.mjs` 的 `ENFORCEMENT_FILES` 常量；结构判定只看围栏外行，Files 标题可带尾注）。本节义务由机器对账兜底，不靠自觉：
+
+1. **台账必含**：计划正文必须有 `## 攻击面台账` 节，每个攻击类别一行台账行（类别集 = 该文件 `ATTACK_CLASSES` 常量，棘轮只进不退，新增类别＝代码变更走正常审查链）。行格式六键：类别（逐字命中集合）／处置（`block@<闸名>`，闸名 ≥2 字符且能在实现文件逐字检索；或 `exclude: <理由>` 并另附 `证据` 键带真实 `路径:行号`）／攻击样本（必须从攻击类别变异，禁止照搬被修复的原始形态充数）／对照样本（合法形态防误伤基准）／断言名（须以 `check(` 调用形态在声明测试文件逐字检索到）／探针回执（反引号命令字面量＋退出码实字符串）。
+2. **探针先行律**：凡新增拒绝面，必须先用实弹/离线探针打到目标危险的"放行即红"证据方准入计划；探针打不到→立闸撤案，记为 exclude 行并写明证伪回执（教训实录：`Measure-Object -Expression` 实弹返回「parameter not found」，纸面推演立闸＝引入误拒面）。
+3. **对账命令**：台账经 `mcp_call_tool` 调 `exec_guarded_command` 执行 `npm test --prefix checks/ledger` 机械判定（--latest 自动对账最新计划与其最新影子报告；执法类计划无影子报告即红），非零退出即计划缺陷；派发 Reviewer 的 prompt 必须携带该命令并要求原始输出贴入复审报告。
+4. **ECHO-RISK 转达**：复审报告含 ECHO-RISK（零攻击 GO）时，主计划「复审轮次」登记行与交付呈报必须原样携带该标记呈报人类；零攻击 GO 不得作为安全执法面的闭环依据。

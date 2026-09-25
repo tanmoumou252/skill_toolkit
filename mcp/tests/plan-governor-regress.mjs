@@ -686,6 +686,44 @@ async function main() {
     cleanup(); cleanDir(tmp);
   }
 
+  // —— PR#1 整改：git branch 精确白名单 + pwsh 子表达式/脚本块/包裹构造闸（离线裁决，零派生进程）——
+  //   应拦样本一律走 gov.auditCommand 纯函数（与闸 3.8 块「铁律·与设钟族同条」同口径）：
+  //   `get-content "abc\" (remove-item x)` 类载荷判据回归时绝不允许被真实派发。
+  {
+    const { createRequire } = await import('module');
+    const gov = createRequire(SERVER)(SERVER);
+    const branchWrite = ['git branch -v probe-created', 'git branch -vv probe-created', 'git branch newbranch', 'git branch -d old', 'git branch -m a b', 'git branch --list -v'];
+    const branchRead = ['git branch', 'git branch -a', 'git branch -r', 'git branch -v', 'git branch -vv', 'git branch -a -v', 'git branch --all', 'git branch --list', 'git branch --show-current'];
+    const bLeaks = branchWrite.filter((c) => gov.auditCommand(c).ok !== false);
+    check('gitbranch-exact-write-all-deny', bLeaks.length === 0, bLeaks.length ? 'leaked: ' + bLeaks.join(' | ') : '');
+    const bFalse = branchRead.filter((c) => gov.auditCommand(c).ok !== true);
+    check('gitbranch-exact-read-all-allow', bFalse.length === 0, bFalse.length ? 'blocked: ' + bFalse.join(' | ') : '');
+    const pwshPayloads = [
+      'get-childitem (remove-item -Recurse -Force src)',
+      'get-childitem | get-content -Path { remove-item x }',
+      'get-itemproperty @{ Expression = { remove-item x } } file',
+      'get-content (new-item -ItemType File oops.txt)',
+      'get-content "abc\\" (remove-item x)',
+      'get-childitem @(\'x\')',
+    ];
+    const pLeaks = pwshPayloads.filter((c) => gov.auditCommand(c).ok !== false);
+    check('pwsh-subexpr-scriptblock-deny', pLeaks.length === 0, pLeaks.length ? 'leaked: ' + pLeaks.join(' | ') : '');
+    const attrVerdict = gov.auditCommand('get-childitem (remove-item x)');
+    check('pwsh-gate-attribution',
+      attrVerdict.ok === false && String(attrVerdict.reason).includes('结构闸拦截') && String(attrVerdict.reason).includes('pwsh'),
+      'reason=' + String(attrVerdict.reason).slice(0, 60));
+    const pwshKept = [
+      'get-childitem',
+      'test-path seed.txt',
+      'get-childitem seed.txt | measure-object',
+      "select-string 'a(b' seed.txt",
+      'get-content "file(1).txt"',
+      'get-childitem ".\\sub\\"',
+    ];
+    const pFalse = pwshKept.filter((c) => gov.auditCommand(c).ok !== true);
+    check('pwsh-plain-cmdlet-allow-kept', pFalse.length === 0, pFalse.length ? 'blocked: ' + pFalse.join(' | ') : '');
+  }
+
   // —— 放行命令的落地退出码断言（isError 单维会掩盖"放行但落地 127/128"）——
   {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-exitcode-'));
@@ -1256,6 +1294,66 @@ async function main() {
     cleanDir(tmp); cleanDir(outside);
   }
 
+  // —— write_scoped_file 链接盲区①：.kilo 整体区外 junction 且区外 plans 未建（realRoot=null 整体跳过形态）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-kilojct-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-kiloout-'));
+    let linked = false;
+    try { fs.symlinkSync(outside, path.join(tmp, '.kilo'), 'junction'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'a.md', content: 'x' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('write-scoped-kilo-junction-deny', sess.responses[1] && sess.responses[1].isError);
+      check('write-scoped-kilo-junction-no-outside', !fs.existsSync(path.join(outside, 'plans')));
+      sess.cleanup();
+    } else {
+      console.log('SKIP write-scoped-kilo-junction-deny (junction unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
+  }
+
+  // —— write_scoped_file 链接盲区②：.kilo 整体区外 junction 且区外 plans 预建（判等放行形态）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-kilojct2-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-kiloout2-'));
+    fs.mkdirSync(path.join(outside, 'plans'), { recursive: true });
+    let linked = false;
+    try { fs.symlinkSync(outside, path.join(tmp, '.kilo'), 'junction'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'b.md', content: 'x' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('write-scoped-kilo-junction-exists-deny', sess.responses[1] && sess.responses[1].isError);
+      check('write-scoped-kilo-junction-exists-no-outside', !fs.existsSync(path.join(outside, 'plans', 'b.md')));
+      sess.cleanup();
+    } else {
+      console.log('SKIP write-scoped-kilo-junction-exists-deny (junction unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
+  }
+
+  // —— write_scoped_file 链接盲区③：中段 link 指区外且末级子目录未创建（mkdir recursive 区外落盘形态）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-midlink-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-midout-'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+    let linked = false;
+    try { fs.symlinkSync(outside, path.join(plansDir, 'link'), 'junction'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'link/sub/x.md', content: 'x' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('write-scoped-missing-sub-under-link-deny', sess.responses[1] && sess.responses[1].isError);
+      check('write-scoped-missing-sub-no-outside', !fs.existsSync(path.join(outside, 'sub')));
+      sess.cleanup();
+    } else {
+      console.log('SKIP write-scoped-missing-sub-under-link-deny (junction unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
+  }
+
   // —— Windows 终端分流器回归 ——
   if (process.platform === 'win32') {
     // 默认环境无 env 覆盖时，反查发现真实 bash.exe（PortableGit），回报行以 bash.exe 结尾且不包含 cmd.exe
@@ -1492,6 +1590,94 @@ async function main() {
     const clientSrc = fs.readFileSync(path.resolve(here, '..', 'webui-client.html'), 'utf8');
     check('webui-audit-empty-no-self-env-predicate', !clientSrc.includes('state.status.auditEnabled'));
     check('webui-audit-empty-uses-file-exists', clientSrc.includes('html += (state.status && state.status.auditFileExists)'));
+  }
+
+  // —— 代码质量不变量：SKILL.md 白名单镜像的 git branch 键族禁止回漂为通配形态 ——
+  //   镜像义务由本不变量机器化（resolve-shell-no-dead-fallback 同族先例）：
+  //   文档镜像任何一条 git branch * 后缀键，即与「精确键 = 只读登记面」的执法语义冲突。
+  {
+    const mirrorDocs = [
+      ['plan-file-first', path.resolve(here, '..', '..', 'skills', 'plan-file-first', 'SKILL.md')],
+      ['pwsh-gnu-bridge', path.resolve(here, '..', '..', 'skills', 'pwsh-gnu-bridge', 'SKILL.md')],
+    ];
+    const wildcardKeys = ['git branch -a*', 'git branch -r*', 'git branch -v*', 'git branch --all*', 'git branch --list*', 'git branch --show-current*'];
+    for (const [label, docPath] of mirrorDocs) {
+      let src = '';
+      try { src = fs.readFileSync(docPath, 'utf8'); } catch { src = ''; }
+      const drifted = wildcardKeys.filter((k) => src.includes(k));
+      check('skilldoc-gitbranch-mirror-' + label, drifted.length === 0 && src.includes('git branch -vv'), drifted.length ? 'wildcard: ' + drifted.join(',') : (src.includes('git branch -vv') ? '' : 'missing exact -vv'));
+    }
+  }
+
+  // —— webui 静态化与 env 卫生不变量（CodeRabbit #7 + S1 收尾）——
+  //   1) 远程脚本：本页脚本全为内联，故口径取"任何 <script> 标签都不得带 src"（含跨行形态；
+  //      未来新增本地脚本须显式改断言）；`(?<![\w-])` 防 `data-src` 类误伤；
+  //   2) env 全量剥离：源级双条件（过滤循环 + spawn 实际使用其输出），防"循环在场但未用"假绿；
+  //   3) 工具类子集 presence-only（只保规则在场，不保 @media 包裹语义）：
+  //      单 token JS 串分支 + 实测噪声白名单；选择器只在**已知伪类/伪元素集**处截断（防 `sm:text-lg` 类变体被误截）；
+  //   4) 生成区禁空/禁无声明规则（最小护栏，非视觉等价性证明）。
+  {
+    const htmlSrc = fs.readFileSync(path.resolve(here, '..', 'webui-client.html'), 'utf8');
+    const webuiSrc = fs.readFileSync(path.resolve(here, '..', 'webui.js'), 'utf8');
+    check('webui-no-remote-script', !/<script\b(?:(?!>)[\s\S])*(?<![\w-])src\s*=/i.test(htmlSrc));
+    check('webui-env-mcp-stripped',
+      /if\s*\(\s*!\/\^MCP_\/\.test\(\s*k\s*\)\s*\)\s*_childEnv\[k\]\s*=\s*process\.env\[k\]/.test(webuiSrc) &&
+      /env:\s*Object\.assign\(\s*_childEnv\s*,\s*\{\s*MCP_ROLE:\s*'main'\s*\}\s*\)/.test(webuiSrc));
+    const CLASS_SHAPE = /^[a-z][a-z0-9:._/-]*(?:\[[^\]]+\])?$/i;
+    const MARK = /[-:\[]/;
+    // 噪声白名单（沙箱全量实测，见证据日志；新增项须附证据）：
+    //   单 token 引号串分支实测 5 项非类串；class 属性/多 token 分支实测 3 项
+    //   （`cls`/`auditTone` 系 `class="' + var + '"` 拼接碎片，`C:/Windows/win.ini` 系命令字面量）。
+    //   三路提取共用同一白名单：任一分支漏挂都会让存在性断言恒红（不可达）。
+    const TOKEN_PHANTOM = new Set(['Content-Type', 'data-theme', 'drwxr-xr-x', 'governor-policy.json', 'zh-CN', 'cls', 'auditTone', 'C:/Windows/win.ini']);
+    const tokens = new Set();
+    for (const m of htmlSrc.matchAll(/class="([^"]*)"/g)) {
+      for (const raw of m[1].split(/\s+/)) {
+        const t = raw.trim();
+        if (t && CLASS_SHAPE.test(t) && t !== 'group' && t !== 'peer' && !TOKEN_PHANTOM.has(t)) tokens.add(t);
+      }
+    }
+    for (const m of htmlSrc.matchAll(/'([a-z][a-z0-9:._/-]*(?:\[[^\]]+\])?(?:[ \t]+[a-z][a-z0-9:._/-]*(?:\[[^\]]+\])?)+)'/gi)) {
+      for (const raw of m[1].split(/\s+/)) {
+        const t = raw.trim();
+        if (t && CLASS_SHAPE.test(t) && MARK.test(t) && !TOKEN_PHANTOM.has(t)) tokens.add(t);
+      }
+    }
+    // 单 token 引号串分支（覆盖 'animate-spin' 类三元回退）。
+    const Q = String.fromCharCode(39);
+    const singleRe = new RegExp(Q + '([a-z][a-z0-9:._/-]*(?:\\[[^\\]]+\\])?)' + Q, 'gi');
+    for (const m of htmlSrc.matchAll(singleRe)) {
+      const t = m[1];
+      if (CLASS_SHAPE.test(t) && MARK.test(t) && !TOKEN_PHANTOM.has(t)) tokens.add(t);
+    }
+    const styles = [...htmlSrc.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n');
+    // 选择器归一：去转义后仅剥离**已知伪类/伪元素集**（防把 `sm:text-lg` 的变体冒号当伪类截成 `sm`）。
+    const PSEUDO_TAIL = /(?:::(?:-webkit-|-moz-|-ms-)?[a-z-]+|:(?:hover|focus|focus-visible|focus-within|active|disabled|visited|checked|first-child|last-child|only-child|empty|before|after|placeholder|selection|target|required|invalid|valid|read-only|not\([^)]*\)|nth-child\([^)]*\)))+\s*$/i;
+    const selectors = new Set();
+    for (const m of styles.matchAll(/\.((?:[^\s{},>+~]|\\.)+)/g)) {
+      selectors.add(m[1].replace(/\\(.)/g, '$1').replace(PSEUDO_TAIL, ''));
+    }
+    const missing = [...tokens].filter((t) => !selectors.has(t));
+    check('webui-utility-subset-presence', missing.length === 0,
+      missing.length ? 'missing=' + missing.slice(0, 15).join(' ') + (missing.length > 15 ? ' …+' + (missing.length - 15) : '') : '');
+    const genRegion = (styles.match(/\/\* --- 生成区开始 --- \*\/([\s\S]*?)\/\* --- 生成区结束 --- \*\//) || [])[1] || '';
+    const badRules = [...genRegion.matchAll(/\{([^{}]*)\}/g)].filter((m) => m[1].replace(/[;\s]/g, '') === '' || !m[1].includes(':'));
+    check('webui-utility-rules-nonempty', genRegion.length > 0 && badRules.length === 0, 'bad=' + badRules.length);
+  }
+
+  // —— 显示闸清单 ↔ 执法闸数量对账不变量（PR r1 E1 / r2 E3 防再漂）——
+  //   STRUCTURE_GATES 数组条目数必须为 15（与 plan-governor.js 实际执法结构闸一一对应）；
+  //   webui-client.html 静态文案必须含「15 族」且不得残留「14 族」。
+  //   缺此断言时，显示层与执法层计数漂移只能靠人眼发现——本 PR r1 漏扫 gate-0.7、
+  //   r2 返工又漏扫前端 3 处「14 族」，两次实证此为机械缺口，故钉死。
+  {
+    const gateSrc = fs.readFileSync(path.resolve(here, '..', 'webui.js'), 'utf8');
+    const clientGateSrc = fs.readFileSync(path.resolve(here, '..', 'webui-client.html'), 'utf8');
+    const gatesArr = gateSrc.match(/const STRUCTURE_GATES\s*=\s*\[([\s\S]*?)\n\];/);
+    const gateCount = gatesArr ? (gatesArr[1].match(/\{\s*id:\s*'gate-/g) || []).length : -1;
+    check('webui-structure-gates-count-15', gateCount === 15, 'got=' + gateCount);
+    check('webui-client-no-stale-gate-count', !clientGateSrc.includes('14 族'), 'stale14=' + (clientGateSrc.match(/14 族/g) || []).length);
+    check('webui-client-says-15-gates', clientGateSrc.includes('15 族'), 'says15=' + (clientGateSrc.match(/15 族/g) || []).length);
   }
 
   console.log(fail === 0 ? 'PLAN-GOVERNOR ALL OK' : 'PLAN-GOVERNOR FAILURES=' + fail);

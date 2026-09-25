@@ -1,0 +1,8 @@
+{
+  "name": "skill-toolkit-ledger-entry",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node ../attack-ledger.mjs --latest"
+  }
+}

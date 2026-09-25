@@ -97,8 +97,11 @@ const ALLOW_KEYS = [
   'git ls-files*', 'git ls-tree*', 'git rev-list*', 'git shortlog*', 'git blame*',
   'git cat-file*', 'git for-each-ref*', 'git describe*', 'git merge-base*',
   'git tag', 'git tag -l*', 'git tag --list*',
-  'git branch', 'git branch -a*', 'git branch -r*', 'git branch -v*',
-  'git branch --all*', 'git branch --list*', 'git branch --show-current*',
+  // git branch 全部登记为精确键：matchKey 对 * 后缀键做前缀匹配，而
+  //   `git branch -v <名称>` 是创建分支的真实写形态（审查快照实测），前缀键必然直通。
+  //   组合形态（--list -v 等）未登记即落灰区拒绝，属有意的 fail-closed 取舍。
+  'git branch', 'git branch -a', 'git branch -r', 'git branch -v', 'git branch -vv',
+  'git branch -a -v', 'git branch --all', 'git branch --list', 'git branch --show-current',
   // POSIX / 系统只读
   'ls*', 'cat*', 'grep*', 'head*', 'tail*', 'wc*', 'pwd*', 'date*', 'where.exe*', 'rg*',
   'whoami*', 'diff*',
@@ -453,6 +456,31 @@ function maskQuotedRegions(s) {
   return out;
 }
 
+// pwsh 语法的引号外视图（专供结构硬闸 0.7）：与 maskQuotedRegions（bash 语义）的关键分叉——
+//   ① pwsh 中反斜杠不是转义符："abc\" 于末引号处闭合，其后的 ( ) 是活子表达式；
+//     bash 视图（:444 分支）把 \" 消费为转义对、引号态永不回闭 ⇒ 载荷区被整体掩为占位符，
+//     引号外判据对 `"abc\" (evil)` 形态隐身——执行视图与裁决视图分叉即绕过。
+//   ② pwsh 的转义形态：双引号内转义双引号 = 反引号 `" 或成对 ""；单引号内转义单引号 = 成对 ''。
+//   未闭合引号尾部按"掩码内"处理：pwsh 对未闭合串是解析错误、零执行，不构成放行风险。
+function maskPwshQuotedRegions(s) {
+  let out = '', quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote === "'") {
+      if (c === "'") { if (s[i + 1] === "'") { out += '__'; i++; continue; } quote = null; out += c; continue; }
+      out += '_'; continue;
+    } else if (quote === '"') {
+      if (c === '`') { out += '__'; i++; continue; }
+      if (c === '"') { if (s[i + 1] === '"') { out += '__'; i++; continue; } quote = null; out += c; continue; }
+      out += '_'; continue;
+    } else {
+      if (c === '"' || c === "'") { quote = c; out += c; continue; }
+      out += c;
+    }
+  }
+  return out;
+}
+
 // =========================================================================
 //                 【 模式读取（硬编码最严档） 】
 // =========================================================================
@@ -630,6 +658,21 @@ function auditCommand(rawCmd) {
     if (/^(?:&\s*)?(?:pwsh|powershell)(?:\.exe)?(?:\s|$)/.test(seg) && /(^|\s)-(?:c|command)(?:\s|$)/.test(seg)) {
       return { ok: false, reason: `[结构闸拦截] 严禁 pwsh/powershell -c 包装执行（任意命令通道）。请平铺单行直调: '${cmd.slice(0, 40)}'` };
     }
+  }
+
+  // 结构硬闸 0.7（pwsh 子表达式 / 脚本块 / @ 包裹构造）：cmdlet 路由（hasPwshStage）命令的
+  //   【pwsh 语法】引号外视图含 ( ) { } @ 一律拒绝。为什么必须独立成闸且必须换用 pwsh 掩码：
+  //   ① pwsh 对参数位 `( ... )` 立即求值、对管道参数位 `{ ... }` 延迟绑定执行、`@(` / `@{` 包裹构造，
+  //      `Get-ChildItem (Remove-Item -Recurse -Force src)` 段首命中 get-childitem* 直通白名单，
+  //      黑名单（段首匹配）与只读铁律整体失效；
+  //   ② 闸 0.5 只拒 $ 与反引号，闸 0.5b 的 BRACE_EXPAND_RE 只认含逗号/范围的花括号，
+  //      NONFLAT_RE 不含圆括号类字符——( ) 与无逗号 { } 与 @ 三条通路全部漏网；
+  //   ③ 判定视图若复用 bash 语义的 maskQuotedRegions，`"abc\" (evil)` 会被引号语义分叉隐身
+  //      （pwsh 中 \ 非转义、串已闭合、子表达式激活），故引号视图语法必须匹配执行语法（Global Constraints）。
+  //   引号内 ( ) { } @ 是 pwsh 字面量（双引号内 $() 插值已由闸 0.5 对 base 的 $ 判定闭环拦截）。
+  //   Git Bash 侧不判本闸：其括号构造由 0.5/0.5b/0.6 与 NONFLAT 既有闸族覆盖。
+  if (hasPwshStage(stages) && /[(){}@]/.test(maskPwshQuotedRegions(low))) {
+    return { ok: false, reason: `[结构闸拦截] 命令 '${cmd.slice(0, 40)}' 含 pwsh 子表达式/脚本块/包裹构造（( ) { } @）。它们会在参数位执行任意命令，故一律拒绝。` };
   }
 
   // 结构硬闸 1：任一段命中黑名单（全角色全模式死拦，模式不豁免）。
@@ -1480,13 +1523,22 @@ function startServer() {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标越出 .kilo/plans/。' }] } });
           return;
         }
-        // 符号链接二次判定：.kilo/plans/ 下若存在指向区外的链接，词法 resolve 拦不住，
-        // 与 safeWorkdir / sandboxCopyInto 同口径补 realpath 复核（父目录不存在时跳过，由后续 mkdir 创建）。
-        let realParent = null;
-        let realRoot = null;
-        try { realParent = fs.realpathSync(path.dirname(target)); } catch { realParent = null; }
-        try { realRoot = fs.realpathSync(root); } catch { realRoot = null; }
-        if (realParent && realRoot && realParent !== realRoot && !realParent.startsWith(realRoot + path.sep)) {
+        // 符号链接二次判定（祖先重锚版）：旧口径以 realpathSync(root) 为对照基准，存在两处失明——
+        //   ① `.kilo` 整体为指向区外的链接时，realRoot 与 realParent 同在区外且互为前缀（区外 plans
+        //      预建时直接判等放行），root 尚不存在时 realRoot 为 null，判定被整体跳过；
+        //   ② `link/sub/x.md` 中段 link 指区外而 sub 未创建时 realParent 为 null，判定跳过，
+        //      随后 mkdirSync(recursive) 直接把 sub 建到区外并写盘。
+        // 新口径：基准锚"真实工作区派生的 expectRoot"（与 root 的词法路径解耦，
+        //   root 在场与否、是否经链接解析均不参与判据），对 target 父路径取最近存在祖先三态判定：
+        //   a) 祖先在 expectRoot 内或其下 → 放行（正常路径）；
+        //   b) 祖先是 expectRoot 自身祖先且仍在工作区真实根内 → 放行（plans 尚未创建的合法首写）；
+        //   c) 其余（含祖先经链接落到区外、WORKSPACE 无法解析）→ fail-closed 拒绝。
+        const withinReal = (p, base) => p === base || p.startsWith(base + path.sep);
+        const nearestReal = (p) => { let c = p; for (;;) { try { return fs.realpathSync(c); } catch { const up = path.dirname(c); if (up === c) return null; c = up; } } };
+        const realWs = nearestReal(WORKSPACE);
+        const expectRoot = realWs ? path.join(realWs, '.kilo', 'plans') : null;
+        const anc = nearestReal(path.dirname(target));
+        if (!realWs || !anc || !(withinReal(anc, expectRoot) || (withinReal(expectRoot, anc) && withinReal(anc, realWs)))) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' }] } });
           return;
         }
@@ -1503,6 +1555,13 @@ function startServer() {
         }
         try {
           fs.mkdirSync(path.dirname(target), { recursive: true });
+          // 建后复核：recursive 可能沿区外链接新建中间目录，创建完成后以真实路径重判一次；
+          //   目标文件本身若在写入瞬间成为链接同样拒写（ENOENT 视为可创建的合法新文件）。
+          //   残余窗口（本复核与 writeFileSync 之间的本机进程级抢占竞态）超出恶意仓库威胁模型，
+          //   见「明确不纳入的事项」，如实声明不入码。
+          const realDir = fs.realpathSync(path.dirname(target));
+          if (!withinReal(realDir, expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
+          try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
           fs.writeFileSync(target, content, 'utf8');
           appendAuditRecord({
             event: 'scoped_write',
