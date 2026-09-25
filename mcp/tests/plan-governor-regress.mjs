@@ -708,6 +708,21 @@ async function main() {
     ];
     const pLeaks = pwshPayloads.filter((c) => gov.auditCommand(c).ok !== false);
     check('pwsh-subexpr-scriptblock-deny', pLeaks.length === 0, pLeaks.length ? 'leaked: ' + pLeaks.join(' | ') : '');
+    // 智能引号视图-执行分叉：pwsh 词法把 U+2018/2019/201A/201B（单引号族）与 U+201C/201D/201E
+    //   （双引号族）视为与 ASCII 引号互换、可混合开闭的定界符（lang spec ch.02/15；
+    //   CharTraits.cs::IsSingleQuote/IsDoubleQuote），而 maskPwshQuotedRegions 只建模 ASCII
+    //   ⇒ 引号视图与执行视图分叉，( ) 在掩码视图隐身却在 pwsh 成活子表达式。一律 \u 转义构造，源码零裸贴。
+    const SQ = { s18: '\u2018', s19: '\u2019', s1A: '\u201A', s1B: '\u201B', d1C: '\u201C', d1D: '\u201D', d1E: '\u201E' };
+    const smartQuotePayloads = [
+      'get-childitem "safe' + SQ.d1D + ' (remove-item -Recurse -Force src)' + SQ.d1C + '"',
+      'get-childitem ' + SQ.d1E + 'safe" (remove-item x)',
+      "get-childitem 'safe" + SQ.s19 + ' (remove-item x)' + SQ.s18 + "'",
+      'get-childitem ' + SQ.s1B + "safe' (remove-item x)",
+      "get-childitem 'safe" + SQ.s1A + " (remove-item x)'",
+      'get-content "a' + SQ.d1D + ' (new-item oops) ' + SQ.d1C + 'b"',
+    ];
+    const sqLeaks = smartQuotePayloads.filter((c) => gov.auditCommand(c).ok !== false);
+    check('pwsh-smartquote-deny', sqLeaks.length === 0, sqLeaks.length ? 'leaked: ' + sqLeaks.map((c) => JSON.stringify(c)).join(' | ') : '');
     const attrVerdict = gov.auditCommand('get-childitem (remove-item x)');
     check('pwsh-gate-attribution',
       attrVerdict.ok === false && String(attrVerdict.reason).includes('结构闸拦截') && String(attrVerdict.reason).includes('pwsh'),

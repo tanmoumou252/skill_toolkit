@@ -147,6 +147,8 @@ check('ledger-exclude-without-evidence-detected', (() => {
 })());
 check('ledger-section-absent-detected', attackLedger('# p\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
 check('ledger-nonsecurity-plan-exempt', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', {}).length === 0);
+// 计划未闭合围栏掩蔽 Files 段 ⇒ 不得被误判为非执法而静默跳过台账校验（fail-open）；修复后必须判红
+check('ledger-plan-unclosed-fence-failclosed', attackLedger('# p\n```\n未闭合\n\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n\n## 攻击面台账\n\n- 台账行\n  - 类别：视图-执行语义分叉\n  - 处置：block@x\n', { implText: 'x', testText: "check('assert', true);" }).some((v) => v.msg.includes('未闭合')));
 check('ledger-report-zero-go-echo-required', attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO' }).some((v) => v.msg.includes('ECHO-RISK')));
 check('ledger-report-zero-go-echo-annotated-ok', !attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nECHO-RISK' }).some((v) => v.msg.includes('ECHO-RISK')));
 check('ledger-nonsecurity-report-still-checked', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'VERDICT: GO' }).some((v) => v.msg.includes('ATTACKS=')));
@@ -187,6 +189,17 @@ check('ledger-report-pen-without-eid-detected', rvSome([atkRow(1), atkRow(2), at
 check('ledger-report-pen-gt-attacks-detected', rvSome([atkRow(1), atkRow(2), atkRow(3), '', '- E-1 x', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=7', 'VERDICT: NO-GO'].join('\n'), '大于 ATTACKS'));
 // 37 实弹姿态缺失（探针字段全为静态推演且未标 OFFLINE）
 check('ledger-report-probe-posture-missing-detected', rvSome([quietRow(1), quietRow(2), '', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'PROBE=OFFLINE'));
+// 38b 伪 E 号仅在闭合围栏内 ⇒ 修复后必须仍判"E 清单编号"缺失（当前原始文本 match 会假绿）
+check('ledger-report-fenced-eid-not-counted', rvSome([atkRow(1), atkRow(2), atkRow(3), '', '```', '- E-1 仅在围栏内示例', '```', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=3', 'VERDICT: NO-GO'].join('\n'), 'E 清单编号'));
+// 38c 实弹回执仅在闭合围栏内 ⇒ 修复后必须仍判缺 PROBE=OFFLINE/回执（当前原始文本 test 会假绿）。
+//   夹具口径（Act 纠偏，理由见证据日志步骤 5-纠偏条目）：围栏外两行必须用 quietRow（探针字段=静态推演，
+//   零反引号、零退出码）。若沿用 atkRow，其自带"反引号命令 + Exit 0"探针字段本身就构成围栏外实弹回执
+//   ⇒ PROBE_RECEIPT_RE 恒命中 ⇒ 断言退化为永久红夹具、丧失咬合力（计划步骤 4 取 atkRow 属事实遗漏）。
+check('ledger-report-fenced-probe-posture-not-counted', rvSome([quietRow(1), quietRow(2), '', '```', RECEIPT, '```', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'PROBE=OFFLINE'));
+// 38d 计划侧：合法 - 台账行 下仅在闭合围栏内塞一整套可过校验的伪字段 ⇒ get 不得采信。
+//   检索词类名精确：修复前该类被伪字段填入 seen → 无「缺类别行：视图-执行语义分叉」违规（FAIL 红）；
+//   修复后伪字段清空 → 该类缺行（OK 绿）。计划串实参以单引号包裹，内层三反引号围栏无需转义。
+check('ledger-plan-spoofed-field-in-fence-not-counted', attackLedger('# p\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n\n## 攻击面台账\n\n- 台账行\n```\n  - 类别：视图-执行语义分叉\n  - 处置：block@gate-视图-执行语义分叉\n  - 攻击样本：a\n  - 对照样本：b\n  - 断言名：assert\n  - 探针回执：`probe-cmd` Exit 1\n```\n', { implText: implGood, testText: testGood }).some((v) => v.msg.includes('缺类别行：视图-执行语义分叉')));
 // 38 零实弹 GO 必须标 ECHO-RISK
 check('ledger-report-offline-go-echo-required', rvSome([atkRow(1), atkRow(2), '', 'PROBE=OFFLINE', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '零实弹'));
 // 39（负控制）散文引用两标记字面量不得构成姿态声明（误伤对照）

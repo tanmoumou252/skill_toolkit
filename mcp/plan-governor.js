@@ -671,8 +671,16 @@ function auditCommand(rawCmd) {
   //      （pwsh 中 \ 非转义、串已闭合、子表达式激活），故引号视图语法必须匹配执行语法（Global Constraints）。
   //   引号内 ( ) { } @ 是 pwsh 字面量（双引号内 $() 插值已由闸 0.5 对 base 的 $ 判定闭环拦截）。
   //   Git Bash 侧不判本闸：其括号构造由 0.5/0.5b/0.6 与 NONFLAT 既有闸族覆盖。
-  if (hasPwshStage(stages) && /[(){}@]/.test(maskPwshQuotedRegions(low))) {
-    return { ok: false, reason: `[结构闸拦截] 命令 '${cmd.slice(0, 40)}' 含 pwsh 子表达式/脚本块/包裹构造（( ) { } @）。它们会在参数位执行任意命令，故一律拒绝。` };
+  //   ④ 智能引号：pwsh 词法把 U+2018/2019/201A/201B（单引号族）与 U+201C/201D/201E（双引号族）
+  //     视为与 ASCII 引号互换、可混合开闭的定界符（lang spec ch.02/15；CharTraits.cs
+  //     ::IsSingleQuote/IsDoubleQuote），但 maskPwshQuotedRegions 只建模 ASCII ⇒ 引号视图与执行
+  //     视图分叉：ASCII 开串 + 智能引号闭串（或反之）使 ( ) 在掩码视图隐身、在 pwsh 成活子表达式，
+  //     直通 get-childitem 白名单执行任意命令。建模串语义不收敛（:597-600 既定裁决），故与 0.5
+  //     同法 fail-closed：全串含任一引号定界符（7 枚有限闭集，hasPwshStage 为闸前准入 + 正则扫整条 low）
+  //     一律拒（合法只读 cmdlet 不含之）。注意：判定遍历整条命令串而非仅 pwsh 段——"grep won\u2019t | get-childitem x"
+  //     亦触发（hasPwshStage true 且全串含 \u2019），此为 fail-closed 安全方向。
+  if (hasPwshStage(stages) && (/[\u2018\u2019\u201A\u201B\u201C\u201D\u201E]/.test(low) || /[(){}@]/.test(maskPwshQuotedRegions(low)))) {
+    return { ok: false, reason: `[结构闸拦截] 命令 '${cmd.slice(0, 40)}' 含 pwsh 子表达式/脚本块/包裹构造或 Unicode 引号定界符（( ) { } @ / U+2018-201B / U+201C-201E）。它们会在参数位执行任意命令或令引号视图与执行视图分叉，故一律拒绝。` };
   }
 
   // 结构硬闸 1：任一段命中黑名单（全角色全模式死拦，模式不豁免）。

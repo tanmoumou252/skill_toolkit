@@ -146,6 +146,8 @@
 - **offline 逐键裁决**：T 盘沙箱 `.kilo/probe-whitelist-audit.mjs`（`createRequire` 直调 `mcp/plan-governor.js` 导出，零派生进程；`node probe-whitelist-audit.mjs`，Exit 0），实测 `ALLOW_KEYS=76 DENY_KEYS=50 FORBIDDEN_KEYS=11`。
 - **Cmdlet 参数类型**：T 盘沙箱 `pwsh -NoProfile -Command "Get-Command <26 名逗号列表> -Syntax"`（Exit 0）。
 - **强转探针**：T 盘沙箱 `pwsh -NoProfile -Command "…-InputObject {Set-Content t:\coerce-*.txt x}…"`（脚本块载荷；随后 `Test-Path` 逐一验证标记文件均 False）。
-- **机器判据**：`mcp/tests/whitelist-audit.mjs` 的 `audit-key-inventory`（键表非空）与 `audit-report-covered-equals-keys`（本报告 `covered/total` 自证行与 `ALLOW_KEYS.length` 相等）钉住本报告在场与键覆盖。
+- **机器判据**：`mcp/tests/whitelist-audit.mjs` 的 `audit-key-inventory`（键表非空）与 `audit-report-coverage-by-reprobe`（逐行重跑本表探针，每 `ALLOW_KEYS` 键≥1 探针且全部命中其行裁决方计覆盖，覆盖数须等于 `ALLOW_KEYS.length`）+ `audit-coverage-detects-tampered-verdict`（翻裁决即红的反假绿控制）以机械重跑钉住键覆盖，不采信下方任何自声明计数行。
 
 covered=76 total=76
+
+> 注：上行为历史自声明快照，**不再是机器判据**；键覆盖唯一事实源为 `audit-report-coverage-by-reprobe` 对本表逐行探针的重跑结果。

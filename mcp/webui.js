@@ -90,7 +90,7 @@ const STRUCTURE_GATES = [
   { id: 'gate-0.5c', name: '前置环境变量赋值闸 (VAR=val)', pattern: '^VAR=val', desc: 'GIT_PAGER / PAGER / BASH_ENV 可绕过参数闸派生外部进程，一律拒绝', fatal: true },
   { id: 'gate-0.6', name: '命令包装前缀闸 (command/env/nohup/eval/sh/bash)', pattern: '包装前缀族', desc: '把真命令推到参数位使黑名单前缀匹配失效，一律拒绝', fatal: true },
   { id: 'gate-0', name: 'pwsh / powershell -c 包装闸', pattern: 'powershell -c', desc: '解释器内联执行即任意命令通道，逐段拦截', fatal: true },
-  { id: 'gate-0.7', name: 'pwsh 子表达式 / 脚本块 / @ 包裹构造闸', pattern: '[(){}@]（pwsh 掩码视图）', desc: 'pwsh 参数位 ( ) 立即求值、{ } 延迟绑定执行、@( / @{ 包裹构造，可在参数位执行任意命令；仅 cmdlet 路由段判定，引号内为 pwsh 字面量', fatal: true },
+  { id: 'gate-0.7', name: 'pwsh 子表达式 / 脚本块 / @ 包裹 / 智能引号闸', pattern: '[(){}@]\u2018\u2019\u201A\u201B\u201C\u201D\u201E（pwsh 掩码视图）', desc: 'pwsh 参数位 ( ) 立即求值、{ } 延迟绑定、@( / @{ 包裹构造，或 Unicode 引号定界符使引号视图与执行视图分叉，均可在参数位执行任意命令；仅 cmdlet 路由段判定，引号内为 pwsh 字面量', fatal: true },
   { id: 'gate-1', name: '黑名单绝对阻断闸 (' + governor.DENY_KEYS.length + ' 键)', pattern: 'DENY_KEYS (' + governor.DENY_KEYS.length + ')', desc: '破坏性与状态写操作严禁执行，全角色全模式死拦', fatal: true },
   { id: 'gate-1.5', name: 'Git 别名执行面写入闸 (git config 写形态)', pattern: 'git config 写形态', desc: '防止定义 !cmd 别名形成任意命令通道', fatal: true },
   { id: 'gate-2', name: '禁入清单绝对阻断闸 (' + governor.FORBIDDEN_KEYS.length + ' 键)', pattern: 'FORBIDDEN_KEYS (' + governor.FORBIDDEN_KEYS.length + ')', desc: '隐式写能力或管道任意执行风险，一律 deny', fatal: true },

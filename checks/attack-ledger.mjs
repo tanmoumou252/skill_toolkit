@@ -81,7 +81,8 @@ function checkLedgerRows(planText, opts, v) {
   if (bounds.length === 0) v.push({ msg: '台账节在场但无「- 台账行」记录' });
   const seen = new Set();
   for (let b = 0; b < bounds.length; b++) {
-    const chunk = sec.lines.slice(bounds[b], b + 1 < bounds.length ? bounds[b + 1] : sec.lines.length).join('\n');
+    const chunk = sec.lines.slice(bounds[b], b + 1 < bounds.length ? bounds[b + 1] : sec.lines.length)
+      .map((ln, k) => (sec.fenced[bounds[b] + k] ? '' : ln)).join('\n');   // 围栏内整行清空：合法台账行内的围栏示例字段不得被 get 采信
     const get = (key) => {
       const m = chunk.match(new RegExp('^[ \\t]*-[ \\t]*' + escapeRe(key) + '[：:]\\s*(.+)$', 'm'));
       return m ? m[1].trim() : null;
@@ -155,7 +156,8 @@ export function countAttackRows(reportText) {
 export function checkReportFormat(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。
-  const { unclosed } = lineView(reportText);
+  const { lines: rl, fenced: rf, unclosed } = lineView(reportText);
+  const outside = rl.map((l, i) => (rf[i] ? ' '.repeat(64) : l)).join('\n');   // 围栏内整行替为长哨兵：E 号/回执判定同锚定/姿态围栏外口径，且杜绝跨围栏 40 字符桥接
   if (unclosed.length > 0) {
     v.push({ msg: '复审报告含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：其后内容被整段掩蔽，格式行与攻击行判定不可信' });
   }
@@ -186,13 +188,13 @@ export function checkReportFormat(reportText, v) {
   }
   // ② 击穿必须入 E 清单，且计数不得自相矛盾。
   if (nAtk !== null && nPen !== null && nPen > nAtk) v.push({ msg: 'PENETRATIONS=' + nPen + ' 大于 ATTACKS=' + nAtk + '：计数自相矛盾' });
-  if (nPen !== null && nPen > 0 && new Set(reportText.match(E_ID_RE) || []).size === 0) {
+  if (nPen !== null && nPen > 0 && new Set(outside.match(E_ID_RE) || []).size === 0) {
     v.push({ msg: 'PENETRATIONS=' + nPen + ' > 0 但报告无 E 清单编号（击穿必须入 E 清单）' });
   }
   // ③ 实弹姿态必须可核：有回执，或独立成行自认零实弹；零实弹 GO 与回声放行同级。
   //    前置 nAtk>0：零攻击报告本无回执可言，否则与 ECHO-RISK 判据自相矛盾。
   if (nAtk === null || nAtk > 0) {
-    if (!offline && !PROBE_RECEIPT_RE.test(reportText)) {
+    if (!offline && !PROBE_RECEIPT_RE.test(outside)) {
       v.push({ msg: '复审报告既无实弹探针回执（反引号命令字面量+退出码）也未独立成行标注 PROBE=OFFLINE' });
     }
     if (offline && isGo && !echo) v.push({ msg: '零实弹（PROBE=OFFLINE）GO 未标注 ECHO-RISK（纸面放行必须明示人类）' });
@@ -201,8 +203,16 @@ export function checkReportFormat(reportText, v) {
 
 export function attackLedger(planText, opts = {}) {
   const v = [];
+  const { unclosed } = lineView(planText);
   const fsec = filesSectionOf(planText);
-  if (ENFORCEMENT_FILES.some((f) => fsec.includes(f))) checkLedgerRows(planText, opts, v);
+  const enfInFence = ENFORCEMENT_FILES.some((f) => fsec.includes(f));
+  const enfInRaw = ENFORCEMENT_FILES.some((f) => planText.includes(f));
+  if (enfInFence || (enfInRaw && unclosed.length > 0)) {
+    if (!enfInFence && unclosed.length > 0) {
+      v.push({ msg: '计划含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：疑掩蔽 Files/台账判定位，按安全执法类 fail-closed 强制台账校验' });
+    }
+    checkLedgerRows(planText, opts, v);
+  }
   checkReportFormat(opts.reportText ?? null, v);
   return v;
 }
