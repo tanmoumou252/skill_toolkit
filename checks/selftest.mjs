@@ -245,6 +245,12 @@ check('assert-chain-round-limit', checkChainOrder(['a-r3-pr-review.md'], 'a').so
 check('assert-chain-sequence-gap', checkChainOrder(['a-r2-shadow-plan.md'], 'a').some((x) => x.msg.includes('断档')));
 // 54 信任根：非本链前缀的报告不折算、不误伤（chain-base-prefix-locked 闸，前缀锁定带 '-' 边界符；含跨链边界直接回归夹具）
 check('assert-chain-base-prefix', checkChainOrder(['other-r3-shadow-plan.md', 'b-r9-pr-review.md'], 'a').length === 0 && checkChainOrder(['ab-r3-shadow-plan.md'], 'a').length === 0);
+// 54b 多标记折叠须取最大轮次（chain-fold-max-marker 闸）：单标记语义把 a-r1-r3 折算为 1，
+//   后置 r3 同时逃逸超上限熔断与断档判定；修复后 max=3，checkChainOrder 须同时产出两类违规。
+check('assert-chain-fold-multi-marker',
+  foldRoundFromFilename('a-r1-r3-pr-review.md') === 3
+  && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('超上限'))
+  && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档')));
 // 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
 const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'GO', ''].join('\n');
 const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', ''].join('\n');

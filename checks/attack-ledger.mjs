@@ -44,12 +44,14 @@ const E_ID_RE = /\bE(?:[-#][A-Za-z0-9]+)?[-#]?\d+\b/g;
 
 // —— 决策点强校验：链序折叠与报告结构闸 ——
 // 闸名登记（台账 block@ 对账事实源）：chain-fold-boundary / chain-fold-literal / round-int-guard /
-//   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked
+//   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked /
+//   chain-fold-max-marker / chain-report-base-boundary
 // 复审总轮次上限（与 zcode-plan-first 复审硬熔断口径一致：总轮次 ≤2，第 2 轮仅限返工验证）。
 export const MAX_REVIEW_ROUNDS = 2;
 // 链序折叠：-r<N>- / -p<N>- / -r<N><字母> / 尾缀 -r<N>. 变体折算为轮次 N；无变体记号＝第 1 轮。
-// 边界锚定 (^|-) 与 (-|\.|$)：防前缀/后缀溢出误折（如 xp2- 不折算）。
-export const ROUND_RE = /(?:^|-)[rp](\d+)[a-z]?(?:-|\.|$)/;
+// 边界锚定 (^|-) 与前瞻 (?=-|\.|$)：防前缀/后缀溢出误折（如 xp2- 不折算）；
+// 前瞻不消费分隔符，保证 matchAll 全局扫描可命中相邻多标记（-r1-r3- 两段均收取）。
+export const ROUND_RE = /(?:^|-)[rp](\d+)[a-z]?(?=-|\.|$)/;
 export const SHADOW_RE = /-shadow-plan\.md$/;
 export const PR_REVIEW_RE = /-pr-review\.md$/;
 // 报告结构闸关键词类（宽松匹配防合法改写误红；判定一律取围栏外行视图）。
@@ -217,9 +219,11 @@ export function checkReportFormat(reportText, v) {
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
 export function foldRoundFromFilename(name) {
-  const m = String(name).match(ROUND_RE);
+  // chain-fold-max-marker 闸：matchAll 收取文件名内全部轮次标记（如 a-r1-r3-pr-review.md 的 r1 与 r3），
+  // 取最大值折算——单标记语义下后置高轮次标记会同时逃逸 checkChainOrder 的超上限硬熔断与断档判定。
+  const ms = [...String(name).matchAll(new RegExp(ROUND_RE.source, 'g'))];
   // 捕获组限定 \d+，Number 折叠恒为非负整数；无变体记号＝第 1 轮。
-  return m ? Number(m[1]) : 1;
+  return ms.length > 0 ? Math.max(...ms.map((m) => Number(m[1]))) : 1;
 }
 export function checkChainOrder(entries, base) {
   const v = [];
@@ -311,8 +315,10 @@ if (isMain) {
     const tm = fsec.match(/`([^`]*(?:tests|selftest)[^`]*\.mjs)`/);
     testPath = tm ? path.join(root, tm[1]) : null;
     const base = path.basename(planPath, '.md');
-    reportPath = newestMd(path.join(root, '.kilo', 'plans', 'review'), (f) => f.startsWith(base) && f.endsWith('-shadow-plan.md'));
-    prReviewPath = newestMd(path.join(root, '.kilo', 'plans', 'pr-review'), (f) => f.startsWith(base) && f.endsWith('-pr-review.md'));
+    // chain-report-base-boundary 闸：报告选取与 checkChainOrder 前缀锁定同口径（base + '-' 边界），
+    // 防 base 为他链前缀时跨链误选（如 base=a 误认 ab-…-pr-review.md 为当前计划报告，跳过缺盘红灯）。
+    reportPath = newestMd(path.join(root, '.kilo', 'plans', 'review'), (f) => f.startsWith(base + '-') && f.endsWith('-shadow-plan.md'));
+    prReviewPath = newestMd(path.join(root, '.kilo', 'plans', 'pr-review'), (f) => f.startsWith(base + '-') && f.endsWith('-pr-review.md'));
     const listMd = (d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.md')); } catch { return []; } };
     chainV = checkChainOrder(
       [...listMd(path.join(root, '.kilo', 'plans', 'review')), ...listMd(path.join(root, '.kilo', 'plans', 'pr-review'))],
