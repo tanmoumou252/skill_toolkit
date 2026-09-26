@@ -2,7 +2,7 @@
 // 全部分支以合成文件集驱动 runAll（不读磁盘），故可在真实仓库之外独立验证。
 // 每个 FAIL 行都对应一条真实断言失败；红灯即证明检测器未生效。
 import { runAll, scanFences } from './invariants.mjs';
-import { attackLedger, checkReportFormat, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES } from './attack-ledger.mjs';
+import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES } from './attack-ledger.mjs';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -223,6 +223,45 @@ check('ledger-report-marker-explanation-not-counted', rvSome(['# r', '', '- **EC
 check('ledger-report-decorated-marker-counted', rv([atkRow(1), atkRow(2), '', '- **PROBE=OFFLINE**：本代理无沙箱权限', '', '- ECHO-RISK：纸面放行已明示', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n')).length === 0);
 // 48 未闭合围栏使其后内容整段不可信 ⇒ 直接判红
 check('ledger-report-unclosed-fence-detected', rvSome(F48, '未闭合'));
+
+// 49-61) 决策点强校验：链序折叠/上限/断档/前缀锁定 + 报告结构闸（共 14 条 check 调用）。
+// 空桩阶段（foldRoundFromFilename 恒返 1、checkChainOrder 恒返 []、checkReportStructureGate 空操作）
+// 红绿账目：9 条必 FAIL（[PASS-RED] 断言比对失败）＝ assert-chain-fold-boundary / assert-chain-fold-literal /
+//   assert-chain-round-coerce / assert-chain-round-limit / assert-chain-sequence-gap /
+//   assert-structure-gate-shadow / assert-structure-gate-pr-review / assert-structure-gate-missing-report /
+//   assert-structure-gate-fence-masked；
+// 5 条负控制空桩即 PASS（不得据其判定红灯充足）＝ assert-chain-fs-listing-only / assert-chain-base-prefix /
+//   assert-structure-gate-clean-ok / assert-structure-gate-unclosed-deferred / assert-chain-path-join-root。
+// 49 负控制：空链、合规双轮链、合法双 r1 链（r1 影子 + r1 PR 报告并存，去重后不误判断档）零违反
+check('assert-chain-fs-listing-only', checkChainOrder(['a-shadow-plan.md', 'a-r2-shadow-plan.md'], 'a').length === 0 && checkChainOrder([], 'a').length === 0 && checkChainOrder(['a-shadow-plan.md', 'a-pr-review.md'], 'a').length === 0);
+// 50 变体折叠与边界锚定（chain-fold-boundary / chain-fold-literal 闸）
+check('assert-chain-fold-boundary', foldRoundFromFilename('a-r2-shadow-plan.md') === 2 && foldRoundFromFilename('a-r12-pr-review.md') === 12 && foldRoundFromFilename('xp2-shadow-plan.md') === 1 && foldRoundFromFilename('a-shadow-plan.md') === 1);
+check('assert-chain-fold-literal', foldRoundFromFilename('a-r3-shadow-plan.md') === 3 && foldRoundFromFilename('plan-governor-branch-pr-review-r3.md') === 3);
+// 51 序号折叠恒为非负整数（round-int-guard 闸：捕获组限定 \d+）
+check('assert-chain-round-coerce', Number.isInteger(foldRoundFromFilename('a-r07-shadow-plan.md')) && foldRoundFromFilename('a-r07-shadow-plan.md') === 7);
+// 52 轮次上限（标准后缀与携带 rN 变体的非标准后缀形态均须被链扫描捕获）
+check('assert-chain-round-limit', checkChainOrder(['a-r3-pr-review.md'], 'a').some((x) => x.msg.includes('超上限')) && checkChainOrder(['a-pr-review-r3.md'], 'a').some((x) => x.msg.includes('超上限')));
+// 53 断档（有 r2 无 r1＝跳轮/换名重置；去重后判连续）
+check('assert-chain-sequence-gap', checkChainOrder(['a-r2-shadow-plan.md'], 'a').some((x) => x.msg.includes('断档')));
+// 54 信任根：非本链前缀的报告不折算、不误伤（chain-base-prefix-locked 闸，前缀锁定带 '-' 边界符；含跨链边界直接回归夹具）
+check('assert-chain-base-prefix', checkChainOrder(['other-r3-shadow-plan.md', 'b-r9-pr-review.md'], 'a').length === 0 && checkChainOrder(['ab-r3-shadow-plan.md'], 'a').length === 0);
+// 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
+const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'GO', ''].join('\n');
+const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', ''].join('\n');
+const gv = (t, k) => { const v = []; checkReportStructureGate(t, k, v); return v; };
+check('assert-structure-gate-clean-ok', gv(SHADOW_OK, 'shadow').length === 0 && gv(PR_OK, 'pr-review').length === 0);
+check('assert-structure-gate-shadow', gv(SHADOW_OK.replace('差集为 0（镜像对账表）', ''), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
+check('assert-structure-gate-pr-review', gv(PR_OK.replace('实跑证据表：`npm test --prefix checks` 退出码 0', '').replace('已运行核实', ''), 'pr-review').some((x) => x.msg.includes('结构闸缺失')));
+// 58 报告未落盘（物理在场不成立）
+check('assert-structure-gate-missing-report', (() => { const v = []; checkReportStructureGate('', 'shadow', v); return v.some((x) => x.msg.includes('未落盘')); })());
+// 59 闭合围栏内关键词冒充结构闸 ⇒ 不得放行（structure-gate-outside-fence 闸）
+check('assert-structure-gate-fence-masked', gv(['# r', '', '```md', 'E 清单', '终局裁决', '差集', '复跑', '```', ''].join('\n'), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
+// 60 未闭合围栏交由 checkReportFormat fail-closed，结构闸不重复计数（负控制，仅 shadow 侧 defer）
+check('assert-structure-gate-unclosed-deferred', (() => { const v = []; checkReportStructureGate(SHADOW_OK + '\n```md\n未闭合', 'shadow', v); return v.length === 0; })());
+// 61 PR 复审报告未闭合围栏必须 fail-closed（checkReportFormat 仅消费 shadow 报告，pr-review 侧无外部兜底，静默放行即伪造绕过）
+check('assert-structure-gate-pr-unclosed-failclosed', (() => { const v = []; checkReportStructureGate(PR_OK + '\n```md\n未闭合', 'pr-review', v); return v.some((x) => x.msg.includes('未闭合')); })());
+// 62 路径逃逸负控制：纯数组消费面无外部基准解析（chain-path-join-root 闸，正控）
+check('assert-chain-path-join-root', checkChainOrder(['a-shadow-plan.md'], 'a').length === 0);
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
