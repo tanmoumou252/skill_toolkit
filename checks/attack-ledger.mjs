@@ -45,7 +45,7 @@ const E_ID_RE = /\bE(?:[-#][A-Za-z0-9]+)?[-#]?\d+\b/g;
 // —— 决策点强校验：链序折叠与报告结构闸 ——
 // 闸名登记（台账 block@ 对账事实源）：chain-fold-boundary / chain-fold-literal / round-int-guard /
 //   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked /
-//   chain-fold-max-marker / chain-report-base-boundary
+//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped
 // 复审总轮次上限（与 zcode-plan-first 复审硬熔断口径一致：总轮次 ≤2，第 2 轮仅限返工验证）。
 export const MAX_REVIEW_ROUNDS = 2;
 // 链序折叠：-r<N>- / -p<N>- / -r<N><字母> / 尾缀 -r<N>. 变体折算为轮次 N；无变体记号＝第 1 轮。
@@ -218,10 +218,15 @@ export function checkReportFormat(reportText, v) {
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
-export function foldRoundFromFilename(name) {
-  // chain-fold-max-marker 闸：matchAll 收取文件名内全部轮次标记（如 a-r1-r3-pr-review.md 的 r1 与 r3），
+export function foldRoundFromFilename(name, base = '') {
+  // chain-fold-base-scoped 闸：base 非空且 name 以 base + '-' 开头时，仅在 base 之后的剩余段做
+  // matchAll——变体记号只可能出现在计划基名之后；计划主题自带 -rN（如基名
+  // 20260731-153000-auth-r3-refactor）不得折算为轮次，否则 checkChainOrder 会产出假超上限与假断档。
+  // chain-fold-max-marker 闸：matchAll 收取扫描面内全部轮次标记（如 a-r1-r3-pr-review.md 的 r1 与 r3），
   // 取最大值折算——单标记语义下后置高轮次标记会同时逃逸 checkChainOrder 的超上限硬熔断与断档判定。
-  const ms = [...String(name).matchAll(new RegExp(ROUND_RE.source, 'g'))];
+  let scope = String(name);
+  if (base && scope.startsWith(base + '-')) scope = scope.slice(base.length + 1);
+  const ms = [...scope.matchAll(new RegExp(ROUND_RE.source, 'g'))];
   // 捕获组限定 \d+，Number 折叠恒为非负整数；无变体记号＝第 1 轮。
   return ms.length > 0 ? Math.max(...ms.map((m) => Number(m[1]))) : 1;
 }
@@ -231,7 +236,7 @@ export function checkChainOrder(entries, base) {
   // （-shadow-plan.md / -pr-review.md）与携带 rN 变体记号的非标准后缀形态（如 *-pr-review-r3.md）。
   const rounds = entries
     .filter((f) => f.startsWith(base + '-') && (SHADOW_RE.test(f) || PR_REVIEW_RE.test(f) || ROUND_RE.test(f)))
-    .map((f) => ({ f, r: foldRoundFromFilename(f) }))
+    .map((f) => ({ f, r: foldRoundFromFilename(f, base) }))
     .sort((a, b) => a.r - b.r);
   for (const { f, r } of rounds) {
     if (r > MAX_REVIEW_ROUNDS) v.push({ msg: '报告 ' + f + ' 链序数 ' + r + ' 超上限 ' + MAX_REVIEW_ROUNDS + '（复审总轮次硬熔断，须 ESCALATE_TO_HUMAN，禁止再派发）' });

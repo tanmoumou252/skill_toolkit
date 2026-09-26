@@ -269,5 +269,20 @@ check('assert-structure-gate-pr-unclosed-failclosed', (() => { const v = []; che
 // 62 路径逃逸负控制：纯数组消费面无外部基准解析（chain-path-join-root 闸，正控）
 check('assert-chain-path-join-root', checkChainOrder(['a-shadow-plan.md'], 'a').length === 0);
 
+// 63 base 限定折叠（chain-fold-base-scoped 闸）：计划主题自带 -rN 时轮次折算必须限定在计划基名之后的
+//   剩余段——base 传参场景下主题内 -r3（auth-r3-refactor）不得折算为轮次、链序零违反；真变体 -r2 仍
+//   正常折算；单参调用形态（默认 base=''）与既有夹具逐条等价。
+const TOPIC_BASE = '20260731-153000-auth-r3-refactor';
+check('assert-chain-fold-base-scoped',
+  foldRoundFromFilename(TOPIC_BASE + '-shadow-plan.md', TOPIC_BASE) === 1
+  && checkChainOrder([TOPIC_BASE + '-shadow-plan.md'], TOPIC_BASE).length === 0
+  && foldRoundFromFilename(TOPIC_BASE + '-r2-shadow-plan.md', TOPIC_BASE) === 2
+  && foldRoundFromFilename('a-r1-r3-pr-review.md', 'a') === 3
+  && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('超上限'))
+  && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档'))
+  && foldRoundFromFilename('a-r1-r3-pr-review.md') === 3
+  && foldRoundFromFilename('xp2-shadow-plan.md') === 1
+  && foldRoundFromFilename('a-r07-shadow-plan.md') === 7);
+
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
