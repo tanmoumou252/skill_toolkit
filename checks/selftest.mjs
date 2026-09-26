@@ -284,5 +284,19 @@ check('assert-chain-fold-base-scoped',
   && foldRoundFromFilename('xp2-shadow-plan.md') === 1
   && foldRoundFromFilename('a-r07-shadow-plan.md') === 7);
 
+// 64 过滤器与折叠同段（chain-filter-same-scope 闸）：链扫描过滤器与 foldRoundFromFilename 必须消费
+//   同一后缀段——base 主题内含 -rN（如 auth-r3-topic）时，非报告文件 *-notes.md 不得因全名命中
+//   ROUND_RE 而混入链序扫描（折叠按裸后缀得假 r1），否则真实缺 r1 的断档被完全掩蔽；
+//   同段化以 '-' + 后缀补回 base 边界，end 锚定的 SHADOW_RE/PR_REVIEW_RE 边界语义与全名判定
+//   严格等价（裸后缀判定会漏掉无轮次标记的报告后缀，如 base=a 时 a-shadow-plan.md 的后缀）。
+const SAME_SCOPE_BASE = 'auth-r5-topic';
+check('assert-chain-filter-same-scope',
+  checkChainOrder([SAME_SCOPE_BASE + '-notes.md', SAME_SCOPE_BASE + '-r2-shadow-plan.md'], SAME_SCOPE_BASE).some((x) => x.msg.includes('断档'))
+  && checkChainOrder([SAME_SCOPE_BASE + '-notes.md', SAME_SCOPE_BASE + '-r2-pr-review.md'], SAME_SCOPE_BASE).some((x) => x.msg.includes('断档'))
+  && checkChainOrder(['a-shadow-plan.md', 'a-pr-review.md'], 'a').length === 0
+  && checkChainOrder(['a-r2-shadow-plan.md'], 'a').some((x) => x.msg.includes('断档'))
+  && checkChainOrder([TOPIC_BASE + '-notes.md', TOPIC_BASE + '-r2-shadow-plan.md'], TOPIC_BASE).some((x) => x.msg.includes('断档'))
+  && checkChainOrder([TOPIC_BASE + '-shadow-plan.md'], TOPIC_BASE).length === 0);
+
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

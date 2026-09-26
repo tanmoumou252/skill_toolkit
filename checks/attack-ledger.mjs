@@ -45,7 +45,7 @@ const E_ID_RE = /\bE(?:[-#][A-Za-z0-9]+)?[-#]?\d+\b/g;
 // —— 决策点强校验：链序折叠与报告结构闸 ——
 // 闸名登记（台账 block@ 对账事实源）：chain-fold-boundary / chain-fold-literal / round-int-guard /
 //   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked /
-//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped
+//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped / chain-filter-same-scope
 // 复审总轮次上限（与 zcode-plan-first 复审硬熔断口径一致：总轮次 ≤2，第 2 轮仅限返工验证）。
 export const MAX_REVIEW_ROUNDS = 2;
 // 链序折叠：-r<N>- / -p<N>- / -r<N><字母> / 尾缀 -r<N>. 变体折算为轮次 N；无变体记号＝第 1 轮。
@@ -234,8 +234,17 @@ export function checkChainOrder(entries, base) {
   const v = [];
   // 前缀锁定带边界符（base + '-'）：base 为他链前缀时不跨链折叠；扫描面覆盖标准双后缀
   // （-shadow-plan.md / -pr-review.md）与携带 rN 变体记号的非标准后缀形态（如 *-pr-review-r3.md）。
+  // chain-filter-same-scope 闸：过滤器与 foldRoundFromFilename 消费同一段——三正则判定限定在
+  // base 之后的后缀段，并以 '-' 补回边界（'-' + 后缀的 end 锚定语义与全名判定严格等价）；
+  // base 主题内 -rN（如 auth-r3-topic）不得经全名命中让非报告文件（如 *-notes.md）混入链扫描，
+  // 否则裸后缀折叠出的假轮次掩蔽真实断档；裸后缀判定会漏掉无轮次标记的报告后缀
+  // （如 base=a 时 a-shadow-plan.md 的后缀 shadow-plan.md 不含前导 '-'）。
   const rounds = entries
-    .filter((f) => f.startsWith(base + '-') && (SHADOW_RE.test(f) || PR_REVIEW_RE.test(f) || ROUND_RE.test(f)))
+    .filter((f) => {
+      if (!f.startsWith(base + '-')) return false;
+      const scope = '-' + f.slice(base.length + 1);
+      return SHADOW_RE.test(scope) || PR_REVIEW_RE.test(scope) || ROUND_RE.test(scope);
+    })
     .map((f) => ({ f, r: foldRoundFromFilename(f, base) }))
     .sort((a, b) => a.r - b.r);
   for (const { f, r } of rounds) {
