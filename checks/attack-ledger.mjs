@@ -42,6 +42,22 @@ export const PROBE_RECEIPT_RE = /`[^`]+`[\s\S]{0,40}?(?:exit\s*(?:code)?|退出�
 // 严禁改用 .test（lastIndex 状态残留会跨报告串扰）。
 const E_ID_RE = /\bE(?:[-#][A-Za-z0-9]+)?[-#]?\d+\b/g;
 
+// —— 决策点强校验：链序折叠与报告结构闸 ——
+// 闸名登记（台账 block@ 对账事实源）：chain-fold-boundary / chain-fold-literal / round-int-guard /
+//   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked /
+//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped / chain-filter-same-scope
+// 复审总轮次上限（与 zcode-plan-first 复审硬熔断口径一致：总轮次 ≤2，第 2 轮仅限返工验证）。
+export const MAX_REVIEW_ROUNDS = 2;
+// 链序折叠：-r<N>- / -p<N>- / -r<N><字母> / 尾缀 -r<N>. 变体折算为轮次 N；无变体记号＝第 1 轮。
+// 边界锚定 (^|-) 与前瞻 (?=-|\.|$)：防前缀/后缀溢出误折（如 xp2- 不折算）；
+// 前瞻不消费分隔符，保证 matchAll 全局扫描可命中相邻多标记（-r1-r3- 两段均收取）。
+export const ROUND_RE = /(?:^|-)[rp](\d+)[a-z]?(?=-|\.|$)/;
+export const SHADOW_RE = /-shadow-plan\.md$/;
+export const PR_REVIEW_RE = /-pr-review\.md$/;
+// 报告结构闸关键词类（宽松匹配防合法改写误红；判定一律取围栏外行视图）。
+export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/];
+
 function lineView(text) {
   const lines = text.split(/\r?\n/);
   const { pairs, unclosed } = scanFences(text);
@@ -201,6 +217,71 @@ export function checkReportFormat(reportText, v) {
   }
 }
 
+// —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
+export function foldRoundFromFilename(name, base = '') {
+  // chain-fold-base-scoped 闸：base 非空且 name 以 base + '-' 开头时，仅在 base 之后的剩余段做
+  // matchAll——变体记号只可能出现在计划基名之后；计划主题自带 -rN（如基名
+  // 20260731-153000-auth-r3-refactor）不得折算为轮次，否则 checkChainOrder 会产出假超上限与假断档。
+  // chain-fold-max-marker 闸：matchAll 收取扫描面内全部轮次标记（如 a-r1-r3-pr-review.md 的 r1 与 r3），
+  // 取最大值折算——单标记语义下后置高轮次标记会同时逃逸 checkChainOrder 的超上限硬熔断与断档判定。
+  let scope = String(name);
+  if (base && scope.startsWith(base + '-')) scope = scope.slice(base.length + 1);
+  const ms = [...scope.matchAll(new RegExp(ROUND_RE.source, 'g'))];
+  // 捕获组限定 \d+，Number 折叠恒为非负整数；无变体记号＝第 1 轮。
+  return ms.length > 0 ? Math.max(...ms.map((m) => Number(m[1]))) : 1;
+}
+export function checkChainOrder(entries, base) {
+  const v = [];
+  // 前缀锁定带边界符（base + '-'）：base 为他链前缀时不跨链折叠；扫描面覆盖标准双后缀
+  // （-shadow-plan.md / -pr-review.md）与携带 rN 变体记号的非标准后缀形态（如 *-pr-review-r3.md）。
+  // chain-filter-same-scope 闸：过滤器与 foldRoundFromFilename 消费同一段——三正则判定限定在
+  // base 之后的后缀段，并以 '-' 补回边界（'-' + 后缀的 end 锚定语义与全名判定严格等价）；
+  // base 主题内 -rN（如 auth-r3-topic）不得经全名命中让非报告文件（如 *-notes.md）混入链扫描，
+  // 否则裸后缀折叠出的假轮次掩蔽真实断档；裸后缀判定会漏掉无轮次标记的报告后缀
+  // （如 base=a 时 a-shadow-plan.md 的后缀 shadow-plan.md 不含前导 '-'）。
+  const rounds = entries
+    .filter((f) => {
+      if (!f.startsWith(base + '-')) return false;
+      const scope = '-' + f.slice(base.length + 1);
+      return SHADOW_RE.test(scope) || PR_REVIEW_RE.test(scope) || ROUND_RE.test(scope);
+    })
+    .map((f) => ({ f, r: foldRoundFromFilename(f, base) }))
+    .sort((a, b) => a.r - b.r);
+  for (const { f, r } of rounds) {
+    if (r > MAX_REVIEW_ROUNDS) v.push({ msg: '报告 ' + f + ' 链序数 ' + r + ' 超上限 ' + MAX_REVIEW_ROUNDS + '（复审总轮次硬熔断，须 ESCALATE_TO_HUMAN，禁止再派发）' });
+  }
+  // 同轮多产物（如 r1 影子报告 + r1 PR 报告并存）为合法链形态：轮次序数须先去重再判连续，
+  // 否则双 r1 合法链被逐位比对误判断档。
+  const seen = [...new Set(rounds.map((x) => x.r))];
+  for (let i = 0; i < seen.length; i++) {
+    if (seen[i] !== i + 1) { v.push({ msg: '报告链序断档：存在第 ' + seen[i] + ' 轮产物但缺第 ' + (i + 1) + ' 轮（跳轮或换名重置）' }); break; }
+  }
+  return v;
+}
+// —— 决策点强校验 ②：报告结构闸产物核验（物理在场 / 关键词段 / 围栏外口径） ——
+export function checkReportStructureGate(text, kind, v) {
+  if (!text) { v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告未落盘（物理在场不成立）' }); return; }
+  const { lines, fenced, unclosed } = lineView(text);
+  if (unclosed.length > 0) {
+    // pr-review 侧无外部 fail-closed 兜底（checkReportFormat 仅消费 shadow 报告）：
+    // 未闭合围栏掩蔽全部结构闸判定 ⇒ 此处直接判红，严禁静默放行（伪造绕过面）。
+    // shadow 侧已由 checkReportFormat 的未闭合围栏判红覆盖，此处不重复计数。
+    if (kind !== 'shadow') {
+      v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：其后内容被整段掩蔽，结构闸判定不可信' });
+    }
+    return;
+  }
+  // 闭合围栏内整行清空：结构闸关键词不得由围栏内示例冒充（structure-gate-outside-fence 闸）。
+  const outside = lines.map((l, i) => (fenced[i] ? '' : l)).join('\n');
+  const gates = kind === 'shadow' ? SHADOW_GATE_RES : PR_REVIEW_GATE_RES;
+  const labels = kind === 'shadow'
+    ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对']
+    : ['E 清单', '实跑证据（实跑证据表或已运行核实）'];
+  for (let i = 0; i < gates.length; i++) {
+    if (!gates[i].test(outside)) v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告结构闸缺失：' + labels[i] });
+  }
+}
+
 export function attackLedger(planText, opts = {}) {
   const v = [];
   const { unclosed } = lineView(planText);
@@ -214,6 +295,8 @@ export function attackLedger(planText, opts = {}) {
     checkLedgerRows(planText, opts, v);
   }
   checkReportFormat(opts.reportText ?? null, v);
+  if (opts.shadowReportText !== undefined) checkReportStructureGate(opts.shadowReportText, 'shadow', v);
+  if (opts.prReviewReportText !== undefined) checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
   return v;
 }
 
@@ -232,8 +315,9 @@ if (isMain) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.resolve(here, '..');
   const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : null; };
-  let planPath = arg('--plan'), implPath = arg('--impl'), testPath = arg('--test'), reportPath = arg('--report');
+  let planPath = arg('--plan'), implPath = arg('--impl'), testPath = arg('--test'), reportPath = arg('--report'), prReviewPath = null;
   let latestMode = false;
+  let chainV = [];
   if (process.argv.includes('--latest')) {
     latestMode = true;
     planPath = newestMd(path.join(root, '.kilo', 'plans'), (f) => /^\d{8}-\d{6}-.+\.md$/.test(f));
@@ -245,20 +329,37 @@ if (isMain) {
     const tm = fsec.match(/`([^`]*(?:tests|selftest)[^`]*\.mjs)`/);
     testPath = tm ? path.join(root, tm[1]) : null;
     const base = path.basename(planPath, '.md');
-    reportPath = newestMd(path.join(root, '.kilo', 'plans', 'review'), (f) => f.startsWith(base) && f.endsWith('-shadow-plan.md'));
+    // chain-report-base-boundary 闸：报告选取与 checkChainOrder 前缀锁定同口径（base + '-' 边界），
+    // 防 base 为他链前缀时跨链误选（如 base=a 误认 ab-…-pr-review.md 为当前计划报告，跳过缺盘红灯）。
+    reportPath = newestMd(path.join(root, '.kilo', 'plans', 'review'), (f) => f.startsWith(base + '-') && f.endsWith('-shadow-plan.md'));
+    prReviewPath = newestMd(path.join(root, '.kilo', 'plans', 'pr-review'), (f) => f.startsWith(base + '-') && f.endsWith('-pr-review.md'));
+    const listMd = (d) => { try { return fs.readdirSync(d).filter((f) => f.endsWith('.md')); } catch { return []; } };
+    chainV = checkChainOrder(
+      [...listMd(path.join(root, '.kilo', 'plans', 'review')), ...listMd(path.join(root, '.kilo', 'plans', 'pr-review'))],
+      base,
+    );
     console.log('LATEST-PLAN: ' + path.relative(root, planPath));
-    console.log('IMPL: ' + (implPath ? implPath.map((p) => path.relative(root, p)).join(',') : 'none') + ' TEST: ' + (testPath ? path.relative(root, testPath) : 'none') + ' REPORT: ' + (reportPath ? path.basename(reportPath) : 'none'));
+    console.log('IMPL: ' + (implPath ? implPath.map((p) => path.relative(root, p)).join(',') : 'none') + ' TEST: ' + (testPath ? path.relative(root, testPath) : 'none') + ' REPORT: ' + (reportPath ? path.basename(reportPath) : 'none') + ' PR-REPORT: ' + (prReviewPath ? path.basename(prReviewPath) : 'none'));
   }
   if (!planPath) { console.log('用法：node checks/attack-ledger.mjs --plan <plan.md> [--impl <f>] [--test <f>] [--report <f>] 或 --latest'); process.exit(2); }
   const readOpt = (p) => (Array.isArray(p) ? p.map((x) => fs.readFileSync(x, 'utf8')).join('\n') : (p ? fs.readFileSync(p, 'utf8') : null));
-  const violations = attackLedger(fs.readFileSync(planPath, 'utf8'), {
+  const planTextFull = fs.readFileSync(planPath, 'utf8');
+  const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(planTextFull).includes(f));
+  const violations = attackLedger(planTextFull, {
     implText: readOpt(implPath),
     testText: readOpt(testPath),
     reportText: readOpt(reportPath),
-  });
+    shadowReportText: isSec && reportPath ? fs.readFileSync(reportPath, 'utf8') : undefined,
+    prReviewReportText: isSec && prReviewPath ? fs.readFileSync(prReviewPath, 'utf8') : undefined,
+  }).concat(chainV);
   if (latestMode && !reportPath && violations.length === 0) {
     const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(fs.readFileSync(planPath, 'utf8')).includes(f));
     if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无影子报告（报告在场是 GO 前置）' });
+  }
+  // PR 复审报告与影子报告同口径：执法类计划 --latest 模式下缺盘即红（否则结构闸对 PR 报告整体失明）。
+  if (latestMode && !prReviewPath && violations.length === 0) {
+    const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(fs.readFileSync(planPath, 'utf8')).includes(f));
+    if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无 PR 复审报告（报告在场是 GO 前置）' });
   }
   for (const x of violations) console.log('FAIL ' + x.msg);
   console.log(violations.length === 0 ? 'ATTACK-LEDGER ALL OK' : 'ATTACK-LEDGER FAILURES=' + violations.length);

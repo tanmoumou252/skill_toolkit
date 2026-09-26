@@ -143,6 +143,31 @@ export const CLAUSES = [
       /^skills\/zcode-plan-first\/SKILL\.md$/,
     ],
   },
+  {
+    id: 'invariant-enumeration',
+    text: '不变量枚举',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'falsifiable-attack',
+    text: '爆炸半径',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'interleaving-matrix',
+    text: '事件交错矩阵',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'greenlight-downgrade',
+    text: '覆盖证据',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'blackbox-first',
+    text: '黑盒先行',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
 ];
 
 // —— 逐字闸门声明：plan-gate 用不含引号的片段，规避全角引号导致的不可确定比对 ——
