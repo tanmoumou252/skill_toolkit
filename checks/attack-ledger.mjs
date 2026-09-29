@@ -300,6 +300,15 @@ export function attackLedger(planText, opts = {}) {
   return v;
 }
 
+// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容 4 位时分（本仓/技能实命名）与 6 位时分秒（夹具），
+// 且必须排除同前缀伴生产物（-test-evidence / -pr-review / -shadow-plan / .lease），否则按 mtime 取最新会把
+// 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
+export function isPlanFilename(f) {
+  return /^\d{8}-\d{4,6}-.+\.md$/.test(f)
+    && !/-test-evidence\.md$/.test(f) && !/-pr-review\.md$/.test(f)
+    && !/-shadow-plan\.md$/.test(f) && !/\.lease\.md$/.test(f);
+}
+
 function newestMd(dir, pred) {
   try {
     const xs = fs.readdirSync(dir)
@@ -320,7 +329,7 @@ if (isMain) {
   let chainV = [];
   if (process.argv.includes('--latest')) {
     latestMode = true;
-    planPath = newestMd(path.join(root, '.kilo', 'plans'), (f) => /^\d{8}-\d{6}-.+\.md$/.test(f));
+    planPath = newestMd(path.join(root, '.kilo', 'plans'), isPlanFilename);
     if (!planPath) { console.log('ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'); process.exit(2); }
     const planTextPre = fs.readFileSync(planPath, 'utf8');
     const fsec = filesSectionOf(planTextPre);

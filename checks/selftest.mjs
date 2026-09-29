@@ -2,7 +2,7 @@
 // 全部分支以合成文件集驱动 runAll（不读磁盘），故可在真实仓库之外独立验证。
 // 每个 FAIL 行都对应一条真实断言失败；红灯即证明检测器未生效。
 import { runAll, scanFences } from './invariants.mjs';
-import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES } from './attack-ledger.mjs';
+import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -298,5 +298,15 @@ check('assert-chain-filter-same-scope',
   && checkChainOrder([TOPIC_BASE + '-notes.md', TOPIC_BASE + '-r2-shadow-plan.md'], TOPIC_BASE).some((x) => x.msg.includes('断档'))
   && checkChainOrder([TOPIC_BASE + '-shadow-plan.md'], TOPIC_BASE).length === 0);
 
+// 65 计划名匹配谓词（latest-companion-exclude-gate 闸）：兼容 4/6 位时间戳；伴生产物必须排除，
+//   否则 --latest 会把证据日志/复审报告误当计划选中（伴生误选 = 视图-执行分叉）。
+check('assert-latest-companion-exclude-gate',
+  isPlanFilename('20260929-0837-plan.md') === true
+  && isPlanFilename('20260731-153000-auth-r3-refactor.md') === true
+  && isPlanFilename('20260929-0837-plan-test-evidence.md') === false
+  && isPlanFilename('20260929-0837-plan-pr-review.md') === false
+  && isPlanFilename('20260929-0837-plan-shadow-plan.md') === false
+  && isPlanFilename('20260929-0837-plan.lease.md') === false
+  && isPlanFilename('commit_msg.md') === false);
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

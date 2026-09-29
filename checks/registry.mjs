@@ -168,6 +168,16 @@ export const CLAUSES = [
     text: '黑盒先行',
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
+  {
+    id: 'semantic-five-duties',
+    text: '语义正确性五问对抗义务',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'dispatch-lease',
+    text: '派发去重租约',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
 ];
 
 // —— 逐字闸门声明：plan-gate 用不含引号的片段，规避全角引号导致的不可确定比对 ——
