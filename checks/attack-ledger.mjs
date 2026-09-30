@@ -55,8 +55,16 @@ export const ROUND_RE = /(?:^|-)[rp](\d+)[a-z]?(?=-|\.|$)/;
 export const SHADOW_RE = /-shadow-plan\.md$/;
 export const PR_REVIEW_RE = /-pr-review\.md$/;
 // 报告结构闸关键词类（宽松匹配防合法改写误红；判定一律取围栏外行视图）。
+// pr-report-semantic-pass-gate：PR 复审报告必含 SEMANTIC_PASS 机读行——三端 pr-reviewer 规程把
+// 「五问缺节 → SEMANTIC_PASS=partial → 禁 GO」定为硬要求，若结构闸不实扫该行，硬要求回落时零红灯，
+// 提示词视图与对账器视图分叉（此机器闸即该分叉的闭环落点）。
 export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
-export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, /SEMANTIC_PASS/];
+// semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
+// 结构闸（PR_REVIEW_GATE_RES）只扫子串存在，报告可同写 SEMANTIC_PASS=partial:<缺项> 与 VERDICT: GO 而零违反，
+// 与三端 pr-reviewer「partial 即禁 GO」硬要求分叉；此闸即该分叉的闭环落点。
+// 取值锚定与 VERDICT 同口径（围栏外末次整行），ERRATA「禁裸复写旧判定行」规则即依赖该口径。
+export const SEMANTIC_PASS_LINE_RE = /^SEMANTIC_PASS=([A-Za-z]+)(?::.*)?$/;
 
 function lineView(text) {
   const lines = text.split(/\r?\n/);
@@ -155,6 +163,18 @@ function hasMarkerLine(text, re) {
   return lines.some((l, i) => !fenced[i] && re.test(l.trim()));
 }
 
+// semantic-pass-partial-no-go 闸：机读行 SEMANTIC_PASS 非 done 与 VERDICT: GO 并存即判红。
+// 缺 SEMANTIC_PASS 行不在本闸职责内（由结构闸 PR_REVIEW_GATE_RES 判红），故此处不重复计数。
+export function checkSemanticPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
+  if (!semHit) return;
+  const verdictHit = lastAnchoredLine(reportText, /^VERDICT:\s*(GO|NO-GO|ESCALATE_TO_HUMAN)$/);
+  if (verdictHit && verdictHit.m[1] === 'GO' && semHit.m[1] !== 'done') {
+    v.push({ msg: 'SEMANTIC_PASS=' + semHit.m[1] + ' 非 done 却与 VERDICT: GO 并存：五问未全部通过严禁出具 GO（semantic-pass-partial-no-go）' });
+  }
+}
+
 // 登记攻击行点数：围栏外逐行匹配登记锚，返回 { anchor, seq, line } 序列。
 export function countAttackRows(reportText) {
   const { lines, fenced } = lineView(reportText);
@@ -215,6 +235,8 @@ export function checkReportFormat(reportText, v) {
     }
     if (offline && isGo && !echo) v.push({ msg: '零实弹（PROBE=OFFLINE）GO 未标注 ECHO-RISK（纸面放行必须明示人类）' });
   }
+  // semantic-pass-partial-no-go 闸：值语义交叉校验（结构闸只扫行存在）。
+  checkSemanticPassVerdict(reportText, v);
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
@@ -276,7 +298,7 @@ export function checkReportStructureGate(text, kind, v) {
   const gates = kind === 'shadow' ? SHADOW_GATE_RES : PR_REVIEW_GATE_RES;
   const labels = kind === 'shadow'
     ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对']
-    : ['E 清单', '实跑证据（实跑证据表或已运行核实）'];
+    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）'];
   for (let i = 0; i < gates.length; i++) {
     if (!gates[i].test(outside)) v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告结构闸缺失：' + labels[i] });
   }
@@ -296,15 +318,22 @@ export function attackLedger(planText, opts = {}) {
   }
   checkReportFormat(opts.reportText ?? null, v);
   if (opts.shadowReportText !== undefined) checkReportStructureGate(opts.shadowReportText, 'shadow', v);
-  if (opts.prReviewReportText !== undefined) checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
+  if (opts.prReviewReportText !== undefined) {
+    checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
+    // PR 复审报告的语义五问机读行与终局判定交叉校验（结构闸只扫行存在，不校验值语义）。
+    checkSemanticPassVerdict(opts.prReviewReportText, v);
+  }
   return v;
 }
 
-// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容 4 位时分（本仓/技能实命名）与 6 位时分秒（夹具），
+// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容三形态——8-4（本仓 skill 实命名 20260929-0837-…）、
+// 8-6（夹具 20260731-153000-…）与 14 位紧凑（仓规范自定 20260731153000-…，见 skills/*/SKILL.md 命名例）；
+// 接受域为 8 位日期 + 4-8 位时分秒位（分体或紧凑），超规范三形态的紧凑位数亦静默放行——误伤面已被
+// 伴生排除四则与"无数字前缀不命中"双重阻拦，无失败侧故不收紧（该宽域口径为明示设计，非疏漏）。
 // 且必须排除同前缀伴生产物（-test-evidence / -pr-review / -shadow-plan / .lease），否则按 mtime 取最新会把
 // 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
 export function isPlanFilename(f) {
-  return /^\d{8}-\d{4,6}-.+\.md$/.test(f)
+  return /^\d{8}-?\d{4,8}-.+\.md$/.test(f)
     && !/-test-evidence\.md$/.test(f) && !/-pr-review\.md$/.test(f)
     && !/-shadow-plan\.md$/.test(f) && !/\.lease\.md$/.test(f);
 }

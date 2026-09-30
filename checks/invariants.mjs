@@ -12,6 +12,10 @@ import {
   KILOCODE_SUBAGENT_ALLOW_KEY,
   CLASSES,
   CLAUSES,
+  DERIVED_CLAUSES,
+  PLATFORM_GOVERNANCE_RE,
+  PLATFORM_AGENT_FILE_RE,
+  ORCHESTRATOR_AGENT_SUFFIX,
   GATES,
   PAIRED,
   REQUIRED_IDENTIFIERS,
@@ -32,12 +36,14 @@ export const STRUCTURAL_IDS = [
   'clause-target-missing',
   'gate-target-missing',
   'identifier-target-missing',
+  'dispatch-carrier-derived',
 ];
 
 export function allInvariantIds() {
   return [
     ...STRUCTURAL_IDS,
     ...CLAUSES.map((c) => 'clause-' + c.id),
+    ...DERIVED_CLAUSES.map((c) => 'clause-' + c.id),
     ...GATES.map((g) => 'gate-' + g.id),
     ...PAIRED.map((p) => p.id),
     ...REQUIRED_IDENTIFIERS.map((r) => 'identifier-' + r.id),
@@ -72,6 +78,29 @@ export function roleOf(path) {
     if (base.startsWith(r)) return r;
   }
   return null;
+}
+
+// —— 派发权载体派生（按编排拓扑，不枚举平台名）——
+// 平台根＝现场文件集中出现 <dir>/AGENTS.md 或 <dir>/agents/<file>.md 的 dir；深一层即非平台根
+// （故 skills/<name>/SKILL.md 不构成平台根），从而新增平台自动纳入推导。
+export function platformRoots(files) {
+  const roots = new Set();
+  for (const f of files) {
+    const gov = PLATFORM_GOVERNANCE_RE.exec(f.path);
+    if (gov) roots.add(gov[1]);
+    const ag = PLATFORM_AGENT_FILE_RE.exec(f.path);
+    if (ag) roots.add(ag[1]);
+  }
+  return [...roots].sort();
+}
+
+// 派生规则：平台存在编排器代理文件 <plat>/agents/plan-writer-sp.md ⇒ 派发权载体＝该 agent 文件；
+// 否则（子代理-only 平台，父会话即编排器）⇒ 派发权载体＝<plat>/AGENTS.md。精确等值判定，
+// 不用「前缀通配」——前缀通配会把派发义务扩散到无派发权的兄弟子代理文件上。
+export function deriveDispatchCarrier(files, platform) {
+  const paths = new Set(files.map((f) => f.path));
+  const orchestrator = `${platform}/${ORCHESTRATOR_AGENT_SUFFIX}`;
+  return paths.has(orchestrator) ? orchestrator : `${platform}/AGENTS.md`;
 }
 
 // —— 围栏状态机（CommonMark 语义）——
@@ -243,6 +272,24 @@ export function runAll(files) {
     for (const re of c.expect) {
       const hit = files.filter((f) => re.test(f.path));
       if (hit.length === 0) push('clause-target-missing', String(re), '该模式未匹配到任何文件');
+      for (const f of hit) {
+        if (!f.text.includes(c.text)) push('clause-' + c.id, f.path, `缺少必含条款: ${c.text}`);
+      }
+    }
+  }
+
+  // F8b 派发权载体派生（dispatch-carrier-derived）：租约三闸的必含载体由编排拓扑现场推导，
+  // 不采用平台名硬编码，也不用 */agents/plan-writer*.md 通配（该通配会把派发义务要求在场于
+  // tools: [] 且无派发权的 plan-writer-subagent-sp.md）。载体缺场即判红（fail-closed）：
+  // 治理文件被删或新平台漏配时，租约义务不得静默消失（残差竞态会随之复发）。
+  for (const c of DERIVED_CLAUSES) {
+    for (const platform of platformRoots(files)) {
+      const carrier = deriveDispatchCarrier(files, platform);
+      const hit = files.filter((f) => f.path === carrier);
+      if (hit.length === 0) {
+        push('dispatch-carrier-derived', carrier, `派发权载体缺场（平台 ${platform}）：${carrier}`);
+        continue;
+      }
       for (const f of hit) {
         if (!f.text.includes(c.text)) push('clause-' + c.id, f.path, `缺少必含条款: ${c.text}`);
       }

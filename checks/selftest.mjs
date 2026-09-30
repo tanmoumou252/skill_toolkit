@@ -2,6 +2,10 @@
 // 全部分支以合成文件集驱动 runAll（不读磁盘），故可在真实仓库之外独立验证。
 // 每个 FAIL 行都对应一条真实断言失败；红灯即证明检测器未生效。
 import { runAll, scanFences } from './invariants.mjs';
+// 派生器以命名空间导入存取：红灯阶段该导出不存在，不得让 ESM 链接期 SyntaxError 把「逐条断言真红」
+// 降级成「脚手架崩溃假红」（四维语义真红的 [REJECT-FAKE]）；实现落盘后本守卫即直取真函数。
+import * as invariants from './invariants.mjs';
+const deriveDispatchCarrier = typeof invariants.deriveDispatchCarrier === 'function' ? invariants.deriveDispatchCarrier : () => '<未实现>';
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
 
 let failures = 0;
@@ -253,7 +257,7 @@ check('assert-chain-fold-multi-marker',
   && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档')));
 // 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
 const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'GO', ''].join('\n');
-const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', ''].join('\n');
+const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', ''].join('\n');
 const gv = (t, k) => { const v = []; checkReportStructureGate(t, k, v); return v; };
 check('assert-structure-gate-clean-ok', gv(SHADOW_OK, 'shadow').length === 0 && gv(PR_OK, 'pr-review').length === 0);
 check('assert-structure-gate-shadow', gv(SHADOW_OK.replace('差集为 0（镜像对账表）', ''), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
@@ -302,11 +306,107 @@ check('assert-chain-filter-same-scope',
 //   否则 --latest 会把证据日志/复审报告误当计划选中（伴生误选 = 视图-执行分叉）。
 check('assert-latest-companion-exclude-gate',
   isPlanFilename('20260929-0837-plan.md') === true
+  && isPlanFilename('20260731153000-add-export-plan.md') === true
+  && isPlanFilename('202609291234567890-x.md') === false
   && isPlanFilename('20260731-153000-auth-r3-refactor.md') === true
   && isPlanFilename('20260929-0837-plan-test-evidence.md') === false
   && isPlanFilename('20260929-0837-plan-pr-review.md') === false
   && isPlanFilename('20260929-0837-plan-shadow-plan.md') === false
   && isPlanFilename('20260929-0837-plan.lease.md') === false
   && isPlanFilename('commit_msg.md') === false);
+// 66 PR 复审报告机读行结构闸（pr-report-semantic-pass-gate）：三端 pr-reviewer 规程硬要求
+//   SEMANTIC_PASS=done|partial 行；缺行必咬、含行零违反（partial 禁 GO 不得停留在散文面）。
+const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', ''].join('\n');
+check('assert-pr-report-semantic-pass-gate',
+  gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('结构闸缺失')) && gv(PR_OK, 'pr-review').length === 0);
+
+// 67-70 语义五问机读行值语义闸（semantic-pass-partial-no-go）：SEMANTIC_PASS 非 done 与 VERDICT: GO
+//   并存必须判红（三端 pr-reviewer 规程硬要求「partial 即禁 GO」，旧结构闸只扫子串存在 ⇒ 两视图分叉零红灯）；
+//   done+GO 与 partial+NO-GO / 末次取值改写为 done 为负控制（不得误伤）。
+const SP_OK = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=done\nVERDICT: GO');
+const SP_PARTIAL_GO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:契约清单（未完成五问节四）\nVERDICT: GO');
+const SP_PARTIAL_NOGO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:契约清单（未完成五问节四）\nVERDICT: NO-GO');
+const SP_UNKNOWN_GO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=unknown\nVERDICT: GO');
+const SP_ERRATA_DONE = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:x\nSEMANTIC_PASS=done\nVERDICT: GO');
+check('assert-semantic-pass-partial-no-go', rvSome(SP_PARTIAL_GO, 'semantic-pass-partial-no-go'));
+check('assert-semantic-pass-non-done-value-no-go', rvSome(SP_UNKNOWN_GO, 'semantic-pass-partial-no-go'));
+check('assert-semantic-pass-done-go-ok', rv(SP_OK).length === 0 && rv(SP_PARTIAL_NOGO).length === 0 && rv(SP_ERRATA_DONE).length === 0);
+// 70 接线：PR 复审报告经 attackLedger(prReviewReportText) 同样受此闸约束（shadow 侧走 checkReportFormat）
+check('assert-semantic-pass-pr-report-wired',
+  attackLedger(auditorPlan, { prReviewReportText: SP_PARTIAL_GO }).some((x) => x.msg.includes('semantic-pass-partial-no-go')));
+// 71-77 租约三闸的派发权载体派生（dispatch-carrier-derived / F8b）：载体由平台编排拓扑现场推导，
+//   既不依赖单平台名硬编码，也不得把派发义务压到 tools: [] 无派发权的子代理文件上。
+const zcodeSubagentFm = ['---', 'name: plan-writer-subagent-sp', 'description: d', 'color: orange', 'tools: []', 'permissionMode: dontAsk', 'injectAgentsMd: true', '---', ''].join('\n');
+const zcodeWriterFm = ['---', 'name: plan-writer-sp', 'description: d', 'color: orange', 'tools: []', 'permissionMode: dontAsk', 'injectAgentsMd: true', '---', ''].join('\n');
+const kiloWriterFm = ['---', 'mode: all', 'description: d', 'options:', '  id: plan-writer-sp', 'permission:', '  read: allow', '---', ''].join('\n');
+const cbWriterFm = ['---', 'name: plan-writer-sp', 'description: d', 'model: inherit', 'tools: []', 'agentMode: agentic', 'enabled: true', 'enabledAutoRun: true', 'mcpServers: x', '---', ''].join('\n');
+const LEASE_TRIO = '派发去重租约\n写后立即回读核验首行\n严禁复用固定字面量\n';
+const LEASE_IDS = ['clause-dispatch-lease', 'clause-lease-exclusive-readback', 'clause-lease-identity-entropy', 'dispatch-carrier-derived'];
+
+// 71 子代理-only 平台（zcode 现状）：载体＝zcode/AGENTS.md——三闸缺标记必咬、三标记在场不误伤。
+check('assert-clause-lease-zcode-agents-carrier',
+  has([{ path: 'zcode/AGENTS.md', text: '无租约协议\n' }], 'clause-dispatch-lease', 'zcode/AGENTS.md')
+  && has([{ path: 'zcode/AGENTS.md', text: '无租约协议\n' }], 'clause-lease-exclusive-readback', 'zcode/AGENTS.md')
+  && has([{ path: 'zcode/AGENTS.md', text: '无租约协议\n' }], 'clause-lease-identity-entropy', 'zcode/AGENTS.md')
+  && !has([{ path: 'zcode/AGENTS.md', text: LEASE_TRIO }], 'clause-lease-exclusive-readback', 'zcode/AGENTS.md'));
+
+// 71b 负控（漏配单枚标记）：只缺「写后立即回读核验首行」时仅该闸判红，另两闸不得连带误伤。
+check('assert-carrier-derived-marker-partial',
+  has([{ path: 'zcode/AGENTS.md', text: '派发去重租约\n严禁复用固定字面量\n' }], 'clause-lease-exclusive-readback', 'zcode/AGENTS.md')
+  && !has([{ path: 'zcode/AGENTS.md', text: '派发去重租约\n严禁复用固定字面量\n' }], 'clause-dispatch-lease', 'zcode/AGENTS.md')
+  && !has([{ path: 'zcode/AGENTS.md', text: '派发去重租约\n严禁复用固定字面量\n' }], 'clause-lease-identity-entropy', 'zcode/AGENTS.md'));
+
+// 72 负控A（脱钩硬编码 + 拓扑翻转）：zcode 补出编排器代理后，载体迁到该 agent 文件——
+//   AGENTS.md 缺标记不再判红；反证「真迁移而非消失」：同拓扑下 agent 文件缺标记必判红于该 agent 路径。
+const flipToOrchestrator = [
+  { path: 'zcode/AGENTS.md', text: '无租约协议\n' },
+  { path: 'zcode/agents/plan-writer-sp.md', text: zcodeWriterFm + LEASE_TRIO },
+];
+const flipMissingOnAgent = [
+  { path: 'zcode/AGENTS.md', text: '无租约协议\n' },
+  { path: 'zcode/agents/plan-writer-sp.md', text: zcodeWriterFm + '无租约协议\n' },
+];
+check('assert-carrier-derived-topology-flip',
+  deriveDispatchCarrier(flipToOrchestrator, 'zcode') === 'zcode/agents/plan-writer-sp.md'
+  && !has(flipToOrchestrator, 'clause-dispatch-lease', 'zcode/AGENTS.md')
+  && !has(flipToOrchestrator, 'clause-lease-exclusive-readback', 'zcode/AGENTS.md')
+  && !has(flipToOrchestrator, 'clause-lease-identity-entropy', 'zcode/AGENTS.md')
+  && has(flipMissingOnAgent, 'clause-dispatch-lease', 'zcode/agents/plan-writer-sp.md')
+  && has(flipMissingOnAgent, 'clause-lease-exclusive-readback', 'zcode/agents/plan-writer-sp.md')
+  && has(flipMissingOnAgent, 'clause-lease-identity-entropy', 'zcode/agents/plan-writer-sp.md'));
+
+// 72b 负控A反证（脱钩）：子代理文件不再具备载体身份——它缺标记时，判红不得落在它头上。
+check('assert-carrier-derived-subagent-not-carrier',
+  deriveDispatchCarrier([{ path: 'zcode/agents/plan-writer-subagent-sp.md' }], 'zcode') === 'zcode/AGENTS.md'
+  && !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: zcodeSubagentFm + '无租约协议\n' }], 'clause-lease-exclusive-readback', 'zcode/agents/plan-writer-subagent-sp.md'));
+
+// 73 负控C（第 4 平台自适应）：新增子代理-only 平台 foo/（无编排器代理）⇒ 载体＝foo/AGENTS.md，
+//   三闸必判红于 foo/AGENTS.md；foo 的子代理文件不得被当成载体。
+const fourthPlatform = [
+  { path: 'foo/AGENTS.md', text: '无租约协议\n' },
+  { path: 'foo/agents/plan-writer-subagent-sp.md', text: zcodeSubagentFm + '无租约协议\n' },
+];
+check('assert-carrier-derived-fourth-platform',
+  deriveDispatchCarrier(fourthPlatform, 'foo') === 'foo/AGENTS.md'
+  && has(fourthPlatform, 'clause-dispatch-lease', 'foo/AGENTS.md')
+  && has(fourthPlatform, 'clause-lease-exclusive-readback', 'foo/AGENTS.md')
+  && has(fourthPlatform, 'clause-lease-identity-entropy', 'foo/AGENTS.md')
+  && !has(fourthPlatform, 'clause-lease-exclusive-readback', 'foo/agents/plan-writer-subagent-sp.md'));
+
+// 73b fail-closed：派生载体缺场（治理文件被删）不得静默放过租约义务。
+check('assert-carrier-derived-missing-carrier-failclosed',
+  has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: zcodeSubagentFm + LEASE_TRIO }], 'dispatch-carrier-derived', 'zcode/AGENTS.md'));
+
+// 74 正控：三端编排拓扑齐全、各自派生载体三标记在场 ⇒ 租约三闸与派生闸零违反。
+const leaseAllGood = [
+  { path: 'kilocode/AGENTS.md', text: '本文不承载租约义务（载体是编排器代理文件）。\n' },
+  { path: 'kilocode/agents/plan-writer-sp.md', text: kiloWriterFm + LEASE_TRIO },
+  { path: 'codebuddy/AGENTS.md', text: '本文不承载租约义务（载体是编排器代理文件）。\n' },
+  { path: 'codebuddy/agents/plan-writer-sp.md', text: cbWriterFm + LEASE_TRIO },
+  { path: 'zcode/AGENTS.md', text: LEASE_TRIO },
+];
+check('assert-carrier-derived-positive-control',
+  runAll(leaseAllGood).filter((v) => LEASE_IDS.includes(v.id)).length === 0,
+  'ids=' + runAll(leaseAllGood).filter((v) => LEASE_IDS.includes(v.id)).map((v) => v.id + '@' + v.path).join(','));
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

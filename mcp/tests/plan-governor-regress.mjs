@@ -1557,6 +1557,13 @@ async function main() {
     while ((m4 = reRef.exec(client))) if (!defined[m4[1]] && undefinedVars.indexOf(m4[1]) < 0) undefinedVars.push(m4[1]);
     check('webui-vars-all-defined', undefinedVars.length === 0, 'undefined=' + (undefinedVars.join(',') || 'none'));
 
+    // 不变量 4：preflight 必须显式把表单元素背景透明化（防 UA ButtonFace 不随主题切换；
+    //   无基础 bg-* 的按钮依赖此行兜底。断言字面 = webui-client.html preflight 的 button 行，
+    //   被裁即红——堵上"重置项被最小化裁剪"的盲区，即背景漏底缺陷族的防复发锁）。
+    const preflight = client.match(/button,[^}]*\{[^}]*\}/);
+    check('webui-button-transparent-reset', !!preflight && preflight[0].includes('background-color: transparent'),
+      preflight ? preflight[0].slice(0, 80) : 'preflight button rule not found');
+
     // 主题色点的形态（渐变 / 实色 / 边框）与配色方案不设断言：SPA 已外置为 webui-client.html，
     //   视觉方案的调整不应导致套件转红；形态与互异性由维护者在浏览器目视确认。
   }
