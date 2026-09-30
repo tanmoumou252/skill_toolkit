@@ -12,6 +12,10 @@ import {
   KILOCODE_SUBAGENT_ALLOW_KEY,
   CLASSES,
   CLAUSES,
+  DERIVED_CLAUSES,
+  PLATFORM_GOVERNANCE_RE,
+  PLATFORM_AGENT_FILE_RE,
+  ORCHESTRATOR_AGENT_SUFFIX,
   GATES,
   PAIRED,
   REQUIRED_IDENTIFIERS,
@@ -32,12 +36,15 @@ export const STRUCTURAL_IDS = [
   'clause-target-missing',
   'gate-target-missing',
   'identifier-target-missing',
+  'dispatch-carrier-derived',
 ];
 
 export function allInvariantIds() {
   return [
     ...STRUCTURAL_IDS,
+    ...ENTRY_GATE_IDS,
     ...CLAUSES.map((c) => 'clause-' + c.id),
+    ...DERIVED_CLAUSES.map((c) => 'clause-' + c.id),
     ...GATES.map((g) => 'gate-' + g.id),
     ...PAIRED.map((p) => p.id),
     ...REQUIRED_IDENTIFIERS.map((r) => 'identifier-' + r.id),
@@ -72,6 +79,65 @@ export function roleOf(path) {
     if (base.startsWith(r)) return r;
   }
   return null;
+}
+
+// —— 派发权载体派生（按编排拓扑，不枚举平台名）——
+// 平台根＝现场文件集中出现 <dir>/AGENTS.md 或 <dir>/agents/<file>.md 的 dir；深一层即非平台根
+// （故 skills/<name>/SKILL.md 不构成平台根），从而新增平台自动纳入推导。
+export function platformRoots(files) {
+  const roots = new Set();
+  for (const f of files) {
+    const gov = PLATFORM_GOVERNANCE_RE.exec(f.path);
+    if (gov) roots.add(gov[1]);
+    const ag = PLATFORM_AGENT_FILE_RE.exec(f.path);
+    if (ag) roots.add(ag[1]);
+  }
+  return [...roots].sort();
+}
+
+// 扫描根差集（纯函数，只吃目录名数组）：SCAN_ROOTS 硬编码意味着新顶层平台目录从不被 walk、
+// 其文件对全部闸门不可达；本函数把"未登记顶层目录"显式化，由扫描入口大声报错（fail-loud）。
+// 点目录（. 开头的内部内存）不触发；非平台工具根与本地构建产物根由入口经 scanEntryDirNames
+// 单点过滤后再传入——本函数只做 SCAN_ROOTS 差集，不重复登记非平台根（双处过滤即口径漂移面）。
+export function unscannedRoots(topLevelDirNames, scanRoots) {
+  const known = new Set(scanRoots);
+  return topLevelDirNames.filter((n) => !n.startsWith('.') && !known.has(n)).sort();
+}
+
+// —— 扫描根登记常量（机制层单一事实源，run.mjs 与 selftest 共用，防名实漂移）——
+// NON_PLATFORM_ROOTS＝显式登记的非平台工具根；BUILD_ARTIFACT_ROOTS＝gitignore 的本地构建产物
+// 根（如任何 checkout 跑过包管理器都会出现的 node_modules），不构成"未登记平台目录"。
+// 零依赖纪律：不引 child_process 调 git 做 gitignore 语义过滤（子进程使 checks 套件脱离纯函数
+// 可测域、引入平台二进制依赖与输出解析脆弱面），采用显式登记表 + 漂移断言同级兜底。
+export const SCAN_ROOTS = ['kilocode', 'codebuddy', 'zcode', 'skills'];
+export const NON_PLATFORM_ROOTS = ['checks', 'mcp'];
+export const BUILD_ARTIFACT_ROOTS = ['node_modules'];
+export const ENTRY_GATE_IDS = ['unscanned-root-directory', 'unclassified-platform-file'];
+
+// 入口目录名过滤（纯函数）：点目录（内部内存）、显式登记的非平台工具根与本地构建产物根
+// 都不是"未登记扫描根"；其余顶层目录全部进入 unscannedRoots 差集判定。
+export function scanEntryDirNames(topLevelDirNames) {
+  const skip = new Set([...NON_PLATFORM_ROOTS, ...BUILD_ARTIFACT_ROOTS]);
+  return topLevelDirNames.filter((n) => !n.startsWith('.') && !skip.has(n));
+}
+
+// 未登记平台 fail-loud 检测（纯函数，只吃路径，不读磁盘）：平台治理/代理形态路径命中
+// 通用拓扑正则却未被 CLASSES 登记分类 ⇒ 已扫描根内该类文件在 classify 过滤面被静默
+// 丢弃、全部闸门失效；本函数把该态显式化，由扫描入口大声报错（fail-loud）。
+// 触发域收窄声明：本函数输入面=已扫描根内文件；未登记顶层目录由 unscannedRoots 先行拦截。
+export function unclassifiedPlatformFiles(files) {
+  return files
+    .filter((f) => (PLATFORM_GOVERNANCE_RE.test(f.path) || PLATFORM_AGENT_FILE_RE.test(f.path)) && classify(f.path) === null)
+    .map((f) => f.path);
+}
+
+// 派生规则：平台存在编排器代理文件 <plat>/agents/plan-writer-sp.md ⇒ 派发权载体＝该 agent 文件；
+// 否则（子代理-only 平台，父会话即编排器）⇒ 派发权载体＝<plat>/AGENTS.md。精确等值判定，
+// 不用「前缀通配」——前缀通配会把派发义务扩散到无派发权的兄弟子代理文件上。
+export function deriveDispatchCarrier(files, platform) {
+  const paths = new Set(files.map((f) => f.path));
+  const orchestrator = `${platform}/${ORCHESTRATOR_AGENT_SUFFIX}`;
+  return paths.has(orchestrator) ? orchestrator : `${platform}/AGENTS.md`;
 }
 
 // —— 围栏状态机（CommonMark 语义）——
@@ -243,6 +309,25 @@ export function runAll(files) {
     for (const re of c.expect) {
       const hit = files.filter((f) => re.test(f.path));
       if (hit.length === 0) push('clause-target-missing', String(re), '该模式未匹配到任何文件');
+      for (const f of hit) {
+        if (!f.text.includes(c.text)) push('clause-' + c.id, f.path, `缺少必含条款: ${c.text}`);
+      }
+    }
+  }
+
+  // F8b 派发权载体派生（dispatch-carrier-derived）：租约三闸的必含载体由编排拓扑现场推导，
+  // 不采用平台名硬编码，也不用 */agents/plan-writer*.md 通配（该通配会把派发义务要求在场于
+  // tools: [] 且无派发权的 plan-writer-subagent-sp.md）。载体缺场即判红（fail-closed）：
+  // 治理文件被删或新平台漏配时，租约义务不得静默消失（残差竞态会随之复发）。
+  for (const platform of platformRoots(files)) {
+    const carrier = deriveDispatchCarrier(files, platform);
+    const hit = files.filter((f) => f.path === carrier);
+    if (hit.length === 0) {
+      // 缺场去重：每平台只报 1 条（旧实现随条款循环重复上报 3 条同路径违规）。
+      push('dispatch-carrier-derived', carrier, `派发权载体缺场（平台 ${platform}）：${carrier}`);
+      continue;
+    }
+    for (const c of DERIVED_CLAUSES) {
       for (const f of hit) {
         if (!f.text.includes(c.text)) push('clause-' + c.id, f.path, `缺少必含条款: ${c.text}`);
       }

@@ -55,8 +55,33 @@ export const ROUND_RE = /(?:^|-)[rp](\d+)[a-z]?(?=-|\.|$)/;
 export const SHADOW_RE = /-shadow-plan\.md$/;
 export const PR_REVIEW_RE = /-pr-review\.md$/;
 // 报告结构闸关键词类（宽松匹配防合法改写误红；判定一律取围栏外行视图）。
+// pr-report-semantic-pass-gate：PR 复审报告必含 SEMANTIC_PASS 机读行——三端 pr-reviewer 规程把
+// 「五问缺节 → SEMANTIC_PASS=partial → 禁 GO」定为硬要求，若结构闸不实扫该行，硬要求回落时零红灯，
+// 提示词视图与对账器视图分叉（此机器闸即该分叉的闭环落点）。
+// SEMANTIC_PASS 结构闸项采用整行锚定（与 SEMANTIC_PASS_LINE_RE 同源）：
+// 只有围栏外整行 SEMANTIC_PASS=<值>（容忍冒号说明尾注）才满足结构闸；散文提及或行内代码
+// 引用不构成机读行——子串匹配会被"SEMANTIC_PASS 未完成"类散文冒充（fail-open）。
+// 行尾 [ \t]*：Markdown 硬换行（行尾双空格）不得使机读行漏判；容忍面不含 \r（行切分已消化），
+// 行尾出现 [ \t] 之外的续写仍不满足机读行。
+export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
+// pr-report-verdict-gate：VERDICT 结构闸项（pr-review 侧）——缺 VERDICT 行的 PR 复审报告必须判红：
+//   checkReportFormat 只消费 shadow 报告，checkSemanticPassVerdict 在缺 SEMANTIC_PASS 行时静默跳过，
+//   两闸对 pr-review 报告的 VERDICT 缺行双失明；本闸即该盲区的闭环落点。行尾 [ \t]* 与 SEMANTIC_PASS 同口径。
+// verdict-line-single-source-gate：VERDICT 整行锚定的单一事实源——行级取值正则 VERDICT_LINE_RE（捕获组
+//   m[1]＝判定值，无 /m，供 lastAnchoredLine 逐行取值）与结构闸 VERDICT_GATE_RE（/m，整段文本存在性
+//   判定）由同一 source 派生。旧形态为三份复制（结构闸非捕获 /m + checkSemanticPassVerdict / checkReportFormat
+//   两处内联捕获版），口径靠人工对齐：改结构闸则值语义闸静默跳过（partial+GO 漏判）、只改内联两处则
+//   结构闸假红；单源派生后任一消费点与事实源恒同步，漂移面收敛为零。
+export const VERDICT_LINE_RE = /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/;
+export const VERDICT_GATE_RE = new RegExp(VERDICT_LINE_RE.source, 'm');
 export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
-export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE];
+// semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
+// 结构闸（PR_REVIEW_GATE_RES）只扫子串存在，报告可同写 SEMANTIC_PASS=partial:<缺项> 与 VERDICT: GO 而零违反，
+// 与三端 pr-reviewer「partial 即禁 GO」硬要求分叉；此闸即该分叉的闭环落点。
+// 取值锚定与 VERDICT 同口径（围栏外末次整行），ERRATA「禁裸复写旧判定行」规则即依赖该口径；
+// 行尾 [ \t]* 与 SEMANTIC_PASS_GATE_RE 同源（硬换行不漏判）。
+export const SEMANTIC_PASS_LINE_RE = /^SEMANTIC_PASS=([A-Za-z]+)(?::.*)?[ \t]*$/;
 
 function lineView(text) {
   const lines = text.split(/\r?\n/);
@@ -155,6 +180,18 @@ function hasMarkerLine(text, re) {
   return lines.some((l, i) => !fenced[i] && re.test(l.trim()));
 }
 
+// semantic-pass-partial-no-go 闸：机读行 SEMANTIC_PASS 非 done 与 VERDICT: GO 并存即判红。
+// 缺 SEMANTIC_PASS 行不在本闸职责内（由结构闸 PR_REVIEW_GATE_RES 判红），故此处不重复计数。
+export function checkSemanticPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
+  if (!semHit) return;
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
+  if (verdictHit && verdictHit.m[1] === 'GO' && semHit.m[1] !== 'done') {
+    v.push({ msg: 'SEMANTIC_PASS=' + semHit.m[1] + ' 非 done 却与 VERDICT: GO 并存：五问未全部通过严禁出具 GO（semantic-pass-partial-no-go）' });
+  }
+}
+
 // 登记攻击行点数：围栏外逐行匹配登记锚，返回 { anchor, seq, line } 序列。
 export function countAttackRows(reportText) {
   const { lines, fenced } = lineView(reportText);
@@ -169,6 +206,9 @@ export function countAttackRows(reportText) {
   return hits;
 }
 
+// 职责切分（勿合并）：本函数只消费 shadow 复审报告，不校验 SEMANTIC_PASS 行——shadow 报告
+// 合法缺该行；pr-review 报告缺行由结构闸 PR_REVIEW_GATE_RES 判红，取值语义（partial/unknown
+// 与 GO 并存）由 checkSemanticPassVerdict 判红。三闸互斥不重叠，合并即对 shadow 侧产生假红。
 export function checkReportFormat(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。
@@ -177,9 +217,12 @@ export function checkReportFormat(reportText, v) {
   if (unclosed.length > 0) {
     v.push({ msg: '复审报告含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：其后内容被整段掩蔽，格式行与攻击行判定不可信' });
   }
-  const atkHit = lastAnchoredLine(reportText, /^ATTACKS=(\d+)$/);
-  const penHit = lastAnchoredLine(reportText, /^PENETRATIONS=(\d+)$/);
-  const verdictHit = lastAnchoredLine(reportText, /^VERDICT:\s*(GO|NO-GO|ESCALATE_TO_HUMAN)$/);
+  // report-format-trailing-hardbreak-gate：ATTACKS/PENETRATIONS 格式行行尾 [ \t]* 容忍——Markdown 硬换行
+  //   （行尾双空格）不得使合法机读行漏判（fail-closed 假红）；容忍面严格限定 [ \t]*，行尾出现 [ \t]
+  //   之外的续写（ATTACKS=2x）仍不满足格式行。VERDICT 行取值锚定复用 VERDICT_LINE_RE 单源。
+  const atkHit = lastAnchoredLine(reportText, /^ATTACKS=(\d+)[ \t]*$/);
+  const penHit = lastAnchoredLine(reportText, /^PENETRATIONS=(\d+)[ \t]*$/);
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
   if (!atkHit) v.push({ msg: '复审报告缺 ATTACKS= 行锚定格式行（围栏外独立整行）' });
   if (!penHit) v.push({ msg: '复审报告缺 PENETRATIONS= 行锚定格式行（围栏外独立整行）' });
   if (!verdictHit) v.push({ msg: '复审报告缺 VERDICT: 行锚定格式行（围栏外独立整行）' });
@@ -215,6 +258,8 @@ export function checkReportFormat(reportText, v) {
     }
     if (offline && isGo && !echo) v.push({ msg: '零实弹（PROBE=OFFLINE）GO 未标注 ECHO-RISK（纸面放行必须明示人类）' });
   }
+  // semantic-pass-partial-no-go 闸：值语义交叉校验（结构闸只扫行存在）。
+  checkSemanticPassVerdict(reportText, v);
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
@@ -276,7 +321,7 @@ export function checkReportStructureGate(text, kind, v) {
   const gates = kind === 'shadow' ? SHADOW_GATE_RES : PR_REVIEW_GATE_RES;
   const labels = kind === 'shadow'
     ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对']
-    : ['E 清单', '实跑证据（实跑证据表或已运行核实）'];
+    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）', '终局判定机读行（VERDICT）'];
   for (let i = 0; i < gates.length; i++) {
     if (!gates[i].test(outside)) v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告结构闸缺失：' + labels[i] });
   }
@@ -296,8 +341,24 @@ export function attackLedger(planText, opts = {}) {
   }
   checkReportFormat(opts.reportText ?? null, v);
   if (opts.shadowReportText !== undefined) checkReportStructureGate(opts.shadowReportText, 'shadow', v);
-  if (opts.prReviewReportText !== undefined) checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
+  if (opts.prReviewReportText !== undefined) {
+    checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
+    // PR 复审报告的语义五问机读行与终局判定交叉校验（结构闸只扫行存在，不校验值语义）。
+    checkSemanticPassVerdict(opts.prReviewReportText, v);
+  }
   return v;
+}
+
+// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容三形态——8-4（本仓 skill 实命名 20260929-0837-…）、
+// 8-6（夹具 20260731-153000-…）与 14 位紧凑（仓规范自定 20260731153000-…，见 skills/*/SKILL.md 命名例）；
+// 接受域为 8 位日期 + 4-8 位时分秒位（分体或紧凑），超规范三形态的紧凑位数亦静默放行——误伤面已被
+// 伴生排除四则与"无数字前缀不命中"双重阻拦，无失败侧故不收紧（该宽域口径为明示设计，非疏漏）。
+// 且必须排除同前缀伴生产物（-test-evidence / -pr-review / -shadow-plan / .lease），否则按 mtime 取最新会把
+// 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
+export function isPlanFilename(f) {
+  return /^\d{8}-?\d{4,8}-.+\.md$/.test(f)
+    && !/-test-evidence\.md$/.test(f) && !/-pr-review\.md$/.test(f)
+    && !/-shadow-plan\.md$/.test(f) && !/\.lease\.md$/.test(f);
 }
 
 function newestMd(dir, pred) {
@@ -320,7 +381,7 @@ if (isMain) {
   let chainV = [];
   if (process.argv.includes('--latest')) {
     latestMode = true;
-    planPath = newestMd(path.join(root, '.kilo', 'plans'), (f) => /^\d{8}-\d{6}-.+\.md$/.test(f));
+    planPath = newestMd(path.join(root, '.kilo', 'plans'), isPlanFilename);
     if (!planPath) { console.log('ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'); process.exit(2); }
     const planTextPre = fs.readFileSync(planPath, 'utf8');
     const fsec = filesSectionOf(planTextPre);

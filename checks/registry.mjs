@@ -14,6 +14,11 @@
 export const PLATFORMS = ['kilocode', 'codebuddy', 'zcode'];
 
 // —— 扫描面分类 ——
+// 登记制局限明示：本表与 platformOf 的平台名硬编码是有意登记制，非疏漏——AGENT_KEYS/
+// PRIVATE_AGENT_KEYS 为逐平台键集，新平台键集不可自动推导；若把正则放开为通配，未知平台
+// 文件会进入私有键互斥检查而产生假红。新增平台必须显式登记本表、键集与 run.mjs 的
+// SCAN_ROOTS；未登记的顶层目录与未分类的平台治理/代理文件分别由 run.mjs 的
+// unscanned-root-directory 与 unclassified-platform-file 检查大声报错（fail-loud），不得静默丢弃。
 export const CLASSES = [
   { id: 'platform-governance', re: /^(kilocode|codebuddy|zcode)\/AGENTS\.md$/, frontmatter: 'absent' },
   { id: 'platform-agent', re: /^(kilocode|codebuddy|zcode)\/agents\/[^/]+\.md$/, frontmatter: 'present' },
@@ -168,7 +173,29 @@ export const CLAUSES = [
     text: '黑盒先行',
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
+  {
+    id: 'semantic-five-duties',
+    text: '语义正确性五问对抗义务',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
 ];
+
+// —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——
+// 租约三闸的必含载体不是静态清单，而是「该平台的派发权载体」，由 invariants.mjs 依据现场文件集
+// 按编排拓扑推导：平台存在 <plat>/agents/plan-writer-sp.md（该平台有编排器代理）⇒ 载体＝该 agent
+// 文件；不存在（子代理-only 平台，父会话即编排器）⇒ 载体＝<plat>/AGENTS.md。
+// 旧实现把载体写成平台名硬编码（zcode 单点）叠加 */agents/plan-writer*.md 通配，导致派发义务被要求
+// 在场于 tools: [] 且无派发权的 plan-writer-subagent-sp.md，并使新增平台与拓扑翻转无法自动纳入。
+export const DERIVED_CLAUSES = [
+  { id: 'dispatch-lease', text: '派发去重租约' },
+  { id: 'lease-exclusive-readback', text: '写后立即回读核验首行' },
+  { id: 'lease-identity-entropy', text: '严禁复用固定字面量' },
+];
+
+// 编排拓扑谓词：只描述路径形态，不枚举平台名（新增平台与拓扑翻转自动纳入推导）。
+export const PLATFORM_GOVERNANCE_RE = /^([^/]+)\/AGENTS\.md$/;
+export const PLATFORM_AGENT_FILE_RE = /^([^/]+)\/agents\/[^/]+\.md$/;
+export const ORCHESTRATOR_AGENT_SUFFIX = 'agents/plan-writer-sp.md';
 
 // —— 逐字闸门声明：plan-gate 用不含引号的片段，规避全角引号导致的不可确定比对 ——
 export const GATES = [
