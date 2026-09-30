@@ -8,6 +8,8 @@ import * as invariants from './invariants.mjs';
 const deriveDispatchCarrier = typeof invariants.deriveDispatchCarrier === 'function' ? invariants.deriveDispatchCarrier : () => '<未实现>';
 const unclassifiedPlatformFiles = typeof invariants.unclassifiedPlatformFiles === 'function' ? invariants.unclassifiedPlatformFiles : () => [];
 const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invariants.unscannedRoots : () => [];
+const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? invariants.scanEntryDirNames : (xs) => xs;
+const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
 
 let failures = 0;
@@ -441,5 +443,23 @@ check('assert-report-format-no-semantic-pass-on-shadow',
 check('assert-semantic-pass-full-wiring',
   attackLedger(auditorPlan, { prReviewReportText: PR_NO_SEM }).some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SEMANTIC_PASS'))
   && attackLedger(auditorPlan, { prReviewReportText: SP_PARTIAL_GO }).some((x) => x.msg.includes('semantic-pass-partial-no-go')));
+// 78 SEMANTIC_PASS 结构闸整行锚定：散文提及与行内代码引用不得满足机读行（子串匹配即 fail-open）；
+// 独立整行 SEMANTIC_PASS=done 仍须满足（负控制，防收紧误伤）。
+check('assert-semantic-pass-gate-whole-line-anchored',
+  gv(PR_NO_SEM + '\n审查备注：SEMANTIC_PASS=partial 因五问缺节暂未完成。', 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS'))
+  && gv(PR_NO_SEM + '\n机读行示例：`SEMANTIC_PASS=done`（围栏外行内代码引用不计数）', 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS'))
+  && gv(PR_NO_SEM + '\nSEMANTIC_PASS=done', 'pr-review').length === 0);
+// 79 闸 A 构建产物豁免：node_modules 等本地构建产物根不构成未登记扫描根；真实未登记平台目录仍咬。
+check('assert-scan-entry-ignores-build-artifacts',
+  scanEntryDirNames(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'node_modules', '.kilo', 'newplat']).join(',') === 'kilocode,codebuddy,zcode,skills,newplat'
+  && unscannedRoots(scanEntryDirNames(['node_modules', 'newplat']), ['kilocode', 'codebuddy', 'zcode', 'skills'], ['checks', 'mcp']).join(',') === 'newplat');
+// 80 登记常量单一事实源漂移断言：run.mjs 报错文案引用的常量名必须与代码实参同源。
+check('assert-scan-registry-constants-drift',
+  invariants.SCAN_ROOTS.join(',') === 'kilocode,codebuddy,zcode,skills'
+  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp'
+  && invariants.BUILD_ARTIFACT_ROOTS.join(',') === 'node_modules');
+// 81 入口闸 id 登记：防"删掉 run.mjs 闸调用、汇总与 OK 行静默消失"的接线漂移。
+check('assert-entry-gate-ids-registered',
+  allInvariantIds().includes('unscanned-root-directory') && allInvariantIds().includes('unclassified-platform-file'));
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

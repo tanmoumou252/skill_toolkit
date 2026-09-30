@@ -58,8 +58,12 @@ export const PR_REVIEW_RE = /-pr-review\.md$/;
 // pr-report-semantic-pass-gate：PR 复审报告必含 SEMANTIC_PASS 机读行——三端 pr-reviewer 规程把
 // 「五问缺节 → SEMANTIC_PASS=partial → 禁 GO」定为硬要求，若结构闸不实扫该行，硬要求回落时零红灯，
 // 提示词视图与对账器视图分叉（此机器闸即该分叉的闭环落点）。
+// SEMANTIC_PASS 结构闸项采用整行锚定（与 SEMANTIC_PASS_LINE_RE 同源）：
+// 只有围栏外整行 SEMANTIC_PASS=<值>（容忍冒号说明尾注）才满足结构闸；散文提及或行内代码
+// 引用不构成机读行——子串匹配会被"SEMANTIC_PASS 未完成"类散文冒充（fail-open）。
+export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?$/m;
 export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
-export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, /SEMANTIC_PASS/];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE];
 // semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
 // 结构闸（PR_REVIEW_GATE_RES）只扫子串存在，报告可同写 SEMANTIC_PASS=partial:<缺项> 与 VERDICT: GO 而零违反，
 // 与三端 pr-reviewer「partial 即禁 GO」硬要求分叉；此闸即该分叉的闭环落点。

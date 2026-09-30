@@ -42,6 +42,7 @@ export const STRUCTURAL_IDS = [
 export function allInvariantIds() {
   return [
     ...STRUCTURAL_IDS,
+    ...ENTRY_GATE_IDS,
     ...CLAUSES.map((c) => 'clause-' + c.id),
     ...DERIVED_CLAUSES.map((c) => 'clause-' + c.id),
     ...GATES.map((g) => 'gate-' + g.id),
@@ -100,6 +101,23 @@ export function platformRoots(files) {
 export function unscannedRoots(topLevelDirNames, scanRoots, nonPlatformRoots) {
   const known = new Set([...scanRoots, ...nonPlatformRoots]);
   return topLevelDirNames.filter((n) => !n.startsWith('.') && !known.has(n)).sort();
+}
+
+// —— 扫描根登记常量（机制层单一事实源，run.mjs 与 selftest 共用，防名实漂移）——
+// NON_PLATFORM_ROOTS＝显式登记的非平台工具根；BUILD_ARTIFACT_ROOTS＝gitignore 的本地构建产物
+// 根（如任何 checkout 跑过包管理器都会出现的 node_modules），不构成"未登记平台目录"。
+// 零依赖纪律：不引 child_process 调 git 做 gitignore 语义过滤（子进程使 checks 套件脱离纯函数
+// 可测域、引入平台二进制依赖与输出解析脆弱面），采用显式登记表 + 漂移断言同级兜底。
+export const SCAN_ROOTS = ['kilocode', 'codebuddy', 'zcode', 'skills'];
+export const NON_PLATFORM_ROOTS = ['checks', 'mcp'];
+export const BUILD_ARTIFACT_ROOTS = ['node_modules'];
+export const ENTRY_GATE_IDS = ['unscanned-root-directory', 'unclassified-platform-file'];
+
+// 入口目录名过滤（纯函数）：点目录（内部内存）、显式登记的非平台工具根与本地构建产物根
+// 都不是"未登记扫描根"；其余顶层目录全部进入 unscannedRoots 差集判定。
+export function scanEntryDirNames(topLevelDirNames) {
+  const skip = new Set([...NON_PLATFORM_ROOTS, ...BUILD_ARTIFACT_ROOTS]);
+  return topLevelDirNames.filter((n) => !n.startsWith('.') && !skip.has(n));
 }
 
 // 未登记平台 fail-loud 检测（纯函数，只吃路径，不读磁盘）：平台治理/代理形态路径命中
