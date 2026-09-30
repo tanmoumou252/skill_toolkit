@@ -261,7 +261,7 @@ check('assert-chain-fold-multi-marker',
   && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档')));
 // 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
 const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'GO', ''].join('\n');
-const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', ''].join('\n');
+const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', 'VERDICT: GO', ''].join('\n');
 const gv = (t, k) => { const v = []; checkReportStructureGate(t, k, v); return v; };
 check('assert-structure-gate-clean-ok', gv(SHADOW_OK, 'shadow').length === 0 && gv(PR_OK, 'pr-review').length === 0);
 check('assert-structure-gate-shadow', gv(SHADOW_OK.replace('差集为 0（镜像对账表）', ''), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
@@ -420,7 +420,7 @@ check('assert-carrier-derived-missing-reported-once',
 // 扫描根差集闸：SCAN_ROOTS 硬编码四目录，新顶层平台目录从不被 walk、其文件对全部闸门不存在，
 // 必须在入口大声报错；点目录不构成平台根（内部内存），已登记非平台根（checks/mcp）不误伤。
 check('assert-unscanned-root-directory-detected',
-  unscannedRoots(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'newplat', '.kilo'], ['kilocode', 'codebuddy', 'zcode', 'skills'], ['checks', 'mcp']).join(',') === 'newplat');
+  unscannedRoots(scanEntryDirNames(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'newplat', '.kilo']), ['kilocode', 'codebuddy', 'zcode', 'skills']).join(',') === 'newplat');
 // 未登记平台 fail-loud 闸：平台治理/代理形态路径若未被 CLASSES 登记分类，必须显式检出，
 // 不得被 classify 过滤静默丢弃（静默丢弃=已登记根内新平台文件全部闸门失效且零信号）。
 // 登记三平台与非平台根形态路径为负控制（不误伤）。
@@ -448,7 +448,7 @@ check('assert-semantic-pass-full-wiring',
 check('assert-semantic-pass-gate-whole-line-anchored',
   gv(PR_NO_SEM + '\n审查备注：SEMANTIC_PASS=partial 因五问缺节暂未完成。', 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS'))
   && gv(PR_NO_SEM + '\n机读行示例：`SEMANTIC_PASS=done`（围栏外行内代码引用不计数）', 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS'))
-  && gv(PR_NO_SEM + '\nSEMANTIC_PASS=done', 'pr-review').length === 0);
+  && gv(PR_NO_SEM + '\nSEMANTIC_PASS=done\nVERDICT: GO', 'pr-review').length === 0);
 // 79 闸 A 构建产物豁免：node_modules 等本地构建产物根不构成未登记扫描根；真实未登记平台目录仍咬。
 check('assert-scan-entry-ignores-build-artifacts',
   scanEntryDirNames(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'node_modules', '.kilo', 'newplat']).join(',') === 'kilocode,codebuddy,zcode,skills,newplat'
@@ -461,5 +461,29 @@ check('assert-scan-registry-constants-drift',
 // 81 入口闸 id 登记：防"删掉 run.mjs 闸调用、汇总与 OK 行静默消失"的接线漂移。
 check('assert-entry-gate-ids-registered',
   allInvariantIds().includes('unscanned-root-directory') && allInvariantIds().includes('unclassified-platform-file'));
+// 82 扫描根差集单点过滤：unscannedRoots 只做 SCAN_ROOTS 差集（二元签名钉死，签名回漂即红），
+//   非平台根/构建产物根/点目录的排除收敛于 scanEntryDirNames 单一事实源——入口双处过滤
+//   （NON_PLATFORM_ROOTS 既滤于 scanEntryDirNames 又作死参再传入）即口径漂移面。
+check('assert-unscanned-roots-single-filter-source',
+  unscannedRoots.length === 2
+  && unscannedRoots(scanEntryDirNames(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'node_modules', 'newplat', '.kilo']), ['kilocode', 'codebuddy', 'zcode', 'skills']).join(',') === 'newplat'
+  && scanEntryDirNames(['checks', 'mcp', 'node_modules', '.kilo', 'newplat']).join(',') === 'newplat');
+// 83 SEMANTIC_PASS 机读行尾硬换行容忍：行尾双空格（Markdown 硬换行）不得使机读行漏判；
+//   散文缺行仍必咬（负控制）。
+check('assert-semantic-pass-gate-trailing-hardbreak-tolerated',
+  gv(PR_NO_SEM + '\nSEMANTIC_PASS=done  \nVERDICT: GO', 'pr-review').length === 0
+  && gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS')));
+// 83b 值语义锚定同口径：行尾硬换行的 SEMANTIC_PASS=partial 与 VERDICT: GO 并存仍必咬（末次取值不漏）。
+check('assert-semantic-pass-value-trailing-hardbreak-detected',
+  rvSome(SP_PARTIAL_GO + '  ', 'semantic-pass-partial-no-go'));
+// 84 VERDICT 机读行结构闸：缺 VERDICT 行的 PR 复审报告必判红——checkReportFormat 只消费
+//   shadow 报告、checkSemanticPassVerdict 缺 SEMANTIC_PASS 行时静默跳过，两闸对 pr-review
+//   报告 VERDICT 缺行双失明；含行零违反（负控制），完整接线（attackLedger）同咬。
+const PR_NO_VERDICT = PR_OK.replace('\nVERDICT: GO', '');
+check('assert-pr-report-verdict-gate',
+  gv(PR_NO_VERDICT, 'pr-review').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('VERDICT'))
+  && gv(PR_OK, 'pr-review').length === 0);
+check('assert-pr-report-verdict-gate-wired',
+  attackLedger(auditorPlan, { prReviewReportText: PR_NO_VERDICT }).some((x) => x.msg.includes('VERDICT')));
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

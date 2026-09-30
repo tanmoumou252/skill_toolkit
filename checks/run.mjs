@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import {
   allInvariantIds,
   classify,
-  NON_PLATFORM_ROOTS,
   runAll,
   SCAN_ROOTS,
   scanEntryDirNames,
@@ -41,7 +40,7 @@ const pushGate = (id, p, msg) => violations.push({ id, path: p, msg });
 const entryDirNames = scanEntryDirNames(
   fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name),
 );
-for (const r of unscannedRoots(entryDirNames, SCAN_ROOTS, NON_PLATFORM_ROOTS)) {
+for (const r of unscannedRoots(entryDirNames, SCAN_ROOTS)) {
   pushGate('unscanned-root-directory', r, '顶层目录未登记扫描根或非平台根（SCAN_ROOTS/NON_PLATFORM_ROOTS），其下文件全部闸门不可达——新平台须显式登记 SCAN_ROOTS 与 CLASSES/键集，非平台工具目录须显式登记 NON_PLATFORM_ROOTS，本地构建产物根须显式登记 BUILD_ARTIFACT_ROOTS');
 }
 const allFiles = abs

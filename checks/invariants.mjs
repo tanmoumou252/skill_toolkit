@@ -97,9 +97,10 @@ export function platformRoots(files) {
 
 // 扫描根差集（纯函数，只吃目录名数组）：SCAN_ROOTS 硬编码意味着新顶层平台目录从不被 walk、
 // 其文件对全部闸门不可达；本函数把"未登记顶层目录"显式化，由扫描入口大声报错（fail-loud）。
-// 点目录（. 开头的内部内存）与非平台工具根（checks/mcp 等显式登记者）不触发。
-export function unscannedRoots(topLevelDirNames, scanRoots, nonPlatformRoots) {
-  const known = new Set([...scanRoots, ...nonPlatformRoots]);
+// 点目录（. 开头的内部内存）不触发；非平台工具根与本地构建产物根由入口经 scanEntryDirNames
+// 单点过滤后再传入——本函数只做 SCAN_ROOTS 差集，不重复登记非平台根（双处过滤即口径漂移面）。
+export function unscannedRoots(topLevelDirNames, scanRoots) {
+  const known = new Set(scanRoots);
   return topLevelDirNames.filter((n) => !n.startsWith('.') && !known.has(n)).sort();
 }
 
