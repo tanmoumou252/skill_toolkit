@@ -64,10 +64,16 @@ export const PR_REVIEW_RE = /-pr-review\.md$/;
 // 行尾 [ \t]*：Markdown 硬换行（行尾双空格）不得使机读行漏判；容忍面不含 \r（行切分已消化），
 // 行尾出现 [ \t] 之外的续写仍不满足机读行。
 export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
-// pr-report-verdict-gate：VERDICT 结构闸项（pr-review 侧）——缺 VERDICT 行的 PR 复审报告必须判红：checkReportFormat
-// 只消费 shadow 报告，checkSemanticPassVerdict 在缺 SEMANTIC_PASS 行时静默跳过，两闸对
-// pr-review 报告的 VERDICT 缺行双失明；本闸即该盲区的闭环落点。行尾 [ \t]* 与 SEMANTIC_PASS 同口径。
-export const VERDICT_GATE_RE = /^VERDICT:[ \t]*(?:GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/m;
+// pr-report-verdict-gate：VERDICT 结构闸项（pr-review 侧）——缺 VERDICT 行的 PR 复审报告必须判红：
+//   checkReportFormat 只消费 shadow 报告，checkSemanticPassVerdict 在缺 SEMANTIC_PASS 行时静默跳过，
+//   两闸对 pr-review 报告的 VERDICT 缺行双失明；本闸即该盲区的闭环落点。行尾 [ \t]* 与 SEMANTIC_PASS 同口径。
+// verdict-line-single-source-gate：VERDICT 整行锚定的单一事实源——行级取值正则 VERDICT_LINE_RE（捕获组
+//   m[1]＝判定值，无 /m，供 lastAnchoredLine 逐行取值）与结构闸 VERDICT_GATE_RE（/m，整段文本存在性
+//   判定）由同一 source 派生。旧形态为三份复制（结构闸非捕获 /m + checkSemanticPassVerdict / checkReportFormat
+//   两处内联捕获版），口径靠人工对齐：改结构闸则值语义闸静默跳过（partial+GO 漏判）、只改内联两处则
+//   结构闸假红；单源派生后任一消费点与事实源恒同步，漂移面收敛为零。
+export const VERDICT_LINE_RE = /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/;
+export const VERDICT_GATE_RE = new RegExp(VERDICT_LINE_RE.source, 'm');
 export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
 export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE];
 // semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
@@ -180,7 +186,7 @@ export function checkSemanticPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
   if (!semHit) return;
-  const verdictHit = lastAnchoredLine(reportText, /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/);
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
   if (verdictHit && verdictHit.m[1] === 'GO' && semHit.m[1] !== 'done') {
     v.push({ msg: 'SEMANTIC_PASS=' + semHit.m[1] + ' 非 done 却与 VERDICT: GO 并存：五问未全部通过严禁出具 GO（semantic-pass-partial-no-go）' });
   }
@@ -211,9 +217,12 @@ export function checkReportFormat(reportText, v) {
   if (unclosed.length > 0) {
     v.push({ msg: '复审报告含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：其后内容被整段掩蔽，格式行与攻击行判定不可信' });
   }
-  const atkHit = lastAnchoredLine(reportText, /^ATTACKS=(\d+)$/);
-  const penHit = lastAnchoredLine(reportText, /^PENETRATIONS=(\d+)$/);
-  const verdictHit = lastAnchoredLine(reportText, /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/);
+  // report-format-trailing-hardbreak-gate：ATTACKS/PENETRATIONS 格式行行尾 [ \t]* 容忍——Markdown 硬换行
+  //   （行尾双空格）不得使合法机读行漏判（fail-closed 假红）；容忍面严格限定 [ \t]*，行尾出现 [ \t]
+  //   之外的续写（ATTACKS=2x）仍不满足格式行。VERDICT 行取值锚定复用 VERDICT_LINE_RE 单源。
+  const atkHit = lastAnchoredLine(reportText, /^ATTACKS=(\d+)[ \t]*$/);
+  const penHit = lastAnchoredLine(reportText, /^PENETRATIONS=(\d+)[ \t]*$/);
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
   if (!atkHit) v.push({ msg: '复审报告缺 ATTACKS= 行锚定格式行（围栏外独立整行）' });
   if (!penHit) v.push({ msg: '复审报告缺 PENETRATIONS= 行锚定格式行（围栏外独立整行）' });
   if (!verdictHit) v.push({ msg: '复审报告缺 VERDICT: 行锚定格式行（围栏外独立整行）' });

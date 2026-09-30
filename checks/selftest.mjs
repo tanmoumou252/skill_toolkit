@@ -11,6 +11,12 @@ const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invaria
 const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? invariants.scanEntryDirNames : (xs) => xs;
 const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
+// VERDICT 单源常量以命名空间 + instanceof 守卫存取：红灯阶段 VERDICT_LINE_RE 尚未导出，直接命名
+// 导入会在 ESM 链接期抛 SyntaxError，把「逐条断言真红」降级成「脚手架崩溃假红」（四维语义真红
+// [REJECT-FAKE]）；typeof null === 'object' 故用 instanceof RegExp 判定，实现落盘后即直取真常量。
+import * as attackLedgerNs from './attack-ledger.mjs';
+const VERDICT_LINE_RE = attackLedgerNs.VERDICT_LINE_RE instanceof RegExp ? attackLedgerNs.VERDICT_LINE_RE : null;
+const VERDICT_GATE_RE = attackLedgerNs.VERDICT_GATE_RE instanceof RegExp ? attackLedgerNs.VERDICT_GATE_RE : null;
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -452,7 +458,7 @@ check('assert-semantic-pass-gate-whole-line-anchored',
 // 79 闸 A 构建产物豁免：node_modules 等本地构建产物根不构成未登记扫描根；真实未登记平台目录仍咬。
 check('assert-scan-entry-ignores-build-artifacts',
   scanEntryDirNames(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'node_modules', '.kilo', 'newplat']).join(',') === 'kilocode,codebuddy,zcode,skills,newplat'
-  && unscannedRoots(scanEntryDirNames(['node_modules', 'newplat']), ['kilocode', 'codebuddy', 'zcode', 'skills'], ['checks', 'mcp']).join(',') === 'newplat');
+  && unscannedRoots(scanEntryDirNames(['node_modules', 'newplat']), ['kilocode', 'codebuddy', 'zcode', 'skills']).join(',') === 'newplat');
 // 80 登记常量单一事实源漂移断言：run.mjs 报错文案引用的常量名必须与代码实参同源。
 check('assert-scan-registry-constants-drift',
   invariants.SCAN_ROOTS.join(',') === 'kilocode,codebuddy,zcode,skills'
@@ -473,9 +479,14 @@ check('assert-unscanned-roots-single-filter-source',
 check('assert-semantic-pass-gate-trailing-hardbreak-tolerated',
   gv(PR_NO_SEM + '\nSEMANTIC_PASS=done  \nVERDICT: GO', 'pr-review').length === 0
   && gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS')));
-// 83b 值语义锚定同口径：行尾硬换行的 SEMANTIC_PASS=partial 与 VERDICT: GO 并存仍必咬（末次取值不漏）。
+// 83b 值语义锚定同口径（双机读行行尾硬换行）：SEMANTIC_PASS 行与 VERDICT 行行尾各带空白时仍必咬——
+//   SEMANTIC_PASS_LINE_RE 或 VERDICT 行锚定任一行尾容忍回退，semHit/verdictHit 即为 null、闸静默跳过，
+//   本断言立即转红。SEMANTIC_PASS 取裸值形态（无冒号尾注）是回退可观测的前提：(?::.*)? 会把尾注与
+//   行尾空白一并吞掉，带尾注夹具对行尾容忍回退零咬合（把空格插在冒号前更会 NO MATCH 永久红）；
+//   无空白形态负控制由本断言第二子句（SP_PARTIAL_GO＝冒号尾注、行尾无空白）承担。
 check('assert-semantic-pass-value-trailing-hardbreak-detected',
-  rvSome(SP_PARTIAL_GO + '  ', 'semantic-pass-partial-no-go'));
+  rvSome(REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial  \nVERDICT: GO  '), 'semantic-pass-partial-no-go')
+  && rvSome(SP_PARTIAL_GO, 'semantic-pass-partial-no-go'));
 // 84 VERDICT 机读行结构闸：缺 VERDICT 行的 PR 复审报告必判红——checkReportFormat 只消费
 //   shadow 报告、checkSemanticPassVerdict 缺 SEMANTIC_PASS 行时静默跳过，两闸对 pr-review
 //   报告 VERDICT 缺行双失明；含行零违反（负控制），完整接线（attackLedger）同咬。
@@ -485,5 +496,21 @@ check('assert-pr-report-verdict-gate',
   && gv(PR_OK, 'pr-review').length === 0);
 check('assert-pr-report-verdict-gate-wired',
   attackLedger(auditorPlan, { prReviewReportText: PR_NO_VERDICT }).some((x) => x.msg.includes('VERDICT')));
+// 85 报告格式行行尾硬换行（report-format-trailing-hardbreak-gate）：ATTACKS/PENETRATIONS 行尾空白
+//   （Markdown 硬换行）不得使格式行漏判（与 SEMANTIC_PASS/VERDICT 行尾 [ \t]* 同口径，消除 fail-closed
+//   假红）；容忍面只收 [ \t]，行尾续写非空白字符仍必咬（负控制，防容忍面过宽吞掉非法续写）。
+check('assert-report-format-attacks-trailing-hardbreak-tolerated',
+  rv([atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2  ', 'PENETRATIONS=0  ', 'VERDICT: GO'].join('\n')).length === 0
+  && rvSome([atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2x', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '缺 ATTACKS='));
+// 86 VERDICT 整行锚定单一事实源（verdict-line-single-source-gate）：结构闸 VERDICT_GATE_RE 与取值闸
+//   消费的 VERDICT_LINE_RE 必须同源（source 相等、仅 /m 差异）——三份复制漂移时改结构闸则值语义闸
+//   静默跳过（partial+GO 漏判）、只改内联两处则结构闸假红；单源派生后捕获组契约（m[1]＝判定值）与
+//   取值枚举严格性（BOGUS 不匹配）由本断言钉死。
+check('assert-verdict-line-single-source',
+  !!VERDICT_LINE_RE && !!VERDICT_GATE_RE
+  && VERDICT_LINE_RE.source === VERDICT_GATE_RE.source
+  && VERDICT_GATE_RE.flags.includes('m') && !VERDICT_LINE_RE.flags.includes('m')
+  && ('VERDICT: NO-GO'.match(VERDICT_LINE_RE) || [])[1] === 'NO-GO'
+  && 'VERDICT: BOGUS'.match(VERDICT_LINE_RE) === null);
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
