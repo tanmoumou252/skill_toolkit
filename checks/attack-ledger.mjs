@@ -189,6 +189,9 @@ export function countAttackRows(reportText) {
   return hits;
 }
 
+// 职责切分（勿合并）：本函数只消费 shadow 复审报告，不校验 SEMANTIC_PASS 行——shadow 报告
+// 合法缺该行；pr-review 报告缺行由结构闸 PR_REVIEW_GATE_RES 判红，取值语义（partial/unknown
+// 与 GO 并存）由 checkSemanticPassVerdict 判红。三闸互斥不重叠，合并即对 shadow 侧产生假红。
 export function checkReportFormat(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。

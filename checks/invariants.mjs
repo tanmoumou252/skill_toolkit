@@ -94,6 +94,24 @@ export function platformRoots(files) {
   return [...roots].sort();
 }
 
+// 扫描根差集（纯函数，只吃目录名数组）：SCAN_ROOTS 硬编码意味着新顶层平台目录从不被 walk、
+// 其文件对全部闸门不可达；本函数把"未登记顶层目录"显式化，由扫描入口大声报错（fail-loud）。
+// 点目录（. 开头的内部内存）与非平台工具根（checks/mcp 等显式登记者）不触发。
+export function unscannedRoots(topLevelDirNames, scanRoots, nonPlatformRoots) {
+  const known = new Set([...scanRoots, ...nonPlatformRoots]);
+  return topLevelDirNames.filter((n) => !n.startsWith('.') && !known.has(n)).sort();
+}
+
+// 未登记平台 fail-loud 检测（纯函数，只吃路径，不读磁盘）：平台治理/代理形态路径命中
+// 通用拓扑正则却未被 CLASSES 登记分类 ⇒ 已扫描根内该类文件在 classify 过滤面被静默
+// 丢弃、全部闸门失效；本函数把该态显式化，由扫描入口大声报错（fail-loud）。
+// 触发域收窄声明：本函数输入面=已扫描根内文件；未登记顶层目录由 unscannedRoots 先行拦截。
+export function unclassifiedPlatformFiles(files) {
+  return files
+    .filter((f) => (PLATFORM_GOVERNANCE_RE.test(f.path) || PLATFORM_AGENT_FILE_RE.test(f.path)) && classify(f.path) === null)
+    .map((f) => f.path);
+}
+
 // 派生规则：平台存在编排器代理文件 <plat>/agents/plan-writer-sp.md ⇒ 派发权载体＝该 agent 文件；
 // 否则（子代理-only 平台，父会话即编排器）⇒ 派发权载体＝<plat>/AGENTS.md。精确等值判定，
 // 不用「前缀通配」——前缀通配会把派发义务扩散到无派发权的兄弟子代理文件上。
@@ -282,14 +300,15 @@ export function runAll(files) {
   // 不采用平台名硬编码，也不用 */agents/plan-writer*.md 通配（该通配会把派发义务要求在场于
   // tools: [] 且无派发权的 plan-writer-subagent-sp.md）。载体缺场即判红（fail-closed）：
   // 治理文件被删或新平台漏配时，租约义务不得静默消失（残差竞态会随之复发）。
-  for (const c of DERIVED_CLAUSES) {
-    for (const platform of platformRoots(files)) {
-      const carrier = deriveDispatchCarrier(files, platform);
-      const hit = files.filter((f) => f.path === carrier);
-      if (hit.length === 0) {
-        push('dispatch-carrier-derived', carrier, `派发权载体缺场（平台 ${platform}）：${carrier}`);
-        continue;
-      }
+  for (const platform of platformRoots(files)) {
+    const carrier = deriveDispatchCarrier(files, platform);
+    const hit = files.filter((f) => f.path === carrier);
+    if (hit.length === 0) {
+      // 缺场去重：每平台只报 1 条（旧实现随条款循环重复上报 3 条同路径违规）。
+      push('dispatch-carrier-derived', carrier, `派发权载体缺场（平台 ${platform}）：${carrier}`);
+      continue;
+    }
+    for (const c of DERIVED_CLAUSES) {
       for (const f of hit) {
         if (!f.text.includes(c.text)) push('clause-' + c.id, f.path, `缺少必含条款: ${c.text}`);
       }

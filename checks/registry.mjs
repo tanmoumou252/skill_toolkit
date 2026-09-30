@@ -14,6 +14,11 @@
 export const PLATFORMS = ['kilocode', 'codebuddy', 'zcode'];
 
 // —— 扫描面分类 ——
+// 登记制局限明示：本表与 platformOf 的平台名硬编码是有意登记制，非疏漏——AGENT_KEYS/
+// PRIVATE_AGENT_KEYS 为逐平台键集，新平台键集不可自动推导；若把正则放开为通配，未知平台
+// 文件会进入私有键互斥检查而产生假红。新增平台必须显式登记本表、键集与 run.mjs 的
+// SCAN_ROOTS；未登记的顶层目录与未分类的平台治理/代理文件分别由 run.mjs 的
+// unscanned-root-directory 与 unclassified-platform-file 检查大声报错（fail-loud），不得静默丢弃。
 export const CLASSES = [
   { id: 'platform-governance', re: /^(kilocode|codebuddy|zcode)\/AGENTS\.md$/, frontmatter: 'absent' },
   { id: 'platform-agent', re: /^(kilocode|codebuddy|zcode)\/agents\/[^/]+\.md$/, frontmatter: 'present' },

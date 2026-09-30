@@ -6,6 +6,8 @@ import { runAll, scanFences } from './invariants.mjs';
 // 降级成「脚手架崩溃假红」（四维语义真红的 [REJECT-FAKE]）；实现落盘后本守卫即直取真函数。
 import * as invariants from './invariants.mjs';
 const deriveDispatchCarrier = typeof invariants.deriveDispatchCarrier === 'function' ? invariants.deriveDispatchCarrier : () => '<未实现>';
+const unclassifiedPlatformFiles = typeof invariants.unclassifiedPlatformFiles === 'function' ? invariants.unclassifiedPlatformFiles : () => [];
+const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invariants.unscannedRoots : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
 
 let failures = 0;
@@ -408,5 +410,36 @@ const leaseAllGood = [
 check('assert-carrier-derived-positive-control',
   runAll(leaseAllGood).filter((v) => LEASE_IDS.includes(v.id)).length === 0,
   'ids=' + runAll(leaseAllGood).filter((v) => LEASE_IDS.includes(v.id)).map((v) => v.id + '@' + v.path).join(','));
+// 缺载体去重闸：同一平台派生载体缺场只报 1 条 dispatch-carrier-derived（旧实现随条款循环
+// 逐条重复上报 3 条同路径违规，属噪声非信息）。
+check('assert-carrier-derived-missing-reported-once',
+  runAll([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: zcodeSubagentFm }])
+    .filter((v) => v.id === 'dispatch-carrier-derived' && v.path === 'zcode/AGENTS.md').length === 1);
+// 扫描根差集闸：SCAN_ROOTS 硬编码四目录，新顶层平台目录从不被 walk、其文件对全部闸门不存在，
+// 必须在入口大声报错；点目录不构成平台根（内部内存），已登记非平台根（checks/mcp）不误伤。
+check('assert-unscanned-root-directory-detected',
+  unscannedRoots(['kilocode', 'codebuddy', 'zcode', 'skills', 'checks', 'mcp', 'newplat', '.kilo'], ['kilocode', 'codebuddy', 'zcode', 'skills'], ['checks', 'mcp']).join(',') === 'newplat');
+// 未登记平台 fail-loud 闸：平台治理/代理形态路径若未被 CLASSES 登记分类，必须显式检出，
+// 不得被 classify 过滤静默丢弃（静默丢弃=已登记根内新平台文件全部闸门失效且零信号）。
+// 登记三平台与非平台根形态路径为负控制（不误伤）。
+check('assert-unclassified-platform-file-detected',
+  unclassifiedPlatformFiles([
+    { path: 'foo/AGENTS.md', text: 'x' },
+    { path: 'foo/agents/bar.md', text: 'x' },
+    { path: 'zcode/AGENTS.md', text: 'x' },
+    { path: 'zcode/agents/plan-writer-subagent-sp.md', text: 'x' },
+    { path: 'skills/demo/SKILL.md', text: 'x' },
+    { path: 'foo/notes.md', text: 'x' },
+    { path: 'a/b/AGENTS.md', text: 'x' },
+  ]).join(',') === 'foo/AGENTS.md,foo/agents/bar.md');
+// 语义五问机读行职责切分负控：checkReportFormat（shadow 侧）不得对 SEMANTIC_PASS 缺行误伤
+// （该行存在性归 pr-review 结构闸、值语义归 semantic-pass-partial-no-go，shadow 报告合法缺行）。
+check('assert-report-format-no-semantic-pass-on-shadow',
+  rv(REPORT_OK).filter((x) => x.msg.includes('SEMANTIC_PASS')).length === 0);
+// 全链接线负控：PR 复审报告缺 SEMANTIC_PASS 行经 attackLedger 完整接线必咬（结构闸），
+// partial+GO 经完整接线必咬（值语义）——两闸职责互斥、各自可达、无一回落为零红灯。
+check('assert-semantic-pass-full-wiring',
+  attackLedger(auditorPlan, { prReviewReportText: PR_NO_SEM }).some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SEMANTIC_PASS'))
+  && attackLedger(auditorPlan, { prReviewReportText: SP_PARTIAL_GO }).some((x) => x.msg.includes('semantic-pass-partial-no-go')));
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
