@@ -149,6 +149,13 @@ export const CLAUSES = [
     ],
   },
   {
+    id: 'direct-dispatch-header',
+    text: '直连派发参数头',
+    // 锁定 ZCode 侧"无主计划直连派发也必须现构参数头"的义务文本。
+    // 散文面只做必含（registry.mjs:9-10），不锁措辞、不锁出现次数。
+    expect: [/^zcode\/AGENTS\.md$/, /^skills\/zcode-plan-first\/SKILL\.md$/],
+  },
+  {
     id: 'invariant-enumeration',
     text: '不变量枚举',
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],

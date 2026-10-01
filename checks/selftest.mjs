@@ -94,6 +94,40 @@ check(
   has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: [...zcFm, '无任何条款', ''].join('\n') }], 'clause-no-green-no-start', 'zcode/agents/plan-writer-subagent-sp.md'),
 );
 
+// 11b) 直连派发参数头条款：缺失必咬（正控制）/ 在场不误报（负控制）/ 作用域锁死不溢出
+// 该条款锁定"zcode/AGENTS.md 与 skills/zcode-plan-first/SKILL.md 必须写明直连派发参数头义务"，
+// 防止快通道/分支级直连审查场景退化为无参数头派发。
+// 红绿账目（对照 checks/selftest.mjs 既有惯例，负控制空桩即 PASS 不得据其判红灯充足）：
+//   登记前（registry.mjs 无该 id，runAll 永不产生该 violation，has() 恒返 false）：
+//     clause-direct-dispatch-header-detected 必 FAIL（[PASS-RED] 断言比对失败）＝真红来源；
+//     clause-direct-dispatch-header-clean-not-flagged 与 clause-direct-dispatch-header-scope-locked
+//     为负控制类，空桩即 PASS，不得据其判定红灯充足。
+//   登记后：三条全绿。
+const ZC_AGENTS = 'zcode/AGENTS.md';
+const ZC_SKILL = 'skills/zcode-plan-first/SKILL.md';
+const ddAgentsOk = ['## 直连派发参数头铁律（CRITICAL: Direct Dispatch Header）', '', '派发 prompt 必须自行构造直连派发参数头。', ''].join('\n');
+const ddSkillOk = ['---', 'name: zcode-plan-first', 'description: d', '---', '', '快通道直连派发必须现构直连派发参数头。', ''].join('\n');
+check(
+  'clause-direct-dispatch-header-detected',
+  has([{ path: ZC_AGENTS, text: '轨道 A：参数以主计划步骤 N 已固化的完整派发串逐字取用。' }], 'clause-direct-dispatch-header', ZC_AGENTS)
+    && has([{ path: ZC_SKILL, text: [...skillFm, '快通道：配套约束不变，分派 prompt 必须声明唯一写入路径，越界即驳回重派。', ''].join('\n') }], 'clause-direct-dispatch-header', ZC_SKILL),
+);
+check(
+  'clause-direct-dispatch-header-clean-not-flagged',
+  !has([{ path: ZC_AGENTS, text: ddAgentsOk }], 'clause-direct-dispatch-header', ZC_AGENTS)
+    && !has([{ path: ZC_SKILL, text: ddSkillOk }], 'clause-direct-dispatch-header', ZC_SKILL),
+);
+// 作用域锁死：expect 刻意只收 ZCode 两份（kilocode 主代理人格即可编辑，无同款缺口），
+// 一旦被放宽到三端，本断言立即转红——这是"收窄 expect 以避免范围逃逸"的机器守卫。
+// 夹具含同款缺口文案但不在 expect 内；夹具会触发其他 id 的违反，断言按 id 过滤不受干扰。
+check(
+  'clause-direct-dispatch-header-scope-locked',
+  !runAll([
+    { path: 'kilocode/AGENTS.md', text: '轨道 A：prompt 参数逐字取用主计划步骤 N 已固化的完整派发串。' },
+    { path: 'codebuddy/AGENTS.md', text: '轨道 A：prompt 参数逐字取用主计划步骤 N 已固化的完整派发串。' },
+  ]).some((v) => v.id === 'clause-direct-dispatch-header'),
+);
+
 // 12) 历史缺陷回放：同文件内 1 处带 -uall、1 处不带 → 配对等式必须检出
 const histBad = [
   '---', 'mode: subagent', 'description: d', 'options:', '  id: plan-reviewer-sp', 'permission:', '  bash:', '    "*": deny', '---', '',
