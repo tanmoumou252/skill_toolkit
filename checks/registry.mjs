@@ -225,6 +225,36 @@ export const CLAUSES = [
     text: 'DUPLICATE_DISPATCH',
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
+  {
+    id: 'dispatch-mode-violated-marker',
+    text: 'DISPATCH_MODE_VIOLATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'gutting-suspect-marker',
+    text: 'GUTTING_SUSPECT',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'zero-finding-escalated-marker',
+    text: 'ZERO_FINDING_ESCALATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-pass-machine-line',
+    text: 'SHADOW_PASS=',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'truth-pass-machine-line',
+    text: 'TRUTH_PASS=',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'fixture-rerun-blocked-marker',
+    text: 'FIXTURE_RERUN=BLOCKED_READONLY',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
 ];
 
 // —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——

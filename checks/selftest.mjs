@@ -300,8 +300,8 @@ check('assert-chain-fold-multi-marker',
   && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('超上限'))
   && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档')));
 // 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
-const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'GO', ''].join('\n');
-const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', 'VERDICT: GO', ''].join('\n');
+const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'SHADOW_PASS=done', 'GO', ''].join('\n');
+const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', 'TRUTH_PASS=done', 'VERDICT: GO', ''].join('\n');
 const gv = (t, k) => { const v = []; checkReportStructureGate(t, k, v); return v; };
 check('assert-structure-gate-clean-ok', gv(SHADOW_OK, 'shadow').length === 0 && gv(PR_OK, 'pr-review').length === 0);
 check('assert-structure-gate-shadow', gv(SHADOW_OK.replace('差集为 0（镜像对账表）', ''), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
@@ -360,7 +360,7 @@ check('assert-latest-companion-exclude-gate',
   && isPlanFilename('commit_msg.md') === false);
 // 66 PR 复审报告机读行结构闸（pr-report-semantic-pass-gate）：三端 pr-reviewer 规程硬要求
 //   SEMANTIC_PASS=done|partial 行；缺行必咬、含行零违反（partial 禁 GO 不得停留在散文面）。
-const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', ''].join('\n');
+const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'TRUTH_PASS=done', ''].join('\n');
 check('assert-pr-report-semantic-pass-gate',
   gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('结构闸缺失')) && gv(PR_OK, 'pr-review').length === 0);
 
@@ -546,5 +546,46 @@ check('assert-verdict-line-single-source',
   && VERDICT_GATE_RE.flags.includes('m') && !VERDICT_LINE_RE.flags.includes('m')
   && ('VERDICT: NO-GO'.match(VERDICT_LINE_RE) || [])[1] === 'NO-GO'
   && 'VERDICT: BOGUS'.match(VERDICT_LINE_RE) === null);
+// 87-93 真相源四问机读行（TRUTH_PASS）与影子侧完整性行（SHADOW_PASS）的机器闸：
+//   结构闸（行存在性，pr-report-truth-pass-gate / shadow-report-shadow-pass-gate）与
+//   值语义闸（truth-pass-partial-no-go / shadow-pass-partial-no-go）双层，职责互斥不重叠。
+//   红灯期四枚正则在 attack-ledger.mjs 尚未导出，断言经既有 gv/rv/attackLedger 通道实跑比对而红，
+//   不依赖 ESM 命名导入，故不存在链接期 SyntaxError 冒充真红（[REJECT-FAKE]）的路径。
+// 87 PR 侧结构闸：缺 TRUTH_PASS 行必判红；含行零违反（负控制）。
+const PR_NO_TRUTH = PR_OK.replace('\nTRUTH_PASS=done', '');
+check('assert-truth-pass-gate',
+  gv(PR_NO_TRUTH, 'pr-review').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('TRUTH_PASS'))
+  && gv(PR_OK, 'pr-review').length === 0);
+// 88 PR 侧值语义闸：非 done × GO 并存必判红；done × GO 与 非 done × NO-GO 零违反（负控制）。
+const TP_PARTIAL_GO = PR_OK.replace('TRUTH_PASS=done', 'TRUTH_PASS=partial:夹具保真度对账（节九未完成）');
+const prWired = (text) => attackLedger(auditorPlan, { prReviewReportText: text });
+const prWiredSome = (text, frag) => prWired(text).some((x) => x.msg.includes(frag));
+check('assert-truth-pass-partial-no-go',
+  prWiredSome(TP_PARTIAL_GO, 'truth-pass-partial-no-go')
+  && !prWiredSome(TP_PARTIAL_GO.replace('VERDICT: GO', 'VERDICT: NO-GO'), 'truth-pass-partial-no-go')
+  && !prWiredSome(PR_OK, 'truth-pass-partial-no-go'));
+// 89 PR 侧结构闸整行锚定（负控制）：散文提及与围栏外行内代码引用不得满足 TRUTH_PASS 机读行。
+check('assert-truth-pass-gate-whole-line-anchored',
+  gv(PR_NO_TRUTH + '\n审查备注：TRUTH_PASS=partial 因四问缺节暂未完成。', 'pr-review').some((x) => x.msg.includes('TRUTH_PASS'))
+  && gv(PR_NO_TRUTH + '\n机读行示例：`TRUTH_PASS=done`（行内代码引用不计数）', 'pr-review').some((x) => x.msg.includes('TRUTH_PASS')));
+// 90 PR 侧结构闸行尾硬换行容忍（负控制）：合法机读行行尾双空格不得漏判。
+check('assert-truth-pass-gate-trailing-hardbreak-tolerated',
+  gv(PR_NO_TRUTH + '\nTRUTH_PASS=done  ', 'pr-review').length === 0);
+// 91 影子侧结构闸：缺 SHADOW_PASS 行必判红；含行零违反（负控制）。
+const SHADOW_NO_SP = SHADOW_OK.replace('\nSHADOW_PASS=done', '');
+check('assert-shadow-pass-gate',
+  gv(SHADOW_NO_SP, 'shadow').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SHADOW_PASS'))
+  && gv(SHADOW_OK, 'shadow').length === 0);
+// 92 影子侧值语义闸：非 done × GO 并存必判红；done × GO 零违反（负控制）；经 checkReportFormat 实跑。
+const SP_SHADOW_PARTIAL_GO = [atkRow(1), atkRow(2), '', RECEIPT, 'SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+check('assert-shadow-pass-partial-no-go',
+  rvSome(SP_SHADOW_PARTIAL_GO, 'shadow-pass-partial-no-go')
+  && rv(SP_SHADOW_PARTIAL_GO.replace('SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）', 'SHADOW_PASS=done')).length === 0);
+// 93 跨侧职责切分负控制（Global Constraint 4）：shadow 报告缺 TRUTH_PASS 不判红，PR 报告缺 SHADOW_PASS 不判红。
+check('assert-report-format-no-cross-side-pass-line',
+  rv(REPORT_OK).filter((x) => x.msg.includes('TRUTH_PASS')).length === 0
+  && rv(REPORT_OK).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0
+  && attackLedger(auditorPlan, { prReviewReportText: PR_OK }).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0);
+
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

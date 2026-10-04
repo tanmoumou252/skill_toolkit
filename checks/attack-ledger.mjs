@@ -74,8 +74,18 @@ export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
 //   结构闸假红；单源派生后任一消费点与事实源恒同步，漂移面收敛为零。
 export const VERDICT_LINE_RE = /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/;
 export const VERDICT_GATE_RE = new RegExp(VERDICT_LINE_RE.source, 'm');
-export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
-export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE];
+// pr-report-truth-pass-gate / truth-pass-partial-no-go：真相源、读纯度与活性四问的机读行 TRUTH_PASS。
+// 三端 pr-reviewer 规程把「四问缺节 → TRUTH_PASS=partial → 禁 GO」定为硬要求（与 SEMANTIC_PASS 分级同理），
+// 若结构闸不实扫该行、值语义闸不校验 partial×GO，硬要求即回落为纯散文承诺——本组两闸即该分叉的闭环落点。
+// 词法与行尾容忍面与 SEMANTIC_PASS 严格同源（整行锚定 + [ \t]* 硬换行容忍）。
+export const TRUTH_PASS_GATE_RE = /^TRUTH_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
+export const TRUTH_PASS_LINE_RE = /^TRUTH_PASS=([A-Za-z]+)(?::.*)?[ \t]*$/;
+// shadow-report-shadow-pass-gate / shadow-pass-partial-no-go：影子侧完整性行 SHADOW_PASS 的同构两闸。
+// 九条义务逐条结论的完整性位若只由散文承载，人工漏写即静默失效；本组两闸使其成为可咬合的硬位。
+export const SHADOW_PASS_GATE_RE = /^SHADOW_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
+export const SHADOW_PASS_LINE_RE = /^SHADOW_PASS=([A-Za-z]+)(?::.*)?[ \t]*$/;
+export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/, SHADOW_PASS_GATE_RE];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE, TRUTH_PASS_GATE_RE];
 // semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
 // 结构闸（PR_REVIEW_GATE_RES）只扫子串存在，报告可同写 SEMANTIC_PASS=partial:<缺项> 与 VERDICT: GO 而零违反，
 // 与三端 pr-reviewer「partial 即禁 GO」硬要求分叉；此闸即该分叉的闭环落点。
@@ -192,6 +202,30 @@ export function checkSemanticPassVerdict(reportText, v) {
   }
 }
 
+// truth-pass-partial-no-go 闸：机读行 TRUTH_PASS 非 done 与 VERDICT: GO 并存即判红。
+// 缺 TRUTH_PASS 行不在本闸职责内（由结构闸 PR_REVIEW_GATE_RES 判红），故此处不重复计数。
+export function checkTruthPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  const tp = lastAnchoredLine(reportText, TRUTH_PASS_LINE_RE);
+  if (!tp) return;
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
+  if (verdictHit && verdictHit.m[1] === 'GO' && tp.m[1] !== 'done') {
+    v.push({ msg: 'TRUTH_PASS=' + tp.m[1] + ' 非 done 却与 VERDICT: GO 并存：真相源四问未全部通过严禁出具 GO（truth-pass-partial-no-go）' });
+  }
+}
+
+// shadow-pass-partial-no-go 闸：影子侧完整性行 SHADOW_PASS 非 done 与 VERDICT: GO 并存即判红。
+// 该行由 checkReportFormat（shadow 侧）消费；缺行由结构闸 SHADOW_GATE_RES 判红，本闸只判值语义。
+export function checkShadowPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  const sp = lastAnchoredLine(reportText, SHADOW_PASS_LINE_RE);
+  if (!sp) return;
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
+  if (verdictHit && verdictHit.m[1] === 'GO' && sp.m[1] !== 'done') {
+    v.push({ msg: 'SHADOW_PASS=' + sp.m[1] + ' 非 done 却与 VERDICT: GO 并存：影子侧义务未全部履行严禁出具 GO（shadow-pass-partial-no-go）' });
+  }
+}
+
 // 登记攻击行点数：围栏外逐行匹配登记锚，返回 { anchor, seq, line } 序列。
 export function countAttackRows(reportText) {
   const { lines, fenced } = lineView(reportText);
@@ -260,6 +294,8 @@ export function checkReportFormat(reportText, v) {
   }
   // semantic-pass-partial-no-go 闸：值语义交叉校验（结构闸只扫行存在）。
   checkSemanticPassVerdict(reportText, v);
+  // shadow-pass-partial-no-go 闸：影子侧完整性行同构交叉校验（同上，只判值语义）。
+  checkShadowPassVerdict(reportText, v);
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
@@ -320,8 +356,8 @@ export function checkReportStructureGate(text, kind, v) {
   const outside = lines.map((l, i) => (fenced[i] ? '' : l)).join('\n');
   const gates = kind === 'shadow' ? SHADOW_GATE_RES : PR_REVIEW_GATE_RES;
   const labels = kind === 'shadow'
-    ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对']
-    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）', '终局判定机读行（VERDICT）'];
+    ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对', '影子侧完整性行（SHADOW_PASS）']
+    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）', '终局判定机读行（VERDICT）', '真相源四问机读行（TRUTH_PASS）'];
   for (let i = 0; i < gates.length; i++) {
     if (!gates[i].test(outside)) v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告结构闸缺失：' + labels[i] });
   }
@@ -345,6 +381,8 @@ export function attackLedger(planText, opts = {}) {
     checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
     // PR 复审报告的语义五问机读行与终局判定交叉校验（结构闸只扫行存在，不校验值语义）。
     checkSemanticPassVerdict(opts.prReviewReportText, v);
+    // PR 复审报告的真相源四问机读行同构交叉校验（同上，只判值语义）。
+    checkTruthPassVerdict(opts.prReviewReportText, v);
   }
   return v;
 }
