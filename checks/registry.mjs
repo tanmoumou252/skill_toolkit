@@ -185,6 +185,46 @@ export const CLAUSES = [
     text: '语义正确性五问对抗义务',
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
+  {
+    id: 'truth-source-four-duties',
+    text: '真相源、读纯度与活性四问',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'depth-basis-machine-line',
+    text: 'DEPTH_BASIS=',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'close-by-adding-not-gutting',
+    text: 'Critical 闭环禁缩范围',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'independence-depth-not-delegable',
+    text: '独立性与分级不可覆写',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'dispatch-contract-violation-marker',
+    text: 'DISPATCH_CONTRACT_VIOLATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-errata-channel',
+    text: '## ERRATA',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-write-surface',
+    text: '写面单一性',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-duplicate-dispatch',
+    text: 'DUPLICATE_DISPATCH',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
 ];
 
 // —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——
