@@ -1,5 +1,5 @@
 ---
-id: body-zcode-plan-writer-subagent-sp
+id: body-zcode-plan-writer
 expects: auto
 slots: []
 ---
