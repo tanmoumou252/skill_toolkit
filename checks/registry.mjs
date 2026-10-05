@@ -185,6 +185,116 @@ export const CLAUSES = [
     text: '语义正确性五问对抗义务',
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
+  {
+    id: 'truth-source-four-duties',
+    text: '真相源、读纯度与活性四问',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'truth-source-anti-lookup',
+    text: '真相源反查（判据必须落在权威源上）',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'read-purity-multi-truth-source',
+    text: '读纯度与多真相源',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'liveness-rollback',
+    text: '异常路径回滚与持锁活性',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'fixture-fidelity-audit',
+    text: '夹具保真度对账',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'four-question-result-table',
+    text: '真相源、读纯度与活性四问节结果表',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'depth-basis-machine-line',
+    text: 'DEPTH_BASIS=',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'close-by-adding-not-gutting',
+    text: 'Critical 闭环禁缩范围',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'independence-depth-not-delegable',
+    text: '独立性与分级不可覆写',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'dispatch-contract-violation-marker',
+    text: 'DISPATCH_CONTRACT_VIOLATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-errata-channel',
+    text: '## ERRATA',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-write-surface',
+    text: '写面单一性',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-duplicate-dispatch',
+    text: 'DUPLICATE_DISPATCH',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'dispatch-mode-violated-marker',
+    text: 'DISPATCH_MODE_VIOLATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'gutting-suspect-marker',
+    text: 'GUTTING_SUSPECT',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'zero-finding-escalated-marker',
+    text: 'ZERO_FINDING_ESCALATED',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'shadow-pass-machine-line',
+    text: 'SHADOW_PASS=',
+    expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'truth-pass-machine-line',
+    text: 'TRUTH_PASS=',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'fixture-rerun-blocked-marker',
+    text: 'FIXTURE_RERUN=BLOCKED_READONLY',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'absent-file-per-item-reason',
+    text: '逐条列出并各给一行缺席理由',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'baseline-path-declared',
+    text: '测试基线文件路径',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'evidence-verb-rerun',
+    text: '先读该基线文件、再逐条复跑其中的每条命令',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
 ];
 
 // —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——

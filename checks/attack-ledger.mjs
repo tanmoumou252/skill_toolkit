@@ -45,7 +45,8 @@ const E_ID_RE = /\bE(?:[-#][A-Za-z0-9]+)?[-#]?\d+\b/g;
 // —— 决策点强校验：链序折叠与报告结构闸 ——
 // 闸名登记（台账 block@ 对账事实源）：chain-fold-boundary / chain-fold-literal / round-int-guard /
 //   chain-fs-listing-only / chain-path-join-root / structure-gate-outside-fence / chain-base-prefix-locked /
-//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped / chain-filter-same-scope
+//   chain-fold-max-marker / chain-report-base-boundary / chain-fold-base-scoped / chain-filter-same-scope /
+//   shadow-text-whole-format-gate / shadow-report-text-string-guard
 // 复审总轮次上限（与 zcode-plan-first 复审硬熔断口径一致：总轮次 ≤2，第 2 轮仅限返工验证）。
 export const MAX_REVIEW_ROUNDS = 2;
 // 链序折叠：-r<N>- / -p<N>- / -r<N><字母> / 尾缀 -r<N>. 变体折算为轮次 N；无变体记号＝第 1 轮。
@@ -63,7 +64,7 @@ export const PR_REVIEW_RE = /-pr-review\.md$/;
 // 引用不构成机读行——子串匹配会被"SEMANTIC_PASS 未完成"类散文冒充（fail-open）。
 // 行尾 [ \t]*：Markdown 硬换行（行尾双空格）不得使机读行漏判；容忍面不含 \r（行切分已消化），
 // 行尾出现 [ \t] 之外的续写仍不满足机读行。
-export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
+export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=(?:done|partial:[^\r\n]+)(?::.*)?[ \t]*$/m;
 // pr-report-verdict-gate：VERDICT 结构闸项（pr-review 侧）——缺 VERDICT 行的 PR 复审报告必须判红：
 //   checkReportFormat 只消费 shadow 报告，checkSemanticPassVerdict 在缺 SEMANTIC_PASS 行时静默跳过，
 //   两闸对 pr-review 报告的 VERDICT 缺行双失明；本闸即该盲区的闭环落点。行尾 [ \t]* 与 SEMANTIC_PASS 同口径。
@@ -74,14 +75,34 @@ export const SEMANTIC_PASS_GATE_RE = /^SEMANTIC_PASS=[A-Za-z]+(?::.*)?[ \t]*$/m;
 //   结构闸假红；单源派生后任一消费点与事实源恒同步，漂移面收敛为零。
 export const VERDICT_LINE_RE = /^VERDICT:[ \t]*(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/;
 export const VERDICT_GATE_RE = new RegExp(VERDICT_LINE_RE.source, 'm');
+// verdict-any-line-gate：值语义闸专用的「判定行」取值锚定——额外接受独立 `GO` 整行（无 VERDICT: 前缀）。
+//   影子结构闸以「终局裁决 + 独立 GO」为其合法形态之一（形如「### 终局裁决」段下独立 GO 行），
+//   故值语义闸若只锚 ^VERDICT: 会在该形态下取不到判定行而静默跳过（partial×GO 零红灯）。
+//   本常量仅由 checkTruthPassVerdict / checkShadowPassVerdict 消费；checkReportFormat 的存在性要求与
+//   PR 结构闸仍严格锚定 VERDICT_LINE_RE / VERDICT_GATE_RE——机读行契约不放宽，散文判定词仍不构成机读行。
+export const VERDICT_ANY_LINE_RE = /^(?:VERDICT:[ \t]*)?(GO|NO-GO|ESCALATE_TO_HUMAN)[ \t]*$/;
+// pr-report-truth-pass-gate / truth-pass-partial-no-go：真相源、读纯度与活性四问的机读行 TRUTH_PASS。
+// 三端 pr-reviewer 规程把「四问缺节 → TRUTH_PASS=partial → 禁 GO」定为硬要求（与 SEMANTIC_PASS 分级同理），
+// 若结构闸不实扫该行、值语义闸不校验 partial×GO，硬要求即回落为纯散文承诺——本组两闸即该分叉的闭环落点。
+// 词法与行尾容忍面与 SEMANTIC_PASS 严格同源（整行锚定 + [ \t]* 硬换行容忍）。
+export const TRUTH_PASS_GATE_RE = /^TRUTH_PASS=(?:done|partial:[^\r\n]+)(?::.*)?[ \t]*$/m;
+export const TRUTH_PASS_LINE_RE = /^TRUTH_PASS=(done|partial:[^\r\n]+)(?::.*)?[ \t]*$/;
+// shadow-report-shadow-pass-gate / shadow-pass-partial-no-go：影子侧完整性行 SHADOW_PASS 的同构两闸。
+// 九条义务逐条结论的完整性位若只由散文承载，人工漏写即静默失效；本组两闸使其成为可咬合的硬位。
+// 存在性闸由 checkReportFormat（恒执行路径，消费 opts.reportText）承载，**不入** SHADOW_GATE_RES：
+//   结构闸经 shadowReportText 注入、仅执法类计划可达（CLI 接线），若由结构闸承载则非执法类计划的
+//   影子报告完全失明，与三端 plan-reviewer 规程「本四行对任何计划（含非执法类）的报告恒被对账」矛盾；
+//   下沉后覆盖面由「仅 isSec」扩大为「全部计划」，且非执法类报告亦受值语义闸约束。
+export const SHADOW_PASS_GATE_RE = /^SHADOW_PASS=(?:done|partial:[^\r\n]+)(?::.*)?[ \t]*$/m;
+export const SHADOW_PASS_LINE_RE = /^SHADOW_PASS=(done|partial:[^\r\n]+)(?::.*)?[ \t]*$/;
 export const SHADOW_GATE_RES = [/E 清单/, /终局裁决|VERDICT:/, /差集|对账表/, /复跑|实跑/];
-export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE];
+export const PR_REVIEW_GATE_RES = [/E 清单/, /实跑证据表|已运行核实/, SEMANTIC_PASS_GATE_RE, VERDICT_GATE_RE, TRUTH_PASS_GATE_RE];
 // semantic-pass-partial-no-go 闸：SEMANTIC_PASS 取值语义与 VERDICT 的一致性对账——
 // 结构闸（PR_REVIEW_GATE_RES）只扫子串存在，报告可同写 SEMANTIC_PASS=partial:<缺项> 与 VERDICT: GO 而零违反，
 // 与三端 pr-reviewer「partial 即禁 GO」硬要求分叉；此闸即该分叉的闭环落点。
 // 取值锚定与 VERDICT 同口径（围栏外末次整行），ERRATA「禁裸复写旧判定行」规则即依赖该口径；
 // 行尾 [ \t]* 与 SEMANTIC_PASS_GATE_RE 同源（硬换行不漏判）。
-export const SEMANTIC_PASS_LINE_RE = /^SEMANTIC_PASS=([A-Za-z]+)(?::.*)?[ \t]*$/;
+export const SEMANTIC_PASS_LINE_RE = /^SEMANTIC_PASS=(done|partial:[^\r\n]+)(?::.*)?[ \t]*$/;
 
 function lineView(text) {
   const lines = text.split(/\r?\n/);
@@ -174,6 +195,20 @@ function lastAnchoredLine(text, re) {
   return hit;
 }
 
+// pass-line-out-of-domain-gate：围栏外行首 `^<键>=` 整行、但取值不在值域闭集（不命中对应 *_LINE_RE）
+// ⇒ 记录行号。值域收窄后此类行不命中锚定、末次取值退回旧合法行，值语义闸绿、结构闸又被旧行满足
+// ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域：仅围栏外行首前缀整行；
+// 散文提及/行内代码引用/围栏内示例不触发（与前缀正则 ^X= 的行首锚定及 lineView 围栏掩蔽同口径）。
+function strayPassLineNumbers(text, prefixRe, lineRe) {
+  const { lines, fenced } = lineView(text);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
+    if (prefixRe.test(lines[i]) && !lineRe.test(lines[i])) out.push(i + 1);
+  }
+  return out;
+}
+
 // 姿态标记：围栏外 + 行首（容忍列表符与加粗装饰，其后仅允许冒号引导的说明）。
 function hasMarkerLine(text, re) {
   const { lines, fenced } = lineView(text);
@@ -184,11 +219,55 @@ function hasMarkerLine(text, re) {
 // 缺 SEMANTIC_PASS 行不在本闸职责内（由结构闸 PR_REVIEW_GATE_RES 判红），故此处不重复计数。
 export function checkSemanticPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
+  // pass-line-out-of-domain-gate：值域外行闸先于缺行早退执行——正是「无锚定命中即 return」让值域外
+  //   修正行静默失效；缺行本身仍归结构闸存在性职责，此处不重复计数。
+  for (const n of strayPassLineNumbers(reportText, /^SEMANTIC_PASS=/, SEMANTIC_PASS_LINE_RE)) {
+    v.push({ msg: 'SEMANTIC_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
+  }
   const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
   if (!semHit) return;
   const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
   if (verdictHit && verdictHit.m[1] === 'GO' && semHit.m[1] !== 'done') {
     v.push({ msg: 'SEMANTIC_PASS=' + semHit.m[1] + ' 非 done 却与 VERDICT: GO 并存：五问未全部通过严禁出具 GO（semantic-pass-partial-no-go）' });
+  }
+}
+
+// truth-pass-partial-no-go 闸：机读行 TRUTH_PASS 非 done 与 VERDICT: GO 并存即判红。
+// 缺 TRUTH_PASS 行不在本闸职责内（由结构闸 PR_REVIEW_GATE_RES 判红），故此处不重复计数。
+// PR 侧值语义闸判定行锚定严格 VERDICT_LINE_RE，与本文件的存在性/结构闸（checkReportFormat /
+//   PR_REVIEW_GATE_RES）同口径：影子结构闸承认「终局裁决 + 独立 GO」为合法形态，PR 结构闸不承认；
+//   两侧口径不对称是有意设计。放宽到 VERDICT_ANY_LINE_RE 会让 PR 报告中权威 VERDICT: GO 之后
+//   出现的任何独立 NO-GO 整行（ERRATA 复写 / 判定表单元格 / 模板示例）劫持末次取值，partial×GO
+//   零红灯——正是本次要闭合的 fail-open 家族。
+export function checkTruthPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  // pass-line-out-of-domain-gate：同 checkSemanticPassVerdict，值域外行闸先于缺行早退执行。
+  for (const n of strayPassLineNumbers(reportText, /^TRUTH_PASS=/, TRUTH_PASS_LINE_RE)) {
+    v.push({ msg: 'TRUTH_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
+  }
+  const tp = lastAnchoredLine(reportText, TRUTH_PASS_LINE_RE);
+  if (!tp) return;
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
+  if (verdictHit && verdictHit.m[1] === 'GO' && tp.m[1] !== 'done') {
+    v.push({ msg: 'TRUTH_PASS=' + tp.m[1] + ' 非 done 却与 VERDICT: GO 并存：真相源四问未全部通过严禁出具 GO（truth-pass-partial-no-go）' });
+  }
+}
+
+// shadow-pass-partial-no-go 闸：影子侧完整性行 SHADOW_PASS 非 done 与判定行 GO 并存即判红。
+// 该行由 checkReportFormat（恒执行路径）消费；缺行由同函数的存在性检查判红，本闸只判值语义。
+// 判定行取值锚定用 VERDICT_ANY_LINE_RE：影子结构闸承认「终局裁决 + 独立 GO」形态，只锚 ^VERDICT: 会漏判。
+export function checkShadowPassVerdict(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  // pass-line-out-of-domain-gate：同上，值域外行闸先于缺行早退执行（本函数经 checkReportFormat
+  //   恒执行路径消费影子文本，故影子侧 SHADOW_PASS 值域外行同样咬合）。
+  for (const n of strayPassLineNumbers(reportText, /^SHADOW_PASS=/, SHADOW_PASS_LINE_RE)) {
+    v.push({ msg: 'SHADOW_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
+  }
+  const sp = lastAnchoredLine(reportText, SHADOW_PASS_LINE_RE);
+  if (!sp) return;
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_ANY_LINE_RE);
+  if (verdictHit && verdictHit.m[1] === 'GO' && sp.m[1] !== 'done') {
+    v.push({ msg: 'SHADOW_PASS=' + sp.m[1] + ' 非 done 却与 VERDICT: GO 并存：影子侧义务未全部履行严禁出具 GO（shadow-pass-partial-no-go）' });
   }
 }
 
@@ -206,9 +285,13 @@ export function countAttackRows(reportText) {
   return hits;
 }
 
-// 职责切分（勿合并）：本函数只消费 shadow 复审报告，不校验 SEMANTIC_PASS 行——shadow 报告
-// 合法缺该行；pr-review 报告缺行由结构闸 PR_REVIEW_GATE_RES 判红，取值语义（partial/unknown
-// 与 GO 并存）由 checkSemanticPassVerdict 判红。三闸互斥不重叠，合并即对 shadow 侧产生假红。
+// 职责切分（勿合并）：本函数只消费 shadow 复审报告，四路校验行级互斥不重叠，合并即对 shadow 侧产生假红——
+//   ① 报告格式行（ATTACKS= / PENETRATIONS= / VERDICT: / SHADOW_PASS=）：存在性，逐行锚定；
+//   ② 攻击配额与实弹姿态：台账实数对账、击穿入 E 清单、零攻击/零实弹 GO 的 ECHO-RISK 标注；
+//   ③ SEMANTIC_PASS **不校验**——shadow 报告合法缺该行，其存在性归 pr-review 结构闸
+//      PR_REVIEW_GATE_RES、取值语义归 checkSemanticPassVerdict 与 checkTruthPassVerdict（PR 侧）；
+//   ④ SHADOW_PASS 存在性归 ①（恒执行路径，故非执法类计划亦被咬），取值语义归 checkShadowPassVerdict。
+//   SHADOW_PASS 与 SEMANTIC_PASS 的行级互斥即本函数与 PR 结构闸的分界：前者只属影子侧、后者只属 PR 侧。
 export function checkReportFormat(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。
@@ -219,13 +302,22 @@ export function checkReportFormat(reportText, v) {
   }
   // report-format-trailing-hardbreak-gate：ATTACKS/PENETRATIONS 格式行行尾 [ \t]* 容忍——Markdown 硬换行
   //   （行尾双空格）不得使合法机读行漏判（fail-closed 假红）；容忍面严格限定 [ \t]*，行尾出现 [ \t]
-  //   之外的续写（ATTACKS=2x）仍不满足格式行。VERDICT 行取值锚定复用 VERDICT_LINE_RE 单源。
+  //   之外的续写（ATTACKS=2x）仍不满足格式行。VERDICT 行存在性锚定复用 VERDICT_ANY_LINE_RE：
+  //   影子结构闸 SHADOW_GATE_RES 承认「终局裁决 + 独立 GO」形态，本函数消费 opts.reportText（恒为影子
+  //   报告文本），存在性判定必须与结构闸同口径，否则代理照 ⑮ 条写独立 GO 形态 100% 判红。
   const atkHit = lastAnchoredLine(reportText, /^ATTACKS=(\d+)[ \t]*$/);
   const penHit = lastAnchoredLine(reportText, /^PENETRATIONS=(\d+)[ \t]*$/);
-  const verdictHit = lastAnchoredLine(reportText, VERDICT_LINE_RE);
+  const verdictHit = lastAnchoredLine(reportText, VERDICT_ANY_LINE_RE);
   if (!atkHit) v.push({ msg: '复审报告缺 ATTACKS= 行锚定格式行（围栏外独立整行）' });
   if (!penHit) v.push({ msg: '复审报告缺 PENETRATIONS= 行锚定格式行（围栏外独立整行）' });
   if (!verdictHit) v.push({ msg: '复审报告缺 VERDICT: 行锚定格式行（围栏外独立整行）' });
+  // shadow-report-shadow-pass-gate：SHADOW_PASS 存在性与 ATTACKS/PENETRATIONS/VERDICT 同列（恒执行路径），
+  //   故「报告尾部固定四行对任何计划（含非执法类）恒被对账」对第 4 行同样成立；取值语义由
+  //   checkShadowPassVerdict 承担，本行只判存在性（职责互斥，见函数上方注释）。
+  //   判定面用 SHADOW_PASS_GATE_RE.test(outside) 而非 lastAnchoredLine(reportText, …)：outside 已把闭合围栏
+  //   内整行替为长哨兵（见上 250 行），故围栏内示例不得冒充机读行（与 structure-gate-outside-fence 同口径）；
+  //   且**沿用同一枚正则**（结构闸移出的那一枚），既无死常量亦无「移出即重写」的口径漂移风险。
+  if (!SHADOW_PASS_GATE_RE.test(outside)) v.push({ msg: '复审报告缺 SHADOW_PASS= 行锚定格式行（围栏外独立整行）' });
   const isGo = !!verdictHit && verdictHit.m[1] === 'GO';
   const echo = hasMarkerLine(reportText, ECHO_LINE_RE);
   const offline = hasMarkerLine(reportText, OFFLINE_LINE_RE);
@@ -260,6 +352,8 @@ export function checkReportFormat(reportText, v) {
   }
   // semantic-pass-partial-no-go 闸：值语义交叉校验（结构闸只扫行存在）。
   checkSemanticPassVerdict(reportText, v);
+  // shadow-pass-partial-no-go 闸：影子侧完整性行同构交叉校验（同上，只判值语义）。
+  checkShadowPassVerdict(reportText, v);
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
@@ -321,7 +415,7 @@ export function checkReportStructureGate(text, kind, v) {
   const gates = kind === 'shadow' ? SHADOW_GATE_RES : PR_REVIEW_GATE_RES;
   const labels = kind === 'shadow'
     ? ['E 清单', '终局裁决（或 VERDICT: 行）', '镜像对账（差集或对账表）', '实跑/复跑比对']
-    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）', '终局判定机读行（VERDICT）'];
+    : ['E 清单', '实跑证据（实跑证据表或已运行核实）', '语义五问机读行（SEMANTIC_PASS）', '终局判定机读行（VERDICT）', '真相源四问机读行（TRUTH_PASS）'];
   for (let i = 0; i < gates.length; i++) {
     if (!gates[i].test(outside)) v.push({ msg: (kind === 'shadow' ? '影子' : 'PR') + '复审报告结构闸缺失：' + labels[i] });
   }
@@ -340,11 +434,28 @@ export function attackLedger(planText, opts = {}) {
     checkLedgerRows(planText, opts, v);
   }
   checkReportFormat(opts.reportText ?? null, v);
-  if (opts.shadowReportText !== undefined) checkReportStructureGate(opts.shadowReportText, 'shadow', v);
+  if (opts.shadowReportText !== undefined) {
+    checkReportStructureGate(opts.shadowReportText, 'shadow', v);
+    // 两路文本不同时对 shadowReportText 整体走 checkReportFormat 全量格式闸（闸名登记：
+    //   shadow-text-whole-format-gate / shadow-report-text-string-guard）：逐个正则补咬只是打补丁，
+    //   shadowReportText 仍整体逃离未闭合围栏 fail-closed（结构闸 shadow 类遇未闭合静默 return、
+    //   兜底归 checkReportFormat，而后者不消费本文本 ⇒ 双失明）、ATTACKS=/PENETRATIONS= 存在性、
+    //   实数对账、ECHO-RISK、实弹姿态等其余格式语义。整体入闸后上述语义一次到位；同一份文本时
+    //   跳过——已由上方 checkReportFormat(opts.reportText) 校验过，重复校验即对同一事实两处计数。
+    //   非 null/undefined 的非字符串由 typeof 守卫显式拒绝（同旧分支守卫语义，不回退）。
+    //   注意 checkReportFormat 内部含 checkSemanticPassVerdict 交叉校验：shadow 报告合法**缺**
+    //   SEMANTIC_PASS 行（缺行早退，既有负控不破），但围栏外出现该整行且非 done × GO 时会被判红
+    //   ——属 fail-closed 方向的加严，非误伤。
+    if (opts.reportText !== opts.shadowReportText && typeof opts.shadowReportText === 'string') {
+      checkReportFormat(opts.shadowReportText, v);
+    }
+  }
   if (opts.prReviewReportText !== undefined) {
     checkReportStructureGate(opts.prReviewReportText, 'pr-review', v);
     // PR 复审报告的语义五问机读行与终局判定交叉校验（结构闸只扫行存在，不校验值语义）。
     checkSemanticPassVerdict(opts.prReviewReportText, v);
+    // PR 复审报告的真相源四问机读行同构交叉校验（同上，只判值语义）。
+    checkTruthPassVerdict(opts.prReviewReportText, v);
   }
   return v;
 }
