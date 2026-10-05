@@ -191,6 +191,31 @@ export const CLAUSES = [
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
+    id: 'truth-source-anti-lookup',
+    text: '真相源反查（判据必须落在权威源上）',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'read-purity-multi-truth-source',
+    text: '读纯度与多真相源',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'liveness-rollback',
+    text: '异常路径回滚与持锁活性',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'fixture-fidelity-audit',
+    text: '夹具保真度对账',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'four-question-result-table',
+    text: '真相源、读纯度与活性四问节结果表',
+    expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
     id: 'depth-basis-machine-line',
     text: 'DEPTH_BASIS=',
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
@@ -254,6 +279,21 @@ export const CLAUSES = [
     id: 'fixture-rerun-blocked-marker',
     text: 'FIXTURE_RERUN=BLOCKED_READONLY',
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
+  },
+  {
+    id: 'absent-file-per-item-reason',
+    text: '逐条列出并各给一行缺席理由',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'baseline-path-declared',
+    text: '测试基线文件路径',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
+  },
+  {
+    id: 'evidence-verb-rerun',
+    text: '先读该基线文件、再逐条复跑其中的每条命令',
+    expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
 ];
 

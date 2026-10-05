@@ -210,7 +210,7 @@ check('ledger-fenced-contract-example-ignored', attackLedger('# p\n## Files\n| M
 const RECEIPT = '自检：`npm test --prefix checks/ledger`（退出码 0）';
 const atkRow = (n, indent) => (indent || '') + '- 攻击行: 序号=' + n + ' | 类别=外衣化 | 靶点=checks/attack-ledger.mjs:102 | 构造=c' + n + ' | 探针=`npm test --prefix checks` Exit 0 | 判定=拦截';
 const quietRow = (n, indent) => atkRow(n, indent).replace('`npm test --prefix checks` Exit 0', '静态推演');
-const REPORT_OK = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
+const REPORT_OK = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n');
 const F34 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```', '', RECEIPT, 'ATTACKS=4', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
 const F44 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```'].join('\n');
 const F45 = [quietRow(1, '  '), quietRow(2, '  '), '', RECEIPT, 'ATTACKS=3', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
@@ -251,7 +251,7 @@ check('ledger-plan-spoofed-field-in-fence-not-counted', attackLedger('# p\n## Fi
 // 38 零实弹 GO 必须标 ECHO-RISK
 check('ledger-report-offline-go-echo-required', rvSome([atkRow(1), atkRow(2), '', 'PROBE=OFFLINE', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '零实弹'));
 // 39（负控制）散文引用两标记字面量不得构成姿态声明（误伤对照）
-check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；契约另要求零攻击 GO 标注 ECHO-RISK。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n')).length === 0);
+check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；契约另要求零攻击 GO 标注 ECHO-RISK。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
 // 40 格式行末次取值：前塞裸行遮蔽尾部真值
 check('ledger-report-format-line-last-wins', rvSome(['# r', '', 'ATTACKS=9', '', '## 格式行', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
 // 41 ECHO-RISK 散文撞词不足以免标
@@ -268,7 +268,7 @@ check('ledger-report-indented-rows-counted', rvSome(F45, '与攻击行实数 2 �
 // 46 行首解释句不得冒充 ECHO-RISK 标注（装饰前缀 + 无冒号引导的后缀）
 check('ledger-report-marker-explanation-not-counted', rvSome(['# r', '', '- **ECHO-RISK** 语义说明：本标记仅在零攻击时使用', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
 // 47（负控制）带列表符/加粗/冒号说明的标记行仍然有效（严格化不得误伤合法装饰形态）
-check('ledger-report-decorated-marker-counted', rv([atkRow(1), atkRow(2), '', '- **PROBE=OFFLINE**：本代理无沙箱权限', '', '- ECHO-RISK：纸面放行已明示', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n')).length === 0);
+check('ledger-report-decorated-marker-counted', rv([atkRow(1), atkRow(2), '', '- **PROBE=OFFLINE**：本代理无沙箱权限', '', '- ECHO-RISK：纸面放行已明示', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
 // 48 未闭合围栏使其后内容整段不可信 ⇒ 直接判红
 check('ledger-report-unclosed-fence-detected', rvSome(F48, '未闭合'));
 
@@ -366,14 +366,15 @@ check('assert-pr-report-semantic-pass-gate',
 
 // 67-70 语义五问机读行值语义闸（semantic-pass-partial-no-go）：SEMANTIC_PASS 非 done 与 VERDICT: GO
 //   并存必须判红（三端 pr-reviewer 规程硬要求「partial 即禁 GO」，旧结构闸只扫子串存在 ⇒ 两视图分叉零红灯）；
-//   done+GO 与 partial+NO-GO / 末次取值改写为 done 为负控制（不得误伤）。
+//   done+GO 与 partial+NO-GO / 末次取值改写为 done 为负控制（不得误伤）；`unknown` 等值域外形态
+//   自值域收窄起改由结构闸判红（PR_REVIEW_GATE_RES 不命中即「结构闸缺失」），不再经值语义闸。
 const SP_OK = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=done\nVERDICT: GO');
 const SP_PARTIAL_GO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:契约清单（未完成五问节四）\nVERDICT: GO');
 const SP_PARTIAL_NOGO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:契约清单（未完成五问节四）\nVERDICT: NO-GO');
-const SP_UNKNOWN_GO = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=unknown\nVERDICT: GO');
+const SP_UNKNOWN_GO = PR_OK.replace('SEMANTIC_PASS=done', 'SEMANTIC_PASS=unknown');
 const SP_ERRATA_DONE = REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial:x\nSEMANTIC_PASS=done\nVERDICT: GO');
 check('assert-semantic-pass-partial-no-go', rvSome(SP_PARTIAL_GO, 'semantic-pass-partial-no-go'));
-check('assert-semantic-pass-non-done-value-no-go', rvSome(SP_UNKNOWN_GO, 'semantic-pass-partial-no-go'));
+check('assert-semantic-pass-non-done-value-no-go', gv(SP_UNKNOWN_GO, 'pr-review').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SEMANTIC_PASS')));
 check('assert-semantic-pass-done-go-ok', rv(SP_OK).length === 0 && rv(SP_PARTIAL_NOGO).length === 0 && rv(SP_ERRATA_DONE).length === 0);
 // 70 接线：PR 复审报告经 attackLedger(prReviewReportText) 同样受此闸约束（shadow 侧走 checkReportFormat）
 check('assert-semantic-pass-pr-report-wired',
@@ -513,14 +514,22 @@ check('assert-unscanned-roots-single-filter-source',
 check('assert-semantic-pass-gate-trailing-hardbreak-tolerated',
   gv(PR_NO_SEM + '\nSEMANTIC_PASS=done  \nVERDICT: GO', 'pr-review').length === 0
   && gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('SEMANTIC_PASS')));
-// 83b 值语义锚定同口径（双机读行行尾硬换行）：SEMANTIC_PASS 行与 VERDICT 行行尾各带空白时仍必咬——
-//   SEMANTIC_PASS_LINE_RE 或 VERDICT 行锚定任一行尾容忍回退，semHit/verdictHit 即为 null、闸静默跳过，
-//   本断言立即转红。SEMANTIC_PASS 取裸值形态（无冒号尾注）是回退可观测的前提：(?::.*)? 会把尾注与
-//   行尾空白一并吞掉，带尾注夹具对行尾容忍回退零咬合（把空格插在冒号前更会 NO MATCH 永久红）；
-//   无空白形态负控制由本断言第二子句（SP_PARTIAL_GO＝冒号尾注、行尾无空白）承担。
+// 83b 值域收窄后的口径（双机读行行尾硬换行）：裸 `partial`（无冒号缺项）自收窄起属非法形态，
+//   改由结构闸判红（GATE_RE 不命中即「结构闸缺失」，行尾硬换行不豁免——行尾容忍只收 [ \t]，
+//   非法值本身仍不命中）；合法形态（partial:<非空缺项>、行尾无空白）的值语义闸必咬由第二子句
+//   （SP_PARTIAL_GO）承担，合法机读行行尾硬换行不漏判由 513-515 行断言（done 形态）负控制覆盖。
 check('assert-semantic-pass-value-trailing-hardbreak-detected',
-  rvSome(REPORT_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial  \nVERDICT: GO  '), 'semantic-pass-partial-no-go')
+  gv(PR_NO_SEM + '\nSEMANTIC_PASS=partial  \nVERDICT: GO', 'pr-review').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SEMANTIC_PASS'))
   && rvSome(SP_PARTIAL_GO, 'semantic-pass-partial-no-go'));
+// 83c 三处取值正则（TRUTH_PASS/SEMANTIC_PASS/SHADOW_PASS 的 *_LINE_RE）行尾 [ \t]* 容忍面的值语义闸钉死：
+//   带行尾硬换行空白的 partial:<非空缺项> 修正行必须仍命中取值正则并被值语义闸消费（partial×GO 即红）——
+//   若删掉任一 LINE_RE 末尾 [ \t]*，本组三断言全部转红（行不再命中锚定，值语义闸缺行早退、信号消失）。
+check('assert-truth-pass-value-trailing-hardbreak-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_OK.replace('TRUTH_PASS=done', 'TRUTH_PASS=partial:夹具保真度对账（节九未完成）  ') }).some((x) => x.msg.includes('truth-pass-partial-no-go')));
+check('assert-semantic-pass-value-trailing-hardbreak-detected-value-side',
+  attackLedger(auditorPlan, { prReviewReportText: PR_OK.replace('SEMANTIC_PASS=done', 'SEMANTIC_PASS=partial:契约清单（未完成五问节四）  ') }).some((x) => x.msg.includes('semantic-pass-partial-no-go')));
+check('assert-shadow-pass-value-trailing-hardbreak-detected',
+  rvSome(REPORT_OK.replace('SHADOW_PASS=done', 'SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）  '), 'shadow-pass-partial-no-go'));
 // 84 VERDICT 机读行结构闸：缺 VERDICT 行的 PR 复审报告必判红——checkReportFormat 只消费
 //   shadow 报告、checkSemanticPassVerdict 缺 SEMANTIC_PASS 行时静默跳过，两闸对 pr-review
 //   报告 VERDICT 缺行双失明；含行零违反（负控制），完整接线（attackLedger）同咬。
@@ -534,7 +543,7 @@ check('assert-pr-report-verdict-gate-wired',
 //   （Markdown 硬换行）不得使格式行漏判（与 SEMANTIC_PASS/VERDICT 行尾 [ \t]* 同口径，消除 fail-closed
 //   假红）；容忍面只收 [ \t]，行尾续写非空白字符仍必咬（负控制，防容忍面过宽吞掉非法续写）。
 check('assert-report-format-attacks-trailing-hardbreak-tolerated',
-  rv([atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2  ', 'PENETRATIONS=0  ', 'VERDICT: GO'].join('\n')).length === 0
+  rv([atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2  ', 'PENETRATIONS=0  ', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0
   && rvSome([atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2x', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '缺 ATTACKS='));
 // 86 VERDICT 整行锚定单一事实源（verdict-line-single-source-gate）：结构闸 VERDICT_GATE_RE 与取值闸
 //   消费的 VERDICT_LINE_RE 必须同源（source 相等、仅 /m 差异）——三份复制漂移时改结构闸则值语义闸
@@ -573,19 +582,151 @@ check('assert-truth-pass-gate-trailing-hardbreak-tolerated',
   gv(PR_NO_TRUTH + '\nTRUTH_PASS=done  ', 'pr-review').length === 0);
 // 91 影子侧结构闸：缺 SHADOW_PASS 行必判红；含行零违反（负控制）。
 const SHADOW_NO_SP = SHADOW_OK.replace('\nSHADOW_PASS=done', '');
+const REPORT_NO_SP = REPORT_OK.replace('\nSHADOW_PASS=done', '');
+// 91 影子侧完整性行存在性闸（shadow-report-shadow-pass-gate）：已下沉至 checkReportFormat（恒执行路径），
+//   故非执法类计划的影子报告同样被咬（覆盖面判据见下一节 94）；结构闸侧**不再**承载该行——
+//   第三子句（SHADOW_NO_SP 经结构闸零违反）即「移出而非重复」的负控制，防后续被加回造成同一事实两处计数。
 check('assert-shadow-pass-gate',
-  gv(SHADOW_NO_SP, 'shadow').some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('SHADOW_PASS'))
-  && gv(SHADOW_OK, 'shadow').length === 0);
+  rv(REPORT_NO_SP).some((x) => x.msg.includes('SHADOW_PASS'))
+  && rv(REPORT_OK).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0
+  && gv(SHADOW_NO_SP, 'shadow').length === 0);
 // 92 影子侧值语义闸：非 done × GO 并存必判红；done × GO 零违反（负控制）；经 checkReportFormat 实跑。
 const SP_SHADOW_PARTIAL_GO = [atkRow(1), atkRow(2), '', RECEIPT, 'SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
 check('assert-shadow-pass-partial-no-go',
   rvSome(SP_SHADOW_PARTIAL_GO, 'shadow-pass-partial-no-go')
   && rv(SP_SHADOW_PARTIAL_GO.replace('SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）', 'SHADOW_PASS=done')).length === 0);
 // 93 跨侧职责切分负控制（Global Constraint 4）：shadow 报告缺 TRUTH_PASS 不判红，PR 报告缺 SHADOW_PASS 不判红。
+//   影子侧**应当**校验 SHADOW_PASS（存在性归 checkReportFormat、值语义归 shadow-pass-partial-no-go），
+//   故旧第 2 子句（断言影子侧不得提及 SHADOW_PASS）已随职责调整反向失效，此处改为钉死跨侧边界：
+//   TRUTH_PASS 只在 PR 侧咬、绝不漏进影子侧；SHADOW_PASS 只在影子侧咬、绝不漏进 PR 报告。
 check('assert-report-format-no-cross-side-pass-line',
   rv(REPORT_OK).filter((x) => x.msg.includes('TRUTH_PASS')).length === 0
-  && rv(REPORT_OK).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0
-  && attackLedger(auditorPlan, { prReviewReportText: PR_OK }).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0);
+  && attackLedger(auditorPlan, { prReviewReportText: PR_OK }).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0
+  && attackLedger(auditorPlan, { prReviewReportText: PR_NO_SEM }).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0);
+
+// 94 非执法类计划覆盖面（F5 闭环判据）：存在性闸在恒执行路径 ⇒ opts.reportText 通道对**任何**计划生效，
+//   不再依赖仅 isSec 时注入的 shadowReportText（旧接线即非执法类失明的根因）。
+//   plainPlan 的 Files 不含 ENFORCEMENT_FILES ⇒ isSec=false，与 CLI 非执法类分支等价。
+const plainPlan = '# p\n## Files\n| Modify | `README.md` | x |\n';
+check('assert-shadow-pass-gate-nonsec-plan-covered',
+  attackLedger(plainPlan, { reportText: REPORT_NO_SP }).some((x) => x.msg.includes('SHADOW_PASS'))
+  && attackLedger(plainPlan, { reportText: REPORT_OK }).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0);
+// 95 独立 GO 行形态（F1 闭环判据）：影子结构闸以「终局裁决 + 独立 GO」为合法形态（SHADOW_OK 即此形），
+//   值语义闸若只锚 ^VERDICT: 则该形态下取不到判定行而静默跳过 ⇒ partial×GO 零红灯。
+//   注意：该形态下 checkReportFormat 会另报「缺 VERDICT: 行」，故判据一律用 some/filter 而非 length === 0。
+const standaloneGo = (sp) => [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', sp, 'GO'].join('\n');
+check('assert-shadow-pass-standalone-go-detected',
+  rvSome(standaloneGo('SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）'), 'shadow-pass-partial-no-go')
+  && rv(standaloneGo('SHADOW_PASS=done')).filter((x) => x.msg.includes('shadow-pass-partial-no-go')).length === 0);
+// 96 影子分支接线（F2 闭环判据）：结构闸之外必须同样跑值语义闸。判据覆盖三种相对关系——
+//   ① `reportText` 缺位（调用方只传 shadowReportText）⇒ 补调生效（第一子句）；
+//   ② 两路同一份文本 ⇒ 只由 checkReportFormat 计一次（第三子句钉死不重复计数）；
+//   ③ 两路取值不同 ⇒ shadowReportText 必须被独立校验（第四子句钉死不漏检）。
+check('assert-shadow-pass-shadow-text-only-wired',
+  attackLedger(auditorPlan, { shadowReportText: SP_SHADOW_PARTIAL_GO }).some((x) => x.msg.includes('shadow-pass-partial-no-go'))
+  && attackLedger(auditorPlan, { shadowReportText: SP_SHADOW_PARTIAL_GO.replace('SHADOW_PASS=partial:契约执行闸（⑩ 未逐条给出结论）', 'SHADOW_PASS=done') }).filter((x) => x.msg.includes('shadow-pass-partial-no-go')).length === 0
+  && attackLedger(auditorPlan, { reportText: SP_SHADOW_PARTIAL_GO, shadowReportText: SP_SHADOW_PARTIAL_GO }).filter((x) => x.msg.includes('shadow-pass-partial-no-go')).length === 1
+  && attackLedger(auditorPlan, { reportText: REPORT_OK, shadowReportText: SP_SHADOW_PARTIAL_GO }).filter((x) => x.msg.includes('shadow-pass-partial-no-go')).length === 1);
+// 97 严格锚不被劫持（F1 闭环判据）：PR 侧值语义闸必须取 `^VERDICT:` 末次，报告里权威 `VERDICT: GO` 之后
+//   出现任何裸 `NO-GO` 整行（ERRATA 复写 / 判定表单元格 / 模板示例）都不得劫持末次判定值——劫持即 fail-open，
+//   本次要闭合的漏判形态。判据：TP_PARTIAL_GO + '\nNO-GO\n' 必须命中 truth-pass-partial-no-go。
+const TP_HIJACK = TP_PARTIAL_GO + '\nNO-GO\n';
+check('assert-truth-pass-verdict-strict-anchor-not-hijacked',
+  prWiredSome(TP_HIJACK, 'truth-pass-partial-no-go'));
+// 98 影子侧独立 GO 形态存在性判定（F4 闭环判据）：SHADOW_GATE_RES 承认「终局裁决 + 独立 GO」为合法形态，
+//   checkReportFormat 消费 opts.reportText（恒为影子报告文本）的存在性判定必须同口径，否则代理照 ⑮ 条写独立 GO
+//   报告 100% 判红。判据：影子报告含 SHADOW_PASS=done + 末尾 GO，`rv()` 结果不得含「缺 VERDICT」字样。
+const SHADOW_STANDALONE_GO = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'GO'].join('\n');
+check('assert-shadow-standalone-go-existence-ok',
+  rv(SHADOW_STANDALONE_GO).filter((x) => x.msg.includes('缺 VERDICT')).length === 0);
+// 99 attackLedger 独立 shadow 分支的 SHADOW_PASS 存在性（F6 闭环判据，CodeRabbit Major 双子句）：
+//   子句 (a) 仅传 shadowReportText 且缺 SHADOW_PASS 行——checkReportFormat(null) 早退、SHADOW_GATE_RES 不含
+//     SHADOW_PASS、checkShadowPassVerdict 缺行 return ⇒ 缺 SHADOW_PASS 的影子报告可通过完整性检查（漏判面）。
+//   子句 (b) reportText 与 shadowReportText 两路不同且 shadowReportText 缺 SHADOW_PASS——两路文本不同时
+//     opts.reportText !== opts.shadowReportText 为真，独立分支必须各自判存在性，否则 shadowReportText
+//     逃离存在性闸。CodeRabbit 派发串明确要求覆盖「only shadowReportText」与「differs from reportText」
+//     两种接线，缺一即未闭合建议。
+check('assert-shadow-only-branch-requires-shadow-pass-anchor',
+  attackLedger(auditorPlan, { shadowReportText: REPORT_NO_SP }).some((x) => x.msg.includes('SHADOW_PASS'))
+  && attackLedger(auditorPlan, { reportText: REPORT_OK, shadowReportText: REPORT_NO_SP }).some((x) => x.msg.includes('SHADOW_PASS')));
+// 100 PR 报告「独立 GO」形态两闸一致性（F2 闭环判据）：修复后 PR 侧值语义闸只锚 `^VERDICT:`，
+//   PR 报告若采独立 GO 整行 → 结构闸（PR_REVIEW_GATE_RES 含 VERDICT_GATE_RE）判缺、值语义闸不咬；
+//   两闸对该形态一致。判据：TP_PARTIAL_STANDALONE_GO 经 prWired 必须命中「结构闸缺失 · VERDICT」
+//   且 `truth-pass-partial-no-go` 计数 0（修复前该计数 = 1，因值语义闸咬到 `GO`，即本用例 Red-Light 首跑必红）。
+const TP_PARTIAL_STANDALONE_GO = TP_PARTIAL_GO.replace('VERDICT: GO', 'GO');
+check('assert-pr-report-standalone-go-falls-back-to-strict-gate',
+  prWired(TP_PARTIAL_STANDALONE_GO).some((x) => x.msg.includes('结构闸缺失') && x.msg.includes('VERDICT'))
+  && prWired(TP_PARTIAL_STANDALONE_GO).filter((x) => x.msg.includes('truth-pass-partial-no-go')).length === 0);
+// 101 独立 shadow 分支未闭合围栏 fail-closed：仅传 shadowReportText 且文本在合法格式行之后含未闭合围栏时，
+//   结构闸（shadow 类静默 return）与旧独立分支（lineView 未解构 unclosed）双双失明 ⇒ 零红灯。
+//   契约判据：必须命中「未闭合代码围栏」违规。探针 P1 已实测修复前 P1_UNCLOSED=[]，首跑必红。
+const bt = String.fromCharCode(96, 96, 96);
+const SHADOW_CLEAN = [atkRow(1), atkRow(2), '', RECEIPT, 'E 清单：无', '终局裁决', '镜像对账表', '复跑比对一致', 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'GO'].join('\n');
+check('assert-shadow-only-unclosed-fence-failclosed',
+  attackLedger(auditorPlan, { shadowReportText: SHADOW_CLEAN + '\n' + bt }).some((x) => x.msg.includes('未闭合代码围栏')));
+// 102 独立 shadow 分支全量格式闸接线：仅传 shadowReportText 且缺 ATTACKS=/PENETRATIONS= 行时，
+//   旧独立分支只咬 SHADOW_PASS ⇒ 格式语义整体逃逸（探针 P2 已实测 P2_NO_ATK=[]，首跑必红）。
+//   契约判据：必须命中「缺 ATTACKS」违规（存在性闸咬合即证全量闸已接线）。
+const SHADOW_NO_ATK = SHADOW_CLEAN.replace('\nATTACKS=2', '').replace('\nPENETRATIONS=0', '');
+check('assert-shadow-only-format-gate-wired',
+  attackLedger(auditorPlan, { shadowReportText: SHADOW_NO_ATK }).some((x) => x.msg.includes('缺 ATTACKS')));
+// 103 负控制（防重复计数）：两路同源文本（缺 ATTACKS= 形态）时，全量格式闸只由 opts.reportText 路径
+//   计一次，独立分支跳过 ⇒ 「缺 ATTACKS」计数恒为 1。修复前后均应成立（C4 单计数契约的可审计钉死）。
+check('assert-shadow-text-same-no-double-count',
+  attackLedger(auditorPlan, { reportText: SHADOW_NO_ATK, shadowReportText: SHADOW_NO_ATK }).filter((x) => x.msg.includes('缺 ATTACKS')).length === 1);
+
+// 104 pass 机读行值域闸：done|partial:<非空缺项> 之外的任意值（如 banana）即红，不因非 GO 判定豁免。
+// 红绿账目（登记前 GATE_RE 值域开放，banana 零违规 ⇒ detected 必 FAIL＝真红；登记后三条全绿）。
+const REPORT_SP_BANANA = 'ATTACKS=0\nPENETRATIONS=0\nSHADOW_PASS=banana\nVERDICT: NO-GO\n';
+const REPORT_SP_DONE = 'ATTACKS=0\nPENETRATIONS=0\nSHADOW_PASS=done\nVERDICT: NO-GO\n';
+check('assert-shadow-pass-value-domain',
+  rv(REPORT_SP_BANANA).some((x) => x.msg.includes('SHADOW_PASS'))
+  && rv(REPORT_SP_DONE).filter((x) => x.msg.includes('SHADOW_PASS')).length === 0
+  && rv('ATTACKS=0\nPENETRATIONS=0\nSHADOW_PASS=partial:契约执行闸\nVERDICT: NO-GO\n').filter((x) => x.msg.includes('SHADOW_PASS')).length === 0);
+const PR_PASS_BANANA = 'E 清单：无\n实跑证据表：x\nSEMANTIC_PASS=banana\nTRUTH_PASS=banana\nVERDICT: NO-GO\n';
+// 清洁夹具必须用 NO-GO：partial:<非空缺项> 与 VERDICT: GO 并存是值语义闸（truth-pass-partial-no-go）
+// 必然击穿形态——与 checks/selftest.mjs:560-566 的 TP_PARTIAL_GO 攻击夹具同构、极性相反（彼为必咬
+// 攻击样本，此为零违规负控制），故判定行改 NO-GO 以保持「partial 合法形态在非 GO 下零违规」契约。
+const PR_PASS_PARTIAL = PR_OK.replace('TRUTH_PASS=done', 'TRUTH_PASS=partial:夹具保真度对账（节九未完成）').replace('VERDICT: GO', 'VERDICT: NO-GO');
+check('assert-truth-pass-value-domain',
+  attackLedger(auditorPlan, { prReviewReportText: PR_PASS_BANANA }).some((x) => x.msg.includes('TRUTH_PASS'))
+  && attackLedger(auditorPlan, { prReviewReportText: PR_PASS_PARTIAL }).filter((x) => x.msg.includes('TRUTH_PASS')).length === 0);
+check('assert-semantic-pass-value-domain',
+  attackLedger(auditorPlan, { prReviewReportText: PR_PASS_BANANA }).some((x) => x.msg.includes('SEMANTIC_PASS'))
+  && attackLedger(auditorPlan, { prReviewReportText: PR_PASS_PARTIAL }).filter((x) => x.msg.includes('SEMANTIC_PASS')).length === 0);
+
+// 104b 值域外机读行闸（pass-line-out-of-domain-gate）：「合法旧值 + 值域外新值并存」形态——值域收窄后
+//   值域外行不命中锚定、末次取值退回旧合法行，值语义闸绿、结构闸被旧行满足 ⇒ 登记前全篇零红灯（fail-open 家族）。
+//   本组三断言钉死三族：PR 侧 TRUTH_PASS / SEMANTIC_PASS、影子侧 SHADOW_PASS。
+// 红绿账目（登记前无 stray 闸，三夹具零违规 ⇒ detected 必 FAIL＝真红；登记后三条全绿）。
+const PR_STRAY_TRUTH = PR_OK.replace('VERDICT: GO', 'TRUTH_PASS=partial\nVERDICT: GO');
+const PR_STRAY_SEM = PR_OK.replace('VERDICT: GO', 'SEMANTIC_PASS=partial\nVERDICT: GO');
+const SHADOW_STRAY = REPORT_OK + '\nSHADOW_PASS=partial';
+check('assert-truth-pass-out-of-domain-stray-line-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+check('assert-semantic-pass-out-of-domain-stray-line-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_SEM }).some((x) => x.msg.includes('SEMANTIC_PASS') && x.msg.includes('值域外')));
+check('assert-shadow-pass-out-of-domain-stray-line-detected',
+  rv(SHADOW_STRAY).some((x) => x.msg.includes('SHADOW_PASS') && x.msg.includes('值域外')));
+
+// 105 registry 原子锚点：四问职责正文/结果表标题/计划作者义务正文被删除必须判红（子串必含条款逐条登记）。
+// 红绿账目（登记前 clause id 不存在 ⇒ detected 必 FAIL＝真红；负控制空桩即 PASS）。
+const PR_FM = ['---', 'name: pr-reviewer', 'description: d', 'tools: []', 'mcpServers: []', '---', ''];
+const PW_ZC_FM = ['---', 'name: plan-writer', 'description: d', 'color: orange', 'tools: []', 'permissionMode: dontAsk', 'injectAgentsMd: true', '---', ''];
+const FOUR_DUTIES = ['真相源反查（判据必须落在权威源上）', '读纯度与多真相源', '异常路径回滚与持锁活性', '夹具保真度对账', '真相源、读纯度与活性四问节结果表'];
+const WRITER_DUTIES = ['逐条列出并各给一行缺席理由', '测试基线文件路径', '先读该基线文件、再逐条复跑其中的每条命令'];
+const FOUR_IDS = ['clause-truth-source-anti-lookup', 'clause-read-purity-multi-truth-source', 'clause-liveness-rollback', 'clause-fixture-fidelity-audit', 'clause-four-question-result-table'];
+const WRITER_IDS = ['clause-absent-file-per-item-reason', 'clause-baseline-path-declared', 'clause-evidence-verb-rerun'];
+check('assert-clause-four-duty-anchors-detected',
+  FOUR_DUTIES.every((t, i) => has([{ path: 'zcode/agents/pr-reviewer-subagent-sp.md', text: PR_FM.join('\n') + '无条款\n' }], FOUR_IDS[i])));
+check('assert-clause-four-duty-anchors-clean-not-flagged',
+  FOUR_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/pr-reviewer-subagent-sp.md', text: PR_FM.join('\n') + t + '\n' }], FOUR_IDS[i])));
+check('assert-clause-writer-duty-anchors-detected',
+  WRITER_DUTIES.every((t, i) => has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + '无条款\n' }], WRITER_IDS[i])));
+check('assert-clause-writer-duty-anchors-clean-not-flagged',
+  WRITER_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], WRITER_IDS[i])));
+check('assert-clause-duty-anchors-scope-locked',
+  FOUR_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], FOUR_IDS[i])));
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
