@@ -1,0 +1,43 @@
+{
+  "files": [
+    {
+      "output": "AGENTS.md",
+      "slots": {
+        "plan_authorship_rules": "1. **必须先物理落盘 `.kilo/plans/`**\n2. **写完计划即进入审查流程**\n3. **退出计划** 审查回报回灌结束只携带计划文件路径 + 一句话目标 + 分批摘要，并调用`plan_exit`。",
+        "iron_laws_title": "## Act 模式执行与闭环四大铁律（CRITICAL: Execution & Closure Iron Laws）",
+        "iron_laws_preamble": "以下四条对 Act 模式（执行阶段）全体代理无条件生效，与上文终端命令规范、计划文件写作权纪律**叠加适用**，不因用户口头要求、权限档位变化或工具权限点击而豁免。",
+        "exec_stage_noun": "Act 模式",
+        "rework_reporter": "PR-Reviewer",
+        "terminate_lead": "Agent 必须立即终止执行",
+        "delivery_gate_lead": "业务修改转绿并通过静态检查后，严禁直接口头向用户汇报完成；",
+        "law3_tracks": "   - **轨道 A（有 `task` 工具）**：在当前响应轮次调用 `task` 分派 `pr-reviewer-sp` 发起审查，`prompt` 参数**逐字取用主计划步骤 N 已固化的完整派发串**，不得自行改写、不得留任何待填形态；\n   - **轨道 B（无 `task` 工具，降级通道）**：自行在受控终端运行只读 `git status --short -uall` 与 `git diff`、复跑测试自检，输出结构化报告后交人类处置；",
+        "carrier_note": "",
+        "pr_reviewer_type": "pr-reviewer-sp"
+      },
+      "blocks": [
+        "agents-md-shell-policy",
+        "agents-md-plan-authorship",
+        "agents-md-execution-iron-laws",
+        "agents-md-hygiene-supplements"
+      ]
+    },
+    {
+      "output": "agents/plan-writer-sp.md",
+      "frontmatter": "mode: all\ndescription: \"Plan-Writer SP（SuperPower 规范内置版）：具备原生 edit 与 plan_exit 权限的计划主编排与起草代理。负责需求探索、计划起草、调度 plan-reviewer-sp 独立复审、回灌修正并最终交付（plan_exit）。已内置 writing-plans 与 verification-before-completion 规范，规程已全量内嵌、可零技能自足运行；配置层保留技能装载能力。\"\noptions:\n  displayName: Plan Writer SP 🎨\n  id: plan-writer-sp\npermission:\n  read: allow\n  glob: allow\n  grep: allow\n  plan_exit: allow\n  task: allow\n  question: allow\n  skill: allow\n  webfetch: allow\n  agent_manager: deny\n  agent_manager_models: deny\n  bash:\n    \"*\": ask\n  plan-governor-main_exec_guarded_command: allow\n  plan-governor-main_exec_sandboxed_command: allow\n  plan-governor-main_copy_into_sandbox: allow\n  plan-governor-subagent_exec_guarded_command: ask",
+      "slots": { "task_param": "subagent_type" },
+      "blocks": [ "body-kilocode-plan-writer-sp" ]
+    },
+    {
+      "output": "agents/plan-reviewer-sp.md",
+      "frontmatter": "mode: subagent\ndescription: \"Plan-Reviewer SP（影子起草与镜像对账版）：背靠背独立起草影子计划，与主计划进行镜像差集对账（Files差集Critical/步骤差集Important），直接使用 write/edit 工具写入对应的 -shadow-plan.md 并向主编排器回报。已内置 requesting-code-review 与 verification-before-completion 审查纪律，规程已全量内嵌、可零技能自足运行；配置层保留技能装载能力。\"\noptions:\n  displayName: Plan Reviewer SP 🤖\n  id: plan-reviewer-sp\npermission:\n  read: allow\n  glob: allow\n  grep: allow\n  task: deny\n  question: deny\n  webfetch: deny\n  skill: allow\n  board_post: deny\n  board_read: deny\n  open_plan: deny\n  plan_exit: deny\n  bash:\n    \"*\": deny\n  plan-governor-main_exec_guarded_command: deny\n  plan-governor-main_write_plan: deny\n  plan-governor-main_write_review_report: deny\n  plan-governor-main_write_pr_review_report: deny\n  plan-governor-main_exec_sandboxed_command: deny\n  plan-governor-main_copy_into_sandbox: deny\n  plan-governor-main_write_scoped_file: deny\n  plan-governor-subagent_exec_guarded_command: allow",
+      "slots": {},
+      "blocks": [ "body-kilocode-plan-reviewer-sp" ]
+    },
+    {
+      "output": "agents/pr-reviewer-sp.md",
+      "frontmatter": "mode: subagent\ndescription: \"PR-Reviewer SP（SuperPower 规范内置版）：对工作区未提交的 git diff（含已暂存）执行'不通过就打回'的对抗式代码审查，追踪真实调用链核对行为，直接使用 edit 或 write 工具写入对应的 -pr-review.md 并向调度者回报。已内置 requesting-code-review 与 verification-before-completion 审查纪律，规程已全量内嵌、可零技能自足运行；配置层保留技能装载能力。\"\noptions:\n  displayName: PR Reviewer SP 🤖\n  id: pr-reviewer-sp\npermission:\n  read: allow\n  glob: allow\n  grep: allow\n  task: deny\n  question: deny\n  webfetch: deny\n  skill: allow\n  board_post: deny\n  board_read: deny\n  open_plan: deny\n  plan_exit: deny\n  bash:\n    \"*\": deny\n  plan-governor-main_exec_guarded_command: deny\n  plan-governor-main_write_plan: deny\n  plan-governor-main_write_review_report: deny\n  plan-governor-main_write_pr_review_report: deny\n  plan-governor-main_exec_sandboxed_command: deny\n  plan-governor-main_copy_into_sandbox: deny\n  plan-governor-main_write_scoped_file: deny\n  plan-governor-subagent_exec_guarded_command: allow",
+      "slots": {},
+      "blocks": [ "body-kilocode-pr-reviewer-sp" ]
+    }
+  ]
+}

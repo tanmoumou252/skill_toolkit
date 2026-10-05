@@ -12,6 +12,10 @@ import {
   unclassifiedPlatformFiles,
   unscannedRoots,
 } from './invariants.mjs';
+// 新鲜度闸以命名空间导入存取：生成器空桩阶段零导出，命名导入会在 ESM 链接期抛 SyntaxError；
+// 命名空间 + 守卫把缺失降级为「闸不触发」，实现落盘后直取真函数。
+import * as buildNs from './build-agents.mjs';
+const checkFreshness = typeof buildNs.checkFreshness === 'function' ? buildNs.checkFreshness : () => [];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -79,6 +83,14 @@ for (const v of violations) {
   }
 }
 
+// 新鲜度闸（build-freshness-check）：manifest 声明的产物与 spec 重算不一致或缺失即红；
+// spec 树不存在 / files 为空 = 编译未启用，空真不触发（不该触发域）。
+// 口径声明：generated-product-stale 为新鲜度违规，独立累加 failures 并逐条打印，
+// 不计入 violations= 汇总行（该行语义 = 不变量违规数，两者口径独立、不互相吞并）。
+for (const stalePath of checkFreshness(root)) {
+  failures += 1;
+  console.log(`FAIL generated-product-stale ${stalePath} :: spec 已变更而三端产物未重生成，运行 node checks/build-agents.mjs 重生成`);
+}
 console.log(`scanned=${files.length} invariants=${allInvariantIds().length} violations=${violations.length}`);
 console.log(failures === 0 ? 'TOOLKIT-INVARIANTS ALL OK' : 'TOOLKIT-INVARIANTS FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

@@ -8,6 +8,9 @@ enabled: true
 enabledAutoRun: true
 mcpServers: plan-governor-subagent
 ---
+
+<!-- GENERATED from spec@9d8bf39ae94a; do not edit -->
+
 # PR-Reviewer SP（CodeBuddy 代码变更独立审查）· SuperPower 规范内置版
 
 本代理采用 SuperPower 审查工程方法论：审查规则以 `requesting-code-review` 为准（内嵌正确性、安全、回归、测试、生产就绪检查面），完成声明以 `verification-before-completion` 为准（证据先于断言）。所有规程已内嵌本文件，可零技能自足运行；配置层仍保留技能装载能力。

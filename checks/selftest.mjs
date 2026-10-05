@@ -11,6 +11,21 @@ const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invaria
 const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? invariants.scanEntryDirNames : (xs) => xs;
 const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
+import { PLATFORMS } from './registry.mjs';
+// 清点器以命名空间导入存取：红灯阶段该模块仅为空桩（零导出），命名导入会因「缺导出」在
+// ESM 链接期抛 SyntaxError 假红；命名空间导入把缺失延迟到守卫抛出
+// TypeError: inventory is not a function（四维真红 [PASS-RED] 目标契约缺失）。
+// 注：PLATFORMS 导入随本 Replacement 落刀即在场，后续用例的 PLATFORMS.map(...) 不会 ReferenceError。
+import * as inventoryNs from './platform-inventory.mjs';
+const inventory = typeof inventoryNs.inventory === 'function' ? inventoryNs.inventory : () => { throw new TypeError('inventory is not a function'); };
+// 生成器以命名空间导入存取：红灯阶段空桩零导出，命名导入会在 ESM 链接期抛 SyntaxError 假红；
+// 命名空间导入把缺失延迟到守卫抛出 TypeError（[PASS-RED] 目标契约缺失），实现落盘后直取真函数。
+import * as buildNs from './build-agents.mjs';
+const build = typeof buildNs.build === 'function' ? buildNs.build : () => { throw new TypeError('build is not a function'); };
+const diffProducts = typeof buildNs.diffProducts === 'function' ? buildNs.diffProducts : () => { throw new TypeError('diffProducts is not a function'); };
+const unknownPlatformDirs = typeof buildNs.unknownPlatformDirs === 'function' ? buildNs.unknownPlatformDirs : () => { throw new TypeError('unknownPlatformDirs is not a function'); };
+const specHash = typeof buildNs.specHash === 'function' ? buildNs.specHash : () => { throw new TypeError('specHash is not a function'); };
+const GENERATED_MARK = typeof buildNs.GENERATED_MARK === 'string' ? buildNs.GENERATED_MARK : '<未实现>';
 // VERDICT 单源常量以命名空间 + instanceof 守卫存取：红灯阶段 VERDICT_LINE_RE 尚未导出，直接命名
 // 导入会在 ESM 链接期抛 SyntaxError，把「逐条断言真红」降级成「脚手架崩溃假红」（四维语义真红
 // [REJECT-FAKE]）；typeof null === 'object' 故用 instanceof RegExp 判定，实现落盘后即直取真常量。
@@ -497,7 +512,7 @@ check('assert-scan-entry-ignores-build-artifacts',
 // 80 登记常量单一事实源漂移断言：run.mjs 报错文案引用的常量名必须与代码实参同源。
 check('assert-scan-registry-constants-drift',
   invariants.SCAN_ROOTS.join(',') === 'kilocode,codebuddy,zcode,skills'
-  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp'
+  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp,spec'
   && invariants.BUILD_ARTIFACT_ROOTS.join(',') === 'node_modules');
 // 81 入口闸 id 登记：防"删掉 run.mjs 闸调用、汇总与 OK 行静默消失"的接线漂移。
 check('assert-entry-gate-ids-registered',
@@ -727,6 +742,157 @@ check('assert-clause-writer-duty-anchors-clean-not-flagged',
   WRITER_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], WRITER_IDS[i])));
 check('assert-clause-duty-anchors-scope-locked',
   FOUR_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], FOUR_IDS[i])));
+
+// —— 平台清点器（合成文件集，不读磁盘；期望值全部由第 5 节工具契约推导，非抄录实现） ——
+const INV_FM = ['---', 'name: pw', 'description: d', 'tools: []', '---', ''];
+const ANCHOR_A = '未见红严禁开工';
+const mk = (lines) => lines.join('\n');
+const invBase = () => PLATFORMS.map((p) => ({ path: `${p}/agents/pw.md`, text: mk([...INV_FM, '前导段', ANCHOR_A, '条款体', '尾段']) }));
+// 106 三端同文 ⇒ 全部差异面为零（负控制，锚切分不产生假差异）。
+check('inv-identical-zero-diff',
+  (() => { const r = inventory(invBase()); return r.anchorSet.diffs.length === 0 && r.sections.diffs.length === 0 && r.frontmatter.diffs.length === 0 && r.fences.diffs.length === 0; })());
+// 107 锚集差：一端缺锚文本 ⇒ anchor-set 恰一条、side=missing（锚集差本身记为一条差异）。
+check('inv-anchor-set-missing-detected',
+  (() => { const f = invBase(); f[1].text = mk([...INV_FM, '前导段', '无锚正文']); const r = inventory(f);
+    return r.anchorSet.diffs.some((d) => d.path === 'codebuddy/agents/pw.md' && d.side === 'missing'); })());
+// 108 frontmatter 键级 diff：一端多键 ⇒ fm-key-extra 恰一条、键名正确（结构化对比，非文本 diff）。
+check('inv-fm-key-extra-detected',
+  (() => { const f = invBase(); f[2].text = mk(['---', 'name: pw', 'description: d', 'tools: []', 'color: orange', '---', '前导段', ANCHOR_A, '尾段']); const r = inventory(f);
+    return r.frontmatter.diffs.some((d) => d.path === 'zcode/agents/pw.md' && d.key === 'color' && d.kind === 'fm-key-extra'); })());
+// 109 围栏内隔离：围栏内差异不进正文块差异、单独归 fences 面（与 lineView 围栏掩蔽同口径）。
+const BT = String.fromCharCode(96, 96, 96);
+check('inv-fence-isolation',
+  (() => { const f = invBase(); f[0].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 A', BT, '尾段']); f[1].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 B 不同内容', BT, '尾段']); f[2].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 A', BT, '尾段']);
+    const r = inventory(f); return r.sections.diffs.length === 0 && r.fences.diffs.length === 1; })());
+// 110 负控制：围栏内同文 ⇒ fences 面为零（防隔离面误伤）。
+check('inv-fence-clean-not-flagged',
+  (() => { const f = invBase().map((x) => ({ ...x, text: mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例', BT, '尾段']) })); const r = inventory(f);
+    return r.fences.diffs.length === 0; })());
+// 111 锚重复出现：取首处为块边界，其余出现各计一条 anchor-repeat 差异（防重复正文被静默吸收）。
+check('inv-anchor-repeat-counted',
+  (() => { const f = invBase(); f[0].text = mk([...INV_FM, '前导段', ANCHOR_A, '条款体', ANCHOR_A, '重复段']); const r = inventory(f);
+    return r.anchorSet.diffs.some((d) => d.path === 'kilocode/agents/pw.md' && d.kind === 'anchor-repeat'); })());
+// 112 三端围栏数不等：按出现序逐对配对，多出的围栏块计一条 fences 差异（不静默丢弃）。
+check('inv-fence-count-unequal',
+  (() => { const f = invBase(); f[1].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例', BT, BT, '多余围栏', BT, '尾段']); const r = inventory(f);
+    return r.fences.diffs.length === 1; })());
+
+// —— 编译产物生成器与新鲜度闸（合成 spec/profile，不读磁盘；期望值由计划第 4 节契约推导） ——
+// 夹具路径一律用 expect 域为空的合成路径 agents/pw.md（registry 全表无任何 expect 匹配该形态），
+// 避免与 registry 多锚 expect 域碰撞；吞锚闸校验经 build 第三参 clauses 注入合成条款驱动。
+const B1_SPEC = { blocks: [
+  { id: 'no-green-no-start', text: '未见红严禁开工\n铁律正文。' },
+  { id: 'escalate-to-human', text: 'ESCALATE_TO_HUMAN\n呈报人类。' },
+] };
+const B1_PROFILES = {
+  kilocode: { files: [{ output: 'agents/pw.md', frontmatter: 'mode: all\ndescription: d', blocks: ['no-green-no-start', 'escalate-to-human'], slots: {} }] },
+  zcode: { files: [{ output: 'agents/pw.md', blocks: ['no-green-no-start'], slots: {} }] },
+};
+// B1 golden：输出文件集、frontmatter 围栏、生成标记与块序（契约 4.2 行 1）；生成标记断言按
+// 版本戳契约（4.1 版本戳行）取模板公共前缀 `GENERATED from spec@`（默认 GENERATED_MARK 为含
+// <hash> 占位的模板形态，断言不绑定具体哈希字面量，保证确定性）。
+check('build-core-golden',
+  (() => { const ps = build(B1_SPEC, B1_PROFILES); return ps.length === 2
+    && ps.some((p) => p.path === 'kilocode/agents/pw.md' && p.text.startsWith('---\nmode: all') && p.text.includes('GENERATED from spec@') && p.text.indexOf('未见红严禁开工') < p.text.indexOf('ESCALATE_TO_HUMAN'))
+    && ps.some((p) => p.path === 'zcode/agents/pw.md' && !p.text.startsWith('---') && p.text.includes('GENERATED from spec@')); })());
+// B2 AGENTS.md 豁免语义：manifest 不声明即不生成（契约 4.2 行 6，编译范围外文件零触碰）。
+check('build-agents-md-only-when-declared',
+  build(B1_SPEC, { kilocode: { files: [{ output: 'agents/pw.md', frontmatter: 'mode: all', blocks: ['no-green-no-start'], slots: {} }] } }).every((p) => !p.path.endsWith('AGENTS.md')));
+// B3 吞锚闸（build-no-anchor-swallow）真吞锚反例（契约 4.1 行 2；夹具保真度）：
+// 合成路径 agents/pw.md 的 expect 域为空，经 build 第三参 clauses 显式注入合成条款
+//（expect 命中该合成路径），闸校验域与 registry 多锚域零碰撞；块文本渲染前含锚
+//「未跟踪新文件铁律」，插槽替换后锚文本被吞 ⇒ 抛错拒产。闸须对「域内锚缺失」与
+//「插槽吞掉既有锚」可区分，本用例触发后者。
+check('build-swallowed-anchor-rejected',
+  (() => { const syn = [{ id: 'synthetic-anchor', expect: [/^zcode\/agents\/pw\.md$/], text: '未跟踪新文件铁律' }]; try { build({ blocks: [{ id: 'b', text: '未跟踪{{x}}铁律：正文' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '' } }] } }, syn); return false; } catch (e) { return e.message.includes('build-no-anchor-swallow'); } })());
+// B3 正控制：同块同路径同合成条款，插槽值补齐锚文本 ⇒ 渲染后锚仍在，正常产出（与 B3 反例构成「被吞 vs 在场」对照）。
+check('build-swallowed-anchor-preserved-positive',
+  (() => { const syn = [{ id: 'synthetic-anchor', expect: [/^zcode\/agents\/pw\.md$/], text: '未跟踪新文件铁律' }]; const ps = build({ blocks: [{ id: 'b', text: '未跟踪{{x}}铁律：正文' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '新文件' } }] } }, syn); return ps.length === 1 && ps[0].text.includes('未跟踪新文件铁律'); })());
+// B4 吞锚闸负控制：合成路径默认 CLAUSES 域为空（闸不触发、不误伤），插槽值本身含锚文本子串时渲染后文本保留该子串。
+check('build-slot-anchor-substring-preserved-positive',
+  (() => { const ps = build({ blocks: [{ id: 'b', text: '条款引用 {{x}} 结束' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '未跟踪新文件铁律' } }] } }); return ps.length === 1 && ps[0].text.includes('未跟踪新文件铁律'); })());
+// B5 路径锁（build-output-path-locked）：manifest 文件名映射逃逸平台目录 ⇒ 抛错（契约 4.1 行 1），
+// 含反斜杠分隔符变异（path.posix 不识别反斜杠段，先归一再判定）。
+check('build-output-path-escape-rejected',
+  (() => { const hit = (out) => { try { build(B1_SPEC, { zcode: { files: [{ output: out, blocks: ['no-green-no-start'], slots: {} }] } }); return false; } catch (e) { return e.message.includes('build-output-path-locked'); } }; return hit('../spec/evil.md') && hit('..\\spec\\evil.md'); })());
+// B6 新鲜度三态（契约 4.1 行 3）：不一致报 stale；一致零违规；磁盘缺失（null）计 stale；
+// 行尾 CRLF/LF 漂移两侧归一后比对，语义一致不判 stale（autocrlf checkout 防假红）。
+check('build-freshness-stale-detected',
+  diffProducts([{ path: 'zcode/AGENTS.md', text: 'new' }], (p) => (p === 'zcode/AGENTS.md' ? 'old' : null)).join(',') === 'zcode/AGENTS.md'
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'same' }], () => 'same').length === 0
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'x' }], () => null).length === 1
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'x\n' }], () => 'x\r\n').length === 0);
+// B7 未知平台目录 fail-loud（契约 4.1 行 5）：spec/platform/ 下非 PLATFORMS 目录被识别，
+// loadSpec 对其中含 manifest.json 者报错拒产（读盘判定在 CLI/loadSpec 层，selftest 依纯函数惯例只测识别函数）。
+check('build-unknown-platform-dir-rejected',
+  unknownPlatformDirs(['kilocode', 'codebuddy', 'zcode']).length === 0
+  && unknownPlatformDirs(['kilocode', 'foo']).join(',') === 'foo');
+// B8 specHash 确定性（契约 4.4 ①）：同 spec 同 profiles 恒同哈希（深拷贝输入，排除对象同一性干扰；
+// sha256 前 12 位十六进制，node:crypto 内置零新依赖）。
+check('build-spec-hash-deterministic',
+  specHash(B1_SPEC, B1_PROFILES) === specHash({ blocks: B1_SPEC.blocks.map((b) => ({ ...b })) }, JSON.parse(JSON.stringify(B1_PROFILES))));
+// B9 specHash 敏感性（契约 4.4 ②）：块正文或 manifest（profiles）任一字符变化 ⇒ 哈希变化。
+check('build-spec-hash-sensitive',
+  specHash({ blocks: [{ id: 'a', text: 'x' }] }, {}) !== specHash({ blocks: [{ id: 'a', text: 'y' }] }, {})
+  && specHash({ blocks: [{ id: 'a', text: 'x' }] }, {}) !== specHash({ blocks: [{ id: 'a', text: 'x' }] }, { zcode: { files: [] } }));
+// B10 generatedMark 注入（契约 4.1 版本戳行 / 4.4 ③⑤）：build 第四参注入固定 mark ⇒
+// golden 确定性可断言（纯函数不计算真实哈希，真实哈希注入面在 CLI/checkFreshness 层）。
+check('build-generated-mark-injectable',
+  build(B1_SPEC, B1_PROFILES, undefined, 'GENERATED from spec@v1; do not edit').every((p) => p.text.includes('GENERATED from spec@v1') && !p.text.includes('spec@<hash>')));
+
+// —— 真实 spec 装配 golden（期望值由装配契约推导：registry expect 域 + manifest 装配清单）——
+// 与上文合成用例不同，本组用例加载磁盘上的真实 spec/blocks 与三平台 manifest（loadSpec 语义的
+// 最小复现，经 fileURLToPath 锚定仓库根，不依赖 cwd），断言产物件数与关键锚段/载体/闸门文本在场。
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const checkFreshness = typeof buildNs.checkFreshness === 'function' ? buildNs.checkFreshness : () => ['<checkFreshness 未实现>'];
+const SPEC_ROOT = fileURLToPath(new URL('..', import.meta.url));
+function loadRealSpec() {
+  const blocksDir = path.join(SPEC_ROOT, 'spec', 'blocks');
+  const blocks = fs.readdirSync(blocksDir).filter((f) => f.endsWith('.md')).map((f) => {
+    const raw = fs.readFileSync(path.join(blocksDir, f), 'utf8');
+    const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!m) throw new Error('块文件缺 frontmatter: spec/blocks/' + f);
+    const id = (m[1].match(/^id:\s*(\S+)\s*$/m) || [])[1];
+    if (!id) throw new Error('块文件缺 frontmatter id: spec/blocks/' + f);
+    return { id, text: raw.slice(m[0].length).replace(/^\r?\n/, '').trimEnd() };
+  });
+  const profiles = {};
+  for (const platform of PLATFORMS) {
+    const mf = path.join(SPEC_ROOT, 'spec', 'platform', platform, 'manifest.json');
+    if (fs.existsSync(mf)) profiles[platform] = JSON.parse(fs.readFileSync(mf, 'utf8'));
+  }
+  return { spec: { blocks }, profiles };
+}
+const REAL = loadRealSpec();
+const REAL_PRODUCTS = build(REAL.spec, REAL.profiles);
+const realByText = new Map(REAL_PRODUCTS.map((p) => [p.path, p.text]));
+const realText = (p) => realByText.get(p) || '';
+// golden：12 件产物；三份 AGENTS.md 含铁律锚；zcode/AGENTS.md 承载直连派发参数头与租约三闸（派生载体=AGENTS.md）；
+// kilocode/codebuddy 的 plan-writer-sp.md 承载租约三闸（派生载体=plan-writer-sp.md）；plan-gate 逐字文本
+// 装配进 zcode 两份 agents 文件；pr-gate 逐字文本装配进三平台 pr-reviewer 文件。
+check('build-real-spec-agents-md-golden',
+  REAL_PRODUCTS.length === 12
+  && ['kilocode', 'codebuddy', 'zcode'].every((p) => realText(p + '/AGENTS.md').includes('未见红严禁开工'))
+  && realText('zcode/AGENTS.md').includes('直连派发参数头')
+  && realText('zcode/AGENTS.md').includes('派发去重租约')
+  && realText('zcode/AGENTS.md').includes('写后立即回读核验首行')
+  && realText('zcode/AGENTS.md').includes('严禁复用固定字面量')
+  && ['kilocode', 'codebuddy'].every((p) => realText(p + '/agents/plan-writer-sp.md').includes('派发去重租约')
+    && realText(p + '/agents/plan-writer-sp.md').includes('写后立即回读核验首行')
+    && realText(p + '/agents/plan-writer-sp.md').includes('严禁复用固定字面量'))
+  && ['zcode/agents/plan-writer-subagent-sp.md', 'zcode/agents/plan-reviewer-subagent-sp.md'].every((p) => realText(p).includes('本次审批仅为计划审批——批准后不得直接执行') && realText(p).includes('Git 集成需再单独授权。*'))
+  && ['kilocode/agents/pr-reviewer-sp.md', 'codebuddy/agents/pr-reviewer-sp.md', 'zcode/agents/pr-reviewer-subagent-sp.md'].every((p) => realText(p).includes('本次审批仅为代码变更审查——审查通过不等于合入授权；合入、提交或推送需用户在审查通过后另行明确授权。')));
+// 新鲜度自洽：真实 spec 与磁盘产物逐件一致（build --check 同源判定）。
+check('build-real-spec-freshness-self-consistent', checkFreshness(SPEC_ROOT).length === 0);
+// CLI 装配路径契约（diffProducts 的 diskGet 回调参数恒为路径字符串）：build-agents CLI 层
+// 按 p.path 取属性曾致首次非空构建崩溃（undefined.split），本用例钉死字符串参数契约防回退。
+check('build-diff-products-path-string-contract', (() => {
+  let allStrings = true;
+  const stale = diffProducts([{ path: 'zcode/AGENTS.md', text: 'x' }, { path: 'kilocode/AGENTS.md', text: 'y' }], (p) => { allStrings = allStrings && typeof p === 'string'; return p === 'zcode/AGENTS.md' ? 'x' : null; });
+  return allStrings && stale.join(',') === 'kilocode/AGENTS.md';
+})());
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

@@ -1,3 +1,5 @@
+<!-- GENERATED from spec@9d8bf39ae94a; do not edit -->
+
 ## 终端命令执行硬性规范（CRITICAL: Shell Execution Policy）
 
 你必须严格遵守以下命令执行规则。本环境启用了严格的自动化审计，任何复合命令都会导致系统被强制挂起与权限阻断：

@@ -8,6 +8,9 @@ enabled: true
 enabledAutoRun: true
 mcpServers: plan-governor-main, plan-governor-subagent
 ---
+
+<!-- GENERATED from spec@9d8bf39ae94a; do not edit -->
+
 # Plan-Writer SP（CodeBuddy 计划总指挥与起草回灌）· SuperPower 规范内置版
 
 本代理采用 SuperPower 计划工程方法论：计划生成遵循 `writing-plans` 规范（内嵌 No-Placeholder 硬扫描、步骤拆解与 TDD 顺序），完成纪律遵循 `verification-before-completion`（证据先于断言）。所有规程已内嵌本文件，可零技能自足运行；配置层仍保留技能装载能力。

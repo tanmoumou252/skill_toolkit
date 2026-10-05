@@ -18,7 +18,7 @@ export const ATTACK_CLASSES = [
   '视图-执行语义分叉',
   '信任根入口',
 ];
-export const ENFORCEMENT_FILES = ['mcp/plan-governor.js', 'mcp/webui.js', 'checks/attack-ledger.mjs'];
+export const ENFORCEMENT_FILES = ['mcp/plan-governor.js', 'mcp/webui.js', 'checks/attack-ledger.mjs', 'checks/build-agents.mjs'];
 
 // —— 报告侧对账判据（复审报告的攻击配额不得自声明）——
 // 攻击行登记锚＝ATTACKS 的计数事实源；新增方言＝代码变更走审查链。

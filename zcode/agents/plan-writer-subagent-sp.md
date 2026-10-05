@@ -7,6 +7,8 @@ permissionMode: dontAsk
 injectAgentsMd: true
 ---
 
+<!-- GENERATED from spec@9d8bf39ae94a; do not edit -->
+
 # Plan-Writer-SP：计划撰写与回灌子代理（规范内置版）
 
 你由父会话分派，生命周期分为严格两阶段：
