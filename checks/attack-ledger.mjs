@@ -460,14 +460,16 @@ export function attackLedger(planText, opts = {}) {
   return v;
 }
 
-// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容三形态——8-4（本仓 skill 实命名 20260929-0837-…）、
-// 8-6（夹具 20260731-153000-…）与 14 位紧凑（仓规范自定 20260731153000-…，见 skills/*/SKILL.md 命名例）；
-// 接受域为 8 位日期 + 4-8 位时分秒位（分体或紧凑），超规范三形态的紧凑位数亦静默放行——误伤面已被
+// latest-companion-exclude-gate：--latest 计划名匹配谓词。兼容四形态——8-4（本仓 skill 实命名 20260929-0837-…）、
+// 8-6（夹具 20260731-153000-…）、14 位紧凑（仓规范自定 20260731153000-…，见 skills/*/SKILL.md 命名例）
+// 与 8（仅日期无时分秒，仓内活跃计划实命名形态）；
+// 接受域为 8 位日期（可单独成前缀）与可选 4-8 位时分秒位（分体或紧凑），超规范形态的紧凑位数亦静默放行——误伤面已被
 // 伴生排除四则与"无数字前缀不命中"双重阻拦，无失败侧故不收紧（该宽域口径为明示设计，非疏漏）。
+// 纯数字主题计划名（如 20261005-1234.md）修正后由不命中变命中，属预期放宽面而非误伤（主题段无形态约束）。
 // 且必须排除同前缀伴生产物（-test-evidence / -pr-review / -shadow-plan / .lease），否则按 mtime 取最新会把
 // 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
 export function isPlanFilename(f) {
-  return /^\d{8}-?\d{4,8}-.+\.md$/.test(f)
+  return /^\d{8}(?:-?\d{4,8})?-.+\.md$/.test(f)
     && !/-test-evidence\.md$/.test(f) && !/-pr-review\.md$/.test(f)
     && !/-shadow-plan\.md$/.test(f) && !/\.lease\.md$/.test(f);
 }

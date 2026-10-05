@@ -366,6 +366,7 @@ check('assert-chain-filter-same-scope',
 check('assert-latest-companion-exclude-gate',
   isPlanFilename('20260929-0837-plan.md') === true
   && isPlanFilename('20260731153000-add-export-plan.md') === true
+  && isPlanFilename('20261005-date-only-topic-plan.md') === true
   && isPlanFilename('202609291234567890-x.md') === false
   && isPlanFilename('20260731-153000-auth-r3-refactor.md') === true
   && isPlanFilename('20260929-0837-plan-test-evidence.md') === false

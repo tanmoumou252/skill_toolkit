@@ -9,7 +9,7 @@ enabledAutoRun: true
 mcpServers: plan-governor-main, plan-governor-subagent
 ---
 
-<!-- GENERATED from spec@9d8bf39ae94a; do not edit -->
+<!-- GENERATED from spec@b4508d03fa16; do not edit -->
 
 # Plan-Writer SP（CodeBuddy 计划总指挥与起草回灌）· SuperPower 规范内置版
 

@@ -18,9 +18,13 @@
 
 agents 文件面插槽：`task_param`（kilocode/zcode = `subagent_type`，codebuddy = `subagent_name`）。
 
-## 库内预留块（当前未被任何 manifest 装配）
+## agents 九文件 body 块
 
-- `agents-md-platform-intro`、`agents-md-carrier-note`、`agents-md-zcode-orchestrator`：早期模板化草案的插槽块，反推对勘确认三端原稿均无对应章节后退出装配面，保留在块库作预留。
+九份 agents 产物各由一整块承载：`spec/blocks/body-<平台>-<角色>.md`，逐字保真、不做插槽替换；三端共享面（生效方式、铁律骨架等）由 AGENTS.md 层共享块承载。改某端 agents 散文＝改对应 body 块，改完运行 `node checks/build-agents.mjs` 重生成。
+
+## 预留块（已迁往 spec/anchor-library/）
+
+- `agents-md-platform-intro`、`agents-md-carrier-note`、`agents-md-zcode-orchestrator`：早期模板化草案的插槽块，反推对勘确认三端原稿均无对应章节后退出装配面，已迁往 `spec/anchor-library/` 作死块归档，不再留在活跃块库。
 
 ## 版本戳
 
