@@ -9,7 +9,7 @@ enabledAutoRun: true
 mcpServers: plan-governor-subagent
 ---
 
-<!-- GENERATED from spec@d67eb19af7df; do not edit -->
+<!-- GENERATED from spec@a1f29ff42ed3; do not edit -->
 
 # Plan-Reviewer SP（CodeBuddy 计划独立复审）· SuperPower 规范内置版
 

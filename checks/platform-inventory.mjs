@@ -47,7 +47,11 @@ export function splitByAnchors(bodyLines, clauses) {
     const line = bodyLines[i];
     const hit = clauses.find((c) => line.includes(c.text));
     if (hit) {
-      if (current) {
+      // 冲刷上一段（tail 感知）：tail（重复锚后残留）归 unanchored 单段，绝不误清重复锚块 .lines；
+      // 非 tail 归该块正文；无块归 unanchored。三路互斥，与 EOF 冲刷同构。
+      if (current && current.tail) {
+        if (pending.length) unanchored.push({ startLine: pendingStart, lines: pending });
+      } else if (current) {
         blocks.get(current.id).lines = pending;
       } else if (pending.length) {
         unanchored.push({ startLine: pendingStart, lines: pending });
@@ -70,14 +74,18 @@ export function splitByAnchors(bodyLines, clauses) {
     if (current && !current.tail) {
       pending.push(line);
     } else if (current && current.tail) {
-      // 重复锚之后的行并入该重复段之前的无锚残留
-      if (line.trim() !== '') unanchored.push({ startLine: i + 1, lines: [line] });
+      // tail-region-coalesce：重复锚之后的连续无锚行并入单一 pending 段（与 EOF 路径同构），
+      // 不再逐行独立成段——杜绝 unanchored 计数放大与 inventory() 按段索引跨端配对错位。
+      if (pendingStart === null) pendingStart = i + 1;
+      pending.push(line);
     } else {
       if (pendingStart === null) pendingStart = i + 1;
       pending.push(line);
     }
   }
-  if (current && !current.tail) {
+  if (current && current.tail) {
+    if (pending.length) unanchored.push({ startLine: pendingStart, lines: pending });
+  } else if (current && !current.tail) {
     blocks.get(current.id).lines = pending;
   } else if (pending.length) {
     unanchored.push({ startLine: pendingStart, lines: pending });

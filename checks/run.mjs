@@ -16,6 +16,11 @@ import {
 // 命名空间 + 守卫把缺失降级为「闸不触发」，实现落盘后直取真函数。
 import * as buildNs from './build-agents.mjs';
 const checkFreshness = typeof buildNs.checkFreshness === 'function' ? buildNs.checkFreshness : () => [];
+// 新鲜度闸错误翻译层守卫别名：缺失时降级为「直调 checkFreshness、不翻译」（fail-noisy 不回退，
+// 仅失去风格归一），实现落盘后直取真函数（与 checkFreshness 同构命名空间守卫）。
+const freshnessFailures = typeof buildNs.freshnessFailures === 'function'
+  ? buildNs.freshnessFailures
+  : (fn, r) => ({ stale: fn(r), specError: null });
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -87,7 +92,14 @@ for (const v of violations) {
 // spec 树不存在 / files 为空 = 编译未启用，空真不触发（不该触发域）。
 // 口径声明：generated-product-stale 为新鲜度违规，独立累加 failures 并逐条打印，
 // 不计入 violations= 汇总行（该行语义 = 不变量违规数，两者口径独立、不互相吞并）。
-for (const stalePath of checkFreshness(root)) {
+// 坏配置（loadSpec fail-loud）经 freshnessFailures 翻译为同族 FAIL 行，不再裸堆栈击穿（风格归一）；
+// 复用既有 generated-product-stale 闸 id（path 段填 spec）避免新增未登记 id 触发注册表闸。
+const freshGate = freshnessFailures(checkFreshness, root);
+if (freshGate.specError !== null) {
+  failures += 1;
+  console.log(`FAIL generated-product-stale spec :: 新鲜度闸无法评估（spec/manifest 装载失败，非产物陈旧）: ${freshGate.specError}`);
+}
+for (const stalePath of freshGate.stale) {
   failures += 1;
   console.log(`FAIL generated-product-stale ${stalePath} :: spec 已变更而三端产物未重生成，运行 node checks/build-agents.mjs 重生成`);
 }

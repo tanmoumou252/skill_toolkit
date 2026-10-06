@@ -374,6 +374,24 @@ check('assert-latest-companion-exclude-gate',
   && isPlanFilename('20260929-0837-plan-shadow-plan.md') === false
   && isPlanFilename('20260929-0837-plan.lease.md') === false
   && isPlanFilename('commit_msg.md') === false);
+
+// 66 latest-unclosed-exclude-gate 闸：--latest 选择域排除未闭环工作内存产物——缺「## 攻击面台账」
+//   节（围栏外）的时间戳命名计划不进入审计选择域；选择与审计共用同一台账节判定（同源不分叉）。
+//   全部候选被排除时选择结果为空，CLI 落 EXIT-2 明确报无可选计划（fail-loud，严禁静默 Exit 0）。
+check('assert-latest-unclosed-exclude-gate',
+  attackLedgerNs.pickLatestEligible([
+    { f: '20261005-agent-body-shared-blocks.md', text: '# 计划\n## Files\n| Modify | `checks/build-agents.mjs` | x |\n' },
+    { f: '20261006-rework.md', text: '# 计划\n## Files\n| Modify | `checks/attack-ledger.mjs` | x |\n\n## 攻击面台账\n- 台账行\n- 类别：视图-执行语义分叉\n' },
+  ]).f === '20261006-rework.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'b.md', text: '# 计划\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).skipped.join(',') === 'b.md'
+  && attackLedgerNs.pickLatestEligible([{ f: 'only.md', text: '# 计划\n' }]).f === null
+  && attackLedgerNs.pickLatestEligible([]).f === null);
+// 67 台账节判定围栏掩蔽：围栏内的假台账标题不得使候选合格（与审计侧 scanFences 掩蔽同口径）。
+check('assert-latest-unclosed-exclude-gate-fence-masked',
+  attackLedgerNs.pickLatestEligible([{ f: 'a.md', text: '```md\n## 攻击面台账\n```\n' }]).f === null);
 // 66 PR 复审报告机读行结构闸（pr-report-semantic-pass-gate）：三端 pr-reviewer 规程硬要求
 //   SEMANTIC_PASS=done|partial 行；缺行必咬、含行零违反（partial 禁 GO 不得停留在散文面）。
 const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'TRUTH_PASS=done', ''].join('\n');
@@ -894,6 +912,66 @@ check('build-diff-products-path-string-contract', (() => {
   const stale = diffProducts([{ path: 'zcode/AGENTS.md', text: 'x' }, { path: 'kilocode/AGENTS.md', text: 'y' }], (p) => { allStrings = allStrings && typeof p === 'string'; return p === 'zcode/AGENTS.md' ? 'x' : null; });
   return allStrings && stale.join(',') === 'kilocode/AGENTS.md';
 })());
+
+// —— M1/M2/M3 收尾断言（合并计划 C9；期望值由行为契约推导，非抄录实现）——
+// M1 键序归一：profiles 仅对象键插入序不同、语义相同 ⇒ 哈希必等（不该触发域）；
+//   正控：值变化 ⇒ 哈希必不等（触发域，B9 不回退）。canonicalizeValue 未接入前先红（AssertionError）。
+check('build-spec-hash-key-order-invariant',
+  specHash({ blocks: [] }, { zcode: { files: [{ output: 'x', blocks: ['b'] }] } })
+    === specHash({ blocks: [] }, { zcode: { files: [{ blocks: ['b'], output: 'x' }] } })
+  && specHash({ blocks: [] }, { zcode: { files: [{ output: 'x', blocks: ['b'] }] } })
+    !== specHash({ blocks: [] }, { zcode: { files: [{ output: 'y', blocks: ['b'] }] } }));
+// M1 __proto__ 自有键保留（回归锁）：含 __proto__ 自有键的 profiles，canonicalize 后该键仍影响哈希
+//   （不被原型 setter 静默丢弃），且不污染全局 Object.prototype（探针 probe-proto 证伪污染假设）。
+check('build-spec-hash-proto-key-preserved',
+  (() => {
+    const withProto = JSON.parse('{ "__proto__": { "z": 1 }, "zcode": { "files": [] } }');
+    const withoutProto = { zcode: { files: [] } };
+    const before = ({}).polluted;
+    const h1 = specHash({ blocks: [] }, withProto);
+    const h2 = specHash({ blocks: [] }, withoutProto);
+    return typeof h1 === 'string' && h1.length === 12 && h1 !== h2 && before === undefined && ({}).polluted === undefined;
+  })());
+// M2 闸错误翻译（契约四格，含 r1 E2 回灌族谓词）：loadSpec: 前缀 Error 翻译 / SyntaxError 翻译 /
+//   正常透传 / 非族 TypeError 原样上抛。freshnessFailures 未落盘前守卫别名抛
+//   TypeError('freshnessFailures is not a function')（四维·目标契约缺失），进程崩溃红。
+const freshnessFailures = typeof buildNs.freshnessFailures === 'function'
+  ? buildNs.freshnessFailures
+  : () => { throw new TypeError('freshnessFailures is not a function'); };
+check('build-freshness-failures-translates-throw',
+  (() => {
+    const bad = freshnessFailures(() => { throw new Error('loadSpec: 块文件缺 frontmatter id: x'); }, '.');
+    const syntax = freshnessFailures(() => { throw new SyntaxError('Unexpected token } in JSON'); }, '.');
+    const good = freshnessFailures(() => ['a/b.md'], '.');
+    let bugRethrown = false;
+    try { freshnessFailures(() => { throw new TypeError('checker bug'); }, '.'); }
+    catch (e) { bugRethrown = (e instanceof TypeError) && e.message === 'checker bug'; }
+    return bad.specError === 'loadSpec: 块文件缺 frontmatter id: x' && Array.isArray(bad.stale) && bad.stale.length === 0
+      && syntax.specError === 'Unexpected token } in JSON' && syntax.stale.length === 0
+      && good.specError === null && good.stale.join(',') === 'a/b.md'
+      && bugRethrown;
+  })());
+// M3 tail 段合并：重复锚后 3 行连续无锚 ⇒ 单一 unanchored 段（对照旧逐行 3 段，探针
+//   probe-m3-tail 实测 tailSegCount=3）；repeats 计数不变（不该触发域）。
+//   合并修正：经 inventoryNs 命名空间调用（selftest:19 已导入，消除源计划 A1 具名导入不确定项）。
+check('inv-tail-region-coalesced',
+  (() => {
+    const A = 'ANCHORX';
+    const r = inventoryNs.splitByAnchors(['前导段', A, '条款体', A, 'tail1', 'tail2', 'tail3'], [{ id: 'c1', text: A }]);
+    const tailSegs = r.unanchored.filter((s) => /^tail/.test(s.lines[0] || ''));
+    return tailSegs.length === 1 && tailSegs[0].lines.length === 3 && r.repeats.length === 1;
+  })());
+// M3 tail 后接不同新锚：tail 残留冲刷入 unanchored，新锚另起块，重复锚既有块 .lines 不被误清（退化语义）。
+check('inv-tail-then-new-anchor-no-clobber',
+  (() => {
+    const A = 'ANCHORX';
+    const B = 'ANCHORY';
+    const r = inventoryNs.splitByAnchors([A, '条款体', A, 'tail1', 'tail2', B, '新块体'], [{ id: 'c1', text: A }, { id: 'c2', text: B }]);
+    const tailSeg = r.unanchored.find((s) => (s.lines[0] || '') === 'tail1');
+    const blockC1 = r.blocks.get('c1');
+    return !!tailSeg && tailSeg.lines.length === 2 && r.blocks.has('c2') && r.repeats.length === 1
+      && !!blockC1 && blockC1.lines.length > 0;
+  })());
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

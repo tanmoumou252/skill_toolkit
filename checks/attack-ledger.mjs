@@ -474,6 +474,24 @@ export function isPlanFilename(f) {
     && !/-shadow-plan\.md$/.test(f) && !/\.lease\.md$/.test(f);
 }
 
+// latest-unclosed-exclude-gate：--latest 选择域的闭环判据。与审计判定同源——复用 sectionBody 的
+//   围栏外台账节判定，选择视图与审计视图不得分叉。缺「## 攻击面台账」节（围栏外）的计划视为
+//   未闭环工作内存产物，不进入 --latest 审计选择域；显式 --plan 模式不受影响。
+export function hasLedgerSection(planText) {
+  return sectionBody(String(planText), /^## 攻击面台账(?![\w-])/) !== null;
+}
+
+// 纯函数选择：candidates 为按 mtime 新→旧排序的 { f, text } 数组；返回首个含台账节者，
+//   skipped 收集被排除的未闭环产物名（CLI 逐个打印 LATEST-SKIPPED，不静默）；全排除时 f=null。
+export function pickLatestEligible(candidates) {
+  const skipped = [];
+  for (const c of candidates) {
+    if (hasLedgerSection(c.text)) return { f: c.f, skipped };
+    skipped.push(c.f);
+  }
+  return { f: null, skipped };
+}
+
 function newestMd(dir, pred) {
   try {
     const xs = fs.readdirSync(dir)
@@ -494,8 +512,26 @@ if (isMain) {
   let chainV = [];
   if (process.argv.includes('--latest')) {
     latestMode = true;
-    planPath = newestMd(path.join(root, '.kilo', 'plans'), isPlanFilename);
-    if (!planPath) { console.log('ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'); process.exit(2); }
+    const plansDir = path.join(root, '.kilo', 'plans');
+    let candidates = [];
+    try {
+      candidates = fs.readdirSync(plansDir)
+        .filter((f) => f.endsWith('.md') && isPlanFilename(f))
+        .map((f) => ({ f, m: fs.statSync(path.join(plansDir, f)).mtimeMs }))
+        .sort((a, b) => b.m - a.m)
+        .map((x) => ({ f: x.f, text: fs.readFileSync(path.join(plansDir, x.f), 'utf8') }));
+    } catch { candidates = []; } // 目录不可读或个别候选 stat/read 抛错，统一归并为空候选集——EXIT-2 文案不区分失败源（明示设计，见行为契约）
+    const picked = pickLatestEligible(candidates);
+    for (const s of picked.skipped) {
+      console.log('LATEST-SKIPPED: ' + s + ' （缺「## 攻击面台账」节：未闭环工作内存产物不进入审计选择域，latest-unclosed-exclude-gate）');
+    }
+    planPath = picked.f ? path.join(plansDir, picked.f) : null;
+    if (!planPath) {
+      console.log(candidates.length === 0
+        ? 'ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'
+        : 'ATTACK-LEDGER EXIT-2 无可选计划：全部时间戳命名计划均缺「## 攻击面台账」节（未闭环工作内存产物，latest-unclosed-exclude-gate）');
+      process.exit(2);
+    }
     const planTextPre = fs.readFileSync(planPath, 'utf8');
     const fsec = filesSectionOf(planTextPre);
     const impls = ENFORCEMENT_FILES.filter((f) => fsec.includes(f)).map((f) => path.join(root, f));

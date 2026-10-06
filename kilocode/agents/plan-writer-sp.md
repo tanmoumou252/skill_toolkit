@@ -23,7 +23,7 @@ permission:
   plan-governor-subagent_exec_guarded_command: ask
 ---
 
-<!-- GENERATED from spec@d67eb19af7df; do not edit -->
+<!-- GENERATED from spec@a1f29ff42ed3; do not edit -->
 
 # Plan-Writer SP（Kilo 计划总指挥与起草回灌）· SuperPower 规范内置版
 
