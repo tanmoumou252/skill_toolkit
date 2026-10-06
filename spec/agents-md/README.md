@@ -16,11 +16,11 @@
 | `direct-dispatch-header` | zcode 独有 | — |
 | `agents-md-hygiene-supplements` | 共享（三端除复审者类型名外逐字同） | `pr_reviewer_type` |
 
-agents 文件面插槽：`task_param`（kilocode/zcode = `subagent_type`，codebuddy = `subagent_name`）。
+agents 九文件 body 块为整块逐字保真，不做插槽替换；agents 面的平台差异（如派发工具名 `subagent_type`/`subagent_name`）由 AGENTS.md 层共享块的插槽与平台独有块承载，插槽键以三份 `spec/platform/*/manifest.json` 的 `slots` 字段为准。
 
 ## agents 九文件 body 块
 
-九份 agents 产物各由一整块承载：`spec/blocks/body-<平台>-<角色>.md`，逐字保真、不做插槽替换；三端共享面（生效方式、铁律骨架等）由 AGENTS.md 层共享块承载。改某端 agents 散文＝改对应 body 块，改完运行 `node checks/build-agents.mjs` 重生成。
+九份 agents 产物各由一整块承载，实际块库为 4 块：`body-shared-plan-writer.md`、`body-shared-plan-reviewer.md`、`body-shared-pr-reviewer.md`（三端共享角色）与 `body-zcode-plan-writer.md`（zcode plan-writer 独有），逐字保真、不做插槽替换；三端共享面（生效方式、铁律骨架等）由 AGENTS.md 层共享块承载。改 agents 散文＝改对应 body 块，改完运行 `node checks/build-agents.mjs` 重生成。
 
 ## 预留块（已迁往 spec/anchor-library/）
 

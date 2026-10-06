@@ -143,7 +143,13 @@ function loadSpec(root) {
   const profiles = {};
   for (const platform of PLATFORMS) {
     const mf = path.join(root, 'spec', 'platform', platform, 'manifest.json');
-    if (!fs.existsSync(mf)) continue;
+    // fail-loud 选型理由：与"未登记配置在场即拒产"（上方 unknownPlatformDirs 闸）对称——已登记配置
+    // 缺席更须响；`loadSpec:` 前缀错误被 freshnessFailures 翻译闸承接为结构化 specError（run.mjs 统一
+    // FAIL 行），不裸栈。"编译未启用"豁免域收窄为 spec/blocks 整树不存在（:133），单平台 manifest 缺失
+    // 与"未启用"自此可区分（前者红、后者绿）。
+    if (!fs.existsSync(mf)) {
+      throw new Error('loadSpec: 已登记平台缺 manifest.json，拒绝静默降级（manifest-missing-fail-loud）: spec/platform/' + platform + '/manifest.json');
+    }
     profiles[platform] = JSON.parse(fs.readFileSync(mf, 'utf8'));
   }
   return { spec: { blocks }, profiles };
@@ -181,19 +187,36 @@ export function freshnessFailures(checkFreshnessFn, root) {
   }
 }
 
+// CLI 装载 Outcome（M-2 归一）：checkFreshness + loadSpec + build 整体经 freshnessFailures 翻译闸，
+// 装载失效族（loadSpec:/build: 前缀与 JSON SyntaxError）不再以裸堆栈击穿 --check/写盘路径；
+// isMain 分支消费本函数：specError 非 null → 结构化 FAIL 行 + exit 1（fail-closed 不变，报错形态归一）。
+export function cliLoadOutcome(root) {
+  return freshnessFailures((r) => {
+    const stale = checkFreshness(r);
+    const { spec, profiles } = loadSpec(r);
+    const generatedMark = '<!-- GENERATED from spec@' + specHash(spec, profiles) + '; do not edit -->';
+    const products = build(spec, profiles, CLAUSES, generatedMark);
+    return { stale, spec, profiles, generatedMark, products };
+  }, root);
+}
+
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.resolve(here, '..');
   const checkOnly = process.argv.includes('--check');
-  const { spec, profiles } = loadSpec(root);
-  // 版本戳：构建前计算 spec 内容哈希并注入生成标记（契约 4.4 ⑤；安装态用户可凭哈希对账 spec 版本）。
-  const generatedMark = '<!-- GENERATED from spec@' + specHash(spec, profiles) + '; do not edit -->';
-  const products = build(spec, profiles, CLAUSES, generatedMark);
-  const stale = diffProducts(products, (p) => {
-    const f = path.join(root, ...p.split('/'));
-    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
-  });
+  // stale 判定单一真相源 = checkFreshness（与 run.mjs 消费同一函数，杜绝 --check 绿而 run.mjs 红的双口径）；
+  // 装载与构建整体经 cliLoadOutcome 翻译闸（M-2）：坏配置归一为结构化 FAIL 行，不再裸栈击穿；
+  // 两次 loadSpec 为确定性纯读，结果一致。
+  const outcome = cliLoadOutcome(root);
+  if (outcome.specError !== null) {
+    console.log('FAIL ' + outcome.specError);
+    process.exit(1);
+  }
+  // 键名注记：freshnessFailures 成功路径把整体载荷挂在 .stale 键下（历史键名，易误读）——成功时
+  // outcome.stale 实为 { stale: 路径数组, spec, profiles, generatedMark, products } 载荷整体，非仅
+  // stale 数组；失败路径仅 specError 非 null（此时不消费 .stale 键）。
+  const { stale, spec, profiles, generatedMark, products } = outcome.stale;
   if (checkOnly) {
     if (stale.length > 0) {
       console.log('STALE ' + stale.length + ' 件产物与 spec 不一致，运行 node checks/build-agents.mjs 重生成');

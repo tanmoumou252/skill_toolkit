@@ -13,7 +13,8 @@ Windows 平台 AI 编程的技能规程、代理流水线与受控 MCP 终端集
 | 机器执法规则 | `checks/registry.mjs` |
 | 三端 AGENTS.md 共享散文 | `spec/blocks/agents-md-*.md` |
 | 三端差异（插槽值） | `spec/platform/*/manifest.json` 的 `slots` |
-| 某端 agents 散文 | `spec/blocks/body-<平台>-<角色>.md` |
+| agents 角色散文（三端共享） | `spec/blocks/body-shared-*.md` |
+| zcode plan-writer 独有散文 | `spec/blocks/body-zcode-plan-writer.md` |
 | agents frontmatter | manifest 的 `frontmatter` 字段 |
 
 收尾三连：`node checks/build-agents.mjs` → `node checks/run.mjs` → `node checks/build-agents.mjs --check`。

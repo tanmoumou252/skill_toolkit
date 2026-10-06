@@ -36,7 +36,10 @@ export function sectionBody(text, fmEndLine) {
 // 锚切分：首个包含 clause.text 的行切段，块 id = clause.id；bodyLines 应已剔除围栏内行。
 // 锚重复出现语义（最小意外）：取首处为块边界，同一锚文本的后续出现不再切分新块，
 // 但每处后续出现各计一条 anchor-repeat 差异（由调用方依据返回的 repeats 生成）。
-export function splitByAnchors(bodyLines, clauses) {
+// lineNos 可选参数：body 下标 → 文件绝对行号 的平行数组（由调用方 inventory 传 outsideLineNos）；
+// 缺省/长度不齐时逐下标回落掩蔽空间相对序号 i+1（第三方直调兼容面，语义显式降级非静默错位）。
+export function splitByAnchors(bodyLines, clauses, lineNos = null) {
+  const ln = (i) => (Array.isArray(lineNos) && lineNos[i] !== undefined && lineNos[i] !== null ? lineNos[i] : i + 1);
   const blocks = new Map(); // clauseId -> { startLine, lines }
   const repeats = []; // { clauseId, line }
   let current = null;
@@ -50,21 +53,23 @@ export function splitByAnchors(bodyLines, clauses) {
       // 冲刷上一段（tail 感知）：tail（重复锚后残留）归 unanchored 单段，绝不误清重复锚块 .lines；
       // 非 tail 归该块正文；无块归 unanchored。三路互斥，与 EOF 冲刷同构。
       if (current && current.tail) {
-        if (pending.length) unanchored.push({ startLine: pendingStart, lines: pending });
+        if (pending.length) unanchored.push({ startLine: ln(pendingStart - 1), lines: pending });
       } else if (current) {
-        blocks.get(current.id).lines = pending;
+        // 冲刷＝块首锚行保留 + 锚后正文追加：块内容自锚首现行延伸至下一锚首现行（锚行属比对域，
+        // 装饰差异可检出）；tail 语义不受影响（重复锚块的 lines 由 :62 push 路径维护）。
+        blocks.get(current.id).lines.push(...pending);
       } else if (pending.length) {
-        unanchored.push({ startLine: pendingStart, lines: pending });
+        unanchored.push({ startLine: ln(pendingStart - 1), lines: pending });
       }
       if (blocks.has(hit.id)) {
-        repeats.push({ clauseId: hit.id, line: i + 1 });
+        repeats.push({ clauseId: hit.id, line: ln(i) });
         // 后续出现不切分新块；其行并入既有块（保持「块内容自锚首现行延伸至下一锚首现行」）
         blocks.get(hit.id).lines.push(line);
         current = { id: hit.id, tail: true };
         pending = [];
         pendingStart = null;
       } else {
-        blocks.set(hit.id, { startLine: i + 1, lines: [line] });
+        blocks.set(hit.id, { startLine: ln(i), lines: [line] });
         current = { id: hit.id, tail: false };
         pending = [];
         pendingStart = null;
@@ -84,11 +89,12 @@ export function splitByAnchors(bodyLines, clauses) {
     }
   }
   if (current && current.tail) {
-    if (pending.length) unanchored.push({ startLine: pendingStart, lines: pending });
+    if (pending.length) unanchored.push({ startLine: ln(pendingStart - 1), lines: pending });
   } else if (current && !current.tail) {
-    blocks.get(current.id).lines = pending;
+    // EOF 冲刷与锚命中冲刷同构：锚行保留 + 锚后正文追加（与上方冲刷语义一致）。
+    blocks.get(current.id).lines.push(...pending);
   } else if (pending.length) {
-    unanchored.push({ startLine: pendingStart, lines: pending });
+    unanchored.push({ startLine: ln(pendingStart - 1), lines: pending });
   }
   return { blocks, repeats, unanchored };
 }
@@ -155,15 +161,41 @@ export function inventory(files, clauses) {
     return { path: f.path, fm, outside, outsideLineNos };
   });
 
-  // frontmatter：按平台序两两对照首个文件（同组角色由调用方保证；组内逐对照首个）。
-  for (let i = 1; i < parsed.length; i++) {
-    for (const d of diffFmTrees(parsed[0].fm.tree, parsed[i].fm.tree)) {
-      frontmatter.diffs.push({ kind: d.kind, path: parsed[i].path, key: d.key, values: d.values, reference: parsed[0].path });
+  // roleOf：路径剥平台前缀；zcode 的 -subagent-sp 别名归一为 -sp（与 unanchored/fences 分组同一事实源，
+  // 定义上移至首个消费点之前，原中部定义删除，避免双源）。
+  const roleOf = (p) => p.replace(/^[^/]+\//, '').replace('-subagent-sp.md', '-sp.md');
+  // frontmatter：按角色组内两两对照首个文件（分组口径与 sections/unanchored/fences 一致，跨角色不配对）。
+  // 组参照无 frontmatter（present=false）时键级对照无意义：成员有 frontmatter → 每成员恰一条
+  // fm-reference-absent 登记信号；成员亦无 → 零条目（合法静默：无对照物）。绝不产逐键 fm-key-extra 噪声。
+  const fmRoleGroups = new Map();
+  parsed.forEach((p, i) => {
+    const role = roleOf(p.path);
+    if (!fmRoleGroups.has(role)) fmRoleGroups.set(role, []);
+    fmRoleGroups.get(role).push(i);
+  });
+  for (const idxs of fmRoleGroups.values()) {
+    if (idxs.length < 2) continue;
+    const ref = parsed[idxs[0]];
+    for (const k of idxs.slice(1)) {
+      const mem = parsed[k];
+      if (!ref.fm.present) {
+        if (mem.fm.present) frontmatter.diffs.push({ kind: 'fm-reference-absent', path: mem.path, key: null, values: [null, null], reference: ref.path });
+        continue;
+      }
+      // 反向对称（M-1）：成员无 frontmatter → 恰一条 fm-member-absent 登记信号（非逐键
+      // fm-key-missing 噪声）；语义与正向 fm-reference-absent 对称：登记非噪声、成员亦缺则静默。
+      if (!mem.fm.present) {
+        frontmatter.diffs.push({ kind: 'fm-member-absent', path: mem.path, key: null, values: [null, null], reference: ref.path });
+        continue;
+      }
+      for (const d of diffFmTrees(ref.fm.tree, mem.fm.tree)) {
+        frontmatter.diffs.push({ kind: d.kind, path: mem.path, key: d.key, values: d.values, reference: ref.path });
+      }
     }
   }
 
   // 锚切分（每文件独立）。
-  const splits = parsed.map((p) => splitByAnchors(p.outside, clauseList));
+  const splits = parsed.map((p) => splitByAnchors(p.outside, clauseList, p.outsideLineNos));
 
   // 锚集：perFile + 缺锚/多锚 + 重复锚。
   parsed.forEach((p, i) => {
@@ -204,8 +236,7 @@ export function inventory(files, clauses) {
   }
 
   // unanchored：无锚残留段按角色组内对照首个文件（跨角色不配对——AGENTS.md 与 agents/* 段落结构无对应关系；
-  // 不静默丢弃，同位同文不报）。角色 = 路径剥平台前缀；zcode 的 -subagent-sp 别名归一为 -sp。
-  const roleOf = (p) => p.replace(/^[^/]+\//, '').replace('-subagent-sp.md', '-sp.md');
+  // 不静默丢弃，同位同文不报）。角色 = roleOf（定义见 frontmatter 段上方，单一事实源）。
   const roleGroups = new Map();
   parsed.forEach((p, i) => {
     const role = roleOf(p.path);

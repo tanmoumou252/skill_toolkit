@@ -127,16 +127,23 @@ function sectionBody(text, headRe) {
   return { lines: lines.slice(s + 1, e), fenced: fenced.slice(s + 1, e), start: s + 1 };
 }
 
+// Files 节标题判据：容忍可选编号前缀（`## 5. Files 清单`），裸形态不回退；前瞻拒绝前缀近似
+// （ASCII \w 与 CJK \u4e00-\u9fff 均拒绝——\w 无 u 标志不含 CJK，中文近似后缀须显式入前瞻）。
+export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]+)?Files(?![\w\u4e00-\u9fff-])/;
 function filesSectionOf(text) {
-  const sec = sectionBody(text, /^## Files(?![\w-])/);
+  const sec = sectionBody(text, FILES_HEAD_RE);
   return sec ? sec.lines.join('\n') : '';
 }
 
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
+// 台账节标题判据（单一事实源，选择闸 hasLedgerSection 与审计闸 checkLedgerRows 同源，不分叉）：
+// 容忍可选编号前缀（整数与多级小数，如 `## 6. 攻击面台账`），裸形态不回退；前瞻拒绝前缀近似
+// （ASCII \w 与 CJK \u4e00-\u9fff 均拒绝——\w 无 u 标志不含 CJK，中文近似后缀须显式入前瞻）。
+export const LEDGER_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]+)?攻击面台账(?![\w\u4e00-\u9fff-])/;
 function checkLedgerRows(planText, opts, v) {
   const { implText = null, testText = null } = opts;
-  const sec = sectionBody(planText, /^## 攻击面台账(?![\w-])/);
+  const sec = sectionBody(planText, LEDGER_HEAD_RE);
   if (!sec) { v.push({ msg: '安全执法类计划缺少「## 攻击面台账」节' }); return; }
   const bounds = [];
   for (let i = 0; i < sec.lines.length; i++) if (!sec.fenced[i] && /^- 台账行[ \t]*$/.test(sec.lines[i])) bounds.push(i);
@@ -478,7 +485,7 @@ export function isPlanFilename(f) {
 //   围栏外台账节判定，选择视图与审计视图不得分叉。缺「## 攻击面台账」节（围栏外）的计划视为
 //   未闭环工作内存产物，不进入 --latest 审计选择域；显式 --plan 模式不受影响。
 export function hasLedgerSection(planText) {
-  return sectionBody(String(planText), /^## 攻击面台账(?![\w-])/) !== null;
+  return sectionBody(String(planText), LEDGER_HEAD_RE) !== null;
 }
 
 // 纯函数选择：candidates 为按 mtime 新→旧排序的 { f, text } 数组；返回首个含台账节者，
@@ -523,13 +530,13 @@ if (isMain) {
     } catch { candidates = []; } // 目录不可读或个别候选 stat/read 抛错，统一归并为空候选集——EXIT-2 文案不区分失败源（明示设计，见行为契约）
     const picked = pickLatestEligible(candidates);
     for (const s of picked.skipped) {
-      console.log('LATEST-SKIPPED: ' + s + ' （缺「## 攻击面台账」节：未闭环工作内存产物不进入审计选择域，latest-unclosed-exclude-gate）');
+      console.log('LATEST-SKIPPED: ' + s + ' （未命中台账节判据（裸或编号形态「攻击面台账」二级标题，围栏外）：latest-unclosed-exclude-gate）');
     }
     planPath = picked.f ? path.join(plansDir, picked.f) : null;
     if (!planPath) {
       console.log(candidates.length === 0
         ? 'ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'
-        : 'ATTACK-LEDGER EXIT-2 无可选计划：全部时间戳命名计划均缺「## 攻击面台账」节（未闭环工作内存产物，latest-unclosed-exclude-gate）');
+        : 'ATTACK-LEDGER EXIT-2 无可选计划：全部时间戳命名计划均未命中台账节判据（裸或编号形态「攻击面台账」，latest-unclosed-exclude-gate）');
       process.exit(2);
     }
     const planTextPre = fs.readFileSync(planPath, 'utf8');
