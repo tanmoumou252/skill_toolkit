@@ -1221,7 +1221,7 @@ async function main() {
       !toolNames.includes('read_plan_artifact') &&
       !toolNames.includes('list_plan_artifacts'));
     // 工具总数须锁定：README 曾长期写「4 个」而实注册 6 个，缺少总数断言使计数漂移无告警。
-    check('honeypot-tools-list-count', toolNames.length === 7 && toolNames.includes('write_scoped_file'), 'got=' + toolNames.length);
+    check('honeypot-tools-list-count', toolNames.length === 8 && toolNames.includes('write_scoped_file') && toolNames.includes('edit_scoped_file'), 'got=' + toolNames.length);
     check('honeypot-tools-sandbox-present',
       toolNames.includes('exec_sandboxed_command') && toolNames.includes('copy_into_sandbox'));
     // 作用域：本 session 仅 tools/list 与蜜罐 write_plan（恒拒不落盘），断言不涉及真实写面；server 非全量零写入（见 mcp/README「零写入」节与 write_scoped_file）。
@@ -1263,6 +1263,100 @@ async function main() {
     const scopedRecs = fs.existsSync(scopedAuditFile) ? fs.readFileSync(scopedAuditFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
     check('write-scoped-audit-recorded', scopedRecs.some((r) => r.event === 'scoped_write' && r.allowed === true));
     sess.cleanup(); cleanDir(tmp);
+  }
+
+  // —— edit_scoped_file 成功路 + 拒绝面（注入 _meta.runtime_scope=subagent）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-edit-'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+    fs.writeFileSync(path.join(plansDir, 'edit-ok.md'), '# A\nB\nC\n', 'utf8');
+    fs.writeFileSync(path.join(plansDir, 'two.md'), 'B\nB\n', 'utf8');
+    fs.writeFileSync(path.join(plansDir, 'big.md'), 'N' + 'a'.repeat(250 * 1024 - 1), 'utf8');
+    const meta = { runtime_scope: 'subagent' };
+    const sess = await runSession({ role: 'main', workdir: tmp, envExtra: { MCP_AUDIT_LOG: '1' }, actions: [
+      { id: 1, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B', new_string: 'B2' }, meta },
+      { id: 2, tool: 'edit_scoped_file', args: { filename: 'two.md', old_string: 'B', new_string: 'X' }, meta },
+      { id: 3, tool: 'edit_scoped_file', args: { filename: 'two.md', old_string: 'B', new_string: 'X', expected_count: 2 }, meta },
+      { id: 4, tool: 'edit_scoped_file', args: { filename: 'ghost.md', old_string: 'A', new_string: 'B' }, meta },
+      { id: 5, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'B2' }, meta },
+      { id: 6, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'B3' } },
+      { id: 7, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'ZZZ', new_string: 'Q', expected_count: 0 }, meta },
+      { id: 8, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'C', expected_count: -1 }, meta },
+      { id: 9, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'C', expected_count: 2.5 }, meta },
+      { id: 10, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'C', expected_count: '2' }, meta },
+      { id: 11, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'B2', new_string: 'C', expected_count: NaN }, meta },
+      { id: 12, tool: 'edit_scoped_file', args: { filename: 'big.md', old_string: 'N', new_string: 'x'.repeat(102400) }, meta },
+      { id: 13, tool: 'edit_scoped_file', args: { filename: '../escape.md', old_string: 'A', new_string: 'B' }, meta },
+      { id: 14, tool: 'edit_scoped_file', args: { filename: 'C:/abs.md', old_string: 'A', new_string: 'B' }, meta },
+      { id: 15, tool: 'edit_scoped_file', args: { filename: 'bad.txt', old_string: 'A', new_string: 'B' }, meta },
+      { id: 16, tool: 'edit_scoped_file', args: { filename: 'edit-ok.md', old_string: 'y'.repeat(262145), new_string: 'z' }, meta },
+    ] });
+    const r = sess.responses;
+    check('scoped-edit-success', !r[1].isError && fs.readFileSync(path.join(plansDir, 'edit-ok.md'), 'utf8') === '# A\nB2\nC\n' && r[1].content[0].text.includes('matched=1'));
+    check('scoped-edit-count-mismatch-rejected', isDenied(r[2], 'actual=2'));
+    check('scoped-edit-count-two-accepted', !r[3].isError && fs.readFileSync(path.join(plansDir, 'two.md'), 'utf8') === 'X\nX\n');
+    check('scoped-edit-missing-file-rejected', isDenied(r[4], 'write_scoped_file'));
+    check('scoped-edit-identical-args-rejected', isDenied(r[5], 'scoped-edit-identical-args'));
+    check('scoped-edit-no-meta-rejected', isDenied(r[6], '主代理/未知调用方'));
+    check('scoped-edit-expected-count-zero-rejected', isDenied(r[7], 'scoped-edit-expected-count-domain'));
+    check('scoped-edit-expected-count-domain-rejected',
+      isDenied(r[8], 'scoped-edit-expected-count-domain') &&
+      isDenied(r[9], 'scoped-edit-expected-count-domain') &&
+      isDenied(r[10], 'scoped-edit-expected-count-domain') &&
+      isDenied(r[11], 'scoped-edit-expected-count-domain'));
+    check('scoped-edit-result-size-cap-rejected', isDenied(r[12], 'scoped-edit-result-size-cap'));
+    check('scoped-edit-path-escape-rejected',
+      r[13] && r[13].isError &&
+      r[14] && r[14].isError &&
+      r[15] && r[15].isError &&
+      r[16] && r[16].isError);
+    const editAuditFile = path.join(sess.home, '.config', 'kilo', 'governor-audit.jsonl');
+    const editRecs = fs.existsSync(editAuditFile) ? fs.readFileSync(editAuditFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+    check('scoped-edit-audit-recorded', editRecs.some((rec) => rec.event === 'scoped_write' && rec.gateType === 'scoped-edit' && rec.allowed === true));
+    sess.cleanup(); cleanDir(tmp);
+  }
+
+  // —— edit_scoped_file 符号链接逃逸拒（junction 中段链接 + 目标自身链接）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-editlink-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-editout-'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+    let linked = false;
+    try { fs.symlinkSync(outside, path.join(plansDir, 'link'), 'junction'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'edit_scoped_file', args: { filename: 'link/x.md', old_string: 'A', new_string: 'B' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('scoped-edit-symlink-escape-deny', sess.responses[1] && sess.responses[1].isError);
+      sess.cleanup();
+    } else {
+      console.log('SKIP scoped-edit-symlink-escape-deny (junction unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
+  }
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-editfilelink-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-scoped-editfout-'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plansDir, { recursive: true });
+    const targetFile = path.join(plansDir, 'target.md');
+    const outsideFile = path.join(outside, 'secret.txt');
+    fs.writeFileSync(outsideFile, 'original', 'utf8');
+    let linked = false;
+    try { fs.symlinkSync(outsideFile, targetFile, 'file'); linked = true; } catch { /* 无权限环境降级跳过 */ }
+    if (linked) {
+      const sess = await runSession({ role: 'main', workdir: tmp, actions: [
+        { id: 1, tool: 'edit_scoped_file', args: { filename: 'target.md', old_string: 'original', new_string: 'hacked' }, meta: { runtime_scope: 'subagent' } },
+      ] });
+      check('scoped-edit-file-symlink-deny', sess.responses[1] && sess.responses[1].isError);
+      check('scoped-edit-file-symlink-unmodified', fs.readFileSync(outsideFile, 'utf8') === 'original');
+      sess.cleanup();
+    } else {
+      console.log('SKIP scoped-edit-file-symlink-deny (file symlink unavailable)');
+    }
+    cleanDir(tmp); cleanDir(outside);
   }
 
   // —— write_scoped_file 符号链接逃逸拒（realpath 二次判定）——

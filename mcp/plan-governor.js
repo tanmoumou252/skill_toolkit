@@ -1317,6 +1317,22 @@ function startServer() {
                 },
                 required: ['filename', 'content']
               }
+            },
+            {
+              name: 'edit_scoped_file',
+              description: ROLE === 'subagent'
+                ? '【受控编辑·不可用】subagent 实例不得经本通道编辑计划文件，调用即被拒。'
+                : '【受控编辑·zcode 子代理专用】对 .kilo/plans/ 下已存在 .md 做精确串替换（old_string 逐字命中 expected_count 次才放行，缺省 1；计数不符即拒并报实际计数）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁与符号链接校验同 write_scoped_file；新建文件请用 write_scoped_file。主代理与未知调用方一律拒绝。',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  filename: { type: 'string', description: '.kilo/plans/ 下的相对 .md 路径（必须已存在）' },
+                  old_string: { type: 'string', description: '被替换的逐字原文（必须与文件内容精确匹配）' },
+                  new_string: { type: 'string', description: '替换后的新文本' },
+                  expected_count: { type: 'integer', description: 'old_string 预期出现次数，缺省 1' }
+                },
+                required: ['filename', 'old_string', 'new_string']
+              }
             }
           ]
         }
@@ -1520,42 +1536,14 @@ function startServer() {
         // （宿主注入 main/subagent 两态实测在场）；ROLE 为服务端启动期
         // 模块变量、客户端不可伪造。若未来宿主把客户端可控 _meta 原样透传，scope 锚
         // 可被伪造——届时须在宿主侧收紧，server 侧双锚仅为纵深。
-        const rel = String(args.filename || '').replace(/\\/g, '/');
-        if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。' }] } });
+        const g = resolveScopedPlanTarget(args.filename);
+        if (!g.ok) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
           return;
         }
-        const root = path.resolve(WORKSPACE, '.kilo', 'plans');
-        const target = path.resolve(root, rel);
-        if (target !== root && !target.startsWith(root + path.sep)) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标越出 .kilo/plans/。' }] } });
-          return;
-        }
-        // 符号链接二次判定（祖先重锚版）：旧口径以 realpathSync(root) 为对照基准，存在两处失明——
-        //   ① `.kilo` 整体为指向区外的链接时，realRoot 与 realParent 同在区外且互为前缀（区外 plans
-        //      预建时直接判等放行），root 尚不存在时 realRoot 为 null，判定被整体跳过；
-        //   ② `link/sub/x.md` 中段 link 指区外而 sub 未创建时 realParent 为 null，判定跳过，
-        //      随后 mkdirSync(recursive) 直接把 sub 建到区外并写盘。
-        // 新口径：基准锚"真实工作区派生的 expectRoot"（与 root 的词法路径解耦，
-        //   root 在场与否、是否经链接解析均不参与判据），对 target 父路径取最近存在祖先三态判定：
-        //   a) 祖先在 expectRoot 内或其下 → 放行（正常路径）；
-        //   b) 祖先是 expectRoot 自身祖先且仍在工作区真实根内 → 放行（plans 尚未创建的合法首写）；
-        //   c) 其余（含祖先经链接落到区外、WORKSPACE 无法解析）→ fail-closed 拒绝。
-        const withinReal = (p, base) => p === base || p.startsWith(base + path.sep);
-        const nearestReal = (p) => { let c = p; for (;;) { try { return fs.realpathSync(c); } catch { const up = path.dirname(c); if (up === c) return null; c = up; } } };
-        const realWs = nearestReal(WORKSPACE);
-        const expectRoot = realWs ? path.join(realWs, '.kilo', 'plans') : null;
-        const anc = nearestReal(path.dirname(target));
-        if (!realWs || !anc || !(withinReal(anc, expectRoot) || (withinReal(expectRoot, anc) && withinReal(anc, realWs)))) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' }] } });
-          return;
-        }
-        try {
-          if (fs.lstatSync(target).isSymbolicLink()) {
-            send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标文件为符号链接，禁止写入。' }] } });
-            return;
-          }
-        } catch { /* 目标文件不存在时忽略 ENOENT */ }
+        const target = g.target;
+        const withinReal = g.withinReal;
+        const expectRoot = g.expectRoot;
         const content = String(args.content || '');
         if (Buffer.byteLength(content, 'utf8') > 262144) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 内容超 256KB。' }] } });
@@ -1603,6 +1591,93 @@ function startServer() {
         return;
       }
 
+      // 受控编辑工具: 对 .kilo/plans/ 下已存在 .md 做精确串替换（同 write 的双锚与路径锁；
+      // 严禁建目录——目标必须已存在，readFileSync ENOENT 早拒保证）
+      if (toolName === 'edit_scoped_file') {
+        const _m = params?._meta || {};
+        const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
+        if (ROLE !== 'main' || scope !== 'subagent') {
+          process.stderr.write(`[edit_scoped_file] REJECTED role=${ROLE} scope=${JSON.stringify(scope)}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
+          return;
+        }
+        const g = resolveScopedPlanTarget(args.filename);
+        if (!g.ok) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
+          return;
+        }
+        const oldS = String(args.old_string ?? '');
+        const newS = String(args.new_string ?? '');
+        if (!oldS || oldS === newS) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-identical-args] old_string 不得为空，且不得与 new_string 相同（无操作拒绝）。' }] } });
+          return;
+        }
+        if (Buffer.byteLength(oldS, 'utf8') > 262144 || Buffer.byteLength(newS, 'utf8') > 262144) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-result-size-cap] old_string/new_string 单参超 256KB。' }] } });
+          return;
+        }
+        // 缺省仅认 undefined；JSON 传输中 NaN 序列化为 null，null 必须走值域拒绝而非静默缺省
+        const expected = args.expected_count === undefined ? 1 : args.expected_count;
+        if (!Number.isInteger(expected) || expected < 1) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-expected-count-domain] expected_count 必须为正整数（缺省 1），0/负数/小数/字符串数字一律拒绝。' }] } });
+          return;
+        }
+        let text;
+        try {
+          text = fs.readFileSync(g.target, 'utf8');
+        } catch (err) {
+          const hint = err.code === 'ENOENT' ? '目标不存在，新建文件请用 write_scoped_file。' : err.message;
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-missing] ' + hint }] } });
+          return;
+        }
+        const actual = text.split(oldS).length - 1;
+        if (actual !== expected) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: `[scoped-edit-count-guard] old_string 逐字匹配计数与 expected_count 不符（actual=${actual}，expected=${expected}）；old_string 必须逐字取自 Read 的实际内容。` }] } });
+          return;
+        }
+        const result = text.split(oldS).join(newS);
+        if (Buffer.byteLength(result, 'utf8') > 262144) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-result-size-cap] 替换后结果体超 256KB。' }] } });
+          return;
+        }
+        try {
+          // 写盘前复核（同 write 建后复核口径，但不含 mkdirSync——edit 禁建目录）：
+          const realDir = fs.realpathSync(path.dirname(g.target));
+          if (!g.withinReal(realDir, g.expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
+          try { if (fs.lstatSync(g.target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+          fs.writeFileSync(g.target, result, 'utf8');
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: true,
+            gateType: 'scoped-edit',
+            reason: path.relative(WORKSPACE, g.target) + ' matched=' + actual,
+            bytes: Buffer.byteLength(result, 'utf8'),
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+          });
+          send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: '已编辑 ' + path.relative(WORKSPACE, g.target) + '（' + Buffer.byteLength(text, 'utf8') + ' → ' + Buffer.byteLength(result, 'utf8') + ' 字节，matched=' + actual + '）' }] } });
+        } catch (err) {
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: false,
+            gateType: 'scoped-edit',
+            reason: err.message,
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+          });
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控编辑失败] ' + err.message }] } });
+        }
+        return;
+      }
+
       // 蜜罐引导闸: 三写工具拦截（绝不落盘；恒按最严档灌子代理引导回执；留痕审计）
       if (toolName === 'write_plan' || toolName === 'write_review_report' || toolName === 'write_pr_review_report') {
         send({ jsonrpc: '2.0', id, result: honeypotReply(toolName) });
@@ -1620,6 +1695,45 @@ function startServer() {
       send({ jsonrpc: '2.0', id: (typeof msgId !== 'undefined' ? msgId : null), error: { code: -32000, message: err.message } });
     }
   });
+}
+
+// 受控写/受控编辑共用守卫：filename 归一 → .kilo/plans/ 路径锁 → 符号链接祖先重锚 →
+// 目标自身 lstat。返回 { ok: true, target, expectRoot, withinReal } 或 { ok: false, text }。
+// write 与 edit 必须共用本函数，严禁复制两份（单一事实源）。
+function resolveScopedPlanTarget(filename) {
+  const rel = String(filename || '').replace(/\\/g, '/');
+  if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {
+    return { ok: false, text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。' };
+  }
+  const root = path.resolve(WORKSPACE, '.kilo', 'plans');
+  const target = path.resolve(root, rel);
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    return { ok: false, text: '[受控写拦截] 目标越出 .kilo/plans/。' };
+  }
+  // 符号链接二次判定（祖先重锚版）：旧口径以 realpathSync(root) 为对照基准，存在两处失明——
+  //   ① `.kilo` 整体为指向区外的链接时，realRoot 与 realParent 同在区外且互为前缀（区外 plans
+  //      预建时直接判等放行），root 尚不存在时 realRoot 为 null，判定被整体跳过；
+  //   ② `link/sub/x.md` 中段 link 指区外而 sub 未创建时 realParent 为 null，判定跳过，
+  //      随后 mkdirSync(recursive) 直接把 sub 建到区外并写盘。
+  // 新口径：基准锚"真实工作区派生的 expectRoot"（与 root 的词法路径解耦，
+  //   root 在场与否、是否经链接解析均不参与判据），对 target 父路径取最近存在祖先三态判定：
+  //   a) 祖先在 expectRoot 内或其下 → 放行（正常路径）；
+  //   b) 祖先是 expectRoot 自身祖先且仍在工作区真实根内 → 放行（plans 尚未创建的合法首写）；
+  //   c) 其余（含祖先经链接落到区外、WORKSPACE 无法解析）→ fail-closed 拒绝。
+  const withinReal = (p, base) => p === base || p.startsWith(base + path.sep);
+  const nearestReal = (p) => { let c = p; for (;;) { try { return fs.realpathSync(c); } catch { const up = path.dirname(c); if (up === c) return null; c = up; } } };
+  const realWs = nearestReal(WORKSPACE);
+  const expectRoot = realWs ? path.join(realWs, '.kilo', 'plans') : null;
+  const anc = nearestReal(path.dirname(target));
+  if (!realWs || !anc || !(withinReal(anc, expectRoot) || (withinReal(expectRoot, anc) && withinReal(anc, realWs)))) {
+    return { ok: false, text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' };
+  }
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      return { ok: false, text: '[受控写拦截] 目标文件为符号链接，禁止写入。' };
+    }
+  } catch { /* 目标文件不存在时忽略 ENOENT */ }
+  return { ok: true, target, expectRoot, withinReal };
 }
 
 if (require.main === module) {
