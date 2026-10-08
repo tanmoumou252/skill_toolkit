@@ -295,6 +295,56 @@ export const CLAUSES = [
     text: '先读该基线文件、再逐条复跑其中的每条命令',
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
+  {
+    id: 'review-severity-axiom',
+    text: '严重度 = 影响半径 × 可逆性',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-doc-evidence-duty',
+    text: '失败语义必须对权威文档取证',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-omission-audit',
+    text: '遗漏型审查',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-two-pass-disclosure',
+    text: '两遍法与披露解耦',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-transaction-three-questions',
+    text: '事务三问',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-writer|plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-heterogeneous-lens',
+    text: '异源透镜',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-coupling-lineage',
+    text: '影响面按耦合谱系探',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-design-law',
+    text: '先毁后建',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-writer|plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-quick-check',
+    text: '一页速查',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
+  {
+    id: 'review-dispatch-diff-section',
+    text: '与派发主张的差集',
+    expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
+  },
 ];
 
 // —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——

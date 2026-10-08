@@ -1,4 +1,4 @@
-<!-- GENERATED from spec@f0d4003926f8; do not edit -->
+<!-- GENERATED from spec@b221bdf2bd4f; do not edit -->
 
 ## 终端命令执行硬性规范（CRITICAL: Shell Execution Policy）
 
@@ -74,7 +74,7 @@
 
 2. **证据日志追加前回读（Evidence Log Read-Before-Append）**：
    - 向已有的 test-evidence 文件追加 rework 记录或补充证据前，必须先以宿主官方自带读取工具读取该文件确认当前尾部内容；
-   - 编辑操作的旧字符串/匹配内容必须逐字取自文件实际内容，严禁凭记忆构造；文件落盘一律走宿主官方自带的编辑/写入工具，不经过 MCP；
+   - 编辑操作的旧字符串/匹配内容必须逐字取自文件实际内容，严禁凭记忆构造；文件落盘按实例能力分流：有宿主原生编辑/写入工具的实例一律走宿主官方自带编辑/写入工具，绑定受控写通道的子代理一律走其规程批准的受控写通道；共同禁令＝严禁以终端重定向（`echo`/`cat` 配合输出改向符）写文件；
    - 若读取返回内容与预期不符，以实际内容为准重新构造编辑参数。
 
 3. **计划指令与审查意见冲突裁决（Plan-vs-Review Conflict Resolution）**：

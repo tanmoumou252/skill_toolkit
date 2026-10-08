@@ -16,6 +16,7 @@ Windows 平台 AI 编程的技能规程、代理流水线与受控 MCP 终端集
 | agents 角色散文（三端共享） | `spec/blocks/body-shared-*.md` |
 | zcode plan-writer 独有散文 | `spec/blocks/body-zcode-plan-writer.md` |
 | agents frontmatter | manifest 的 `frontmatter` 字段 |
+| zcode 独有 AGENTS 块（直连派发参数头） | `spec/blocks/direct-dispatch-header.md`（经 zcode manifest 的 `AGENTS.md` 条目装配；执法条款「直连派发参数头」见 `checks/registry.mjs`） |
 
 收尾三连：`node checks/build-agents.mjs` → `node checks/run.mjs` → `node checks/build-agents.mjs --check`。
 

@@ -128,7 +128,8 @@
         "gtail": ""
       },
       "blocks": [
-        "body-shared-plan-writer"
+        "body-shared-plan-writer",
+        "body-doctrine-writer-laws"
       ]
     },
     {
@@ -271,7 +272,8 @@
         "gtail": "\n- **自检命令**：仅当本工作区存在 `checks/ledger/package.json` 时，报告落盘前运行 `npm test --prefix checks/ledger`，原始输出贴入报告尾部；非零退出先修自身格式再出裁决。工作区不存在该目录时（命令报路径缺失/找不到模块类失败，如 Exit 127 或 ENOENT），不得循环修格式、不得伪造输出：在报告尾部记一行「本仓库无 checks/ledger，台账自检豁免」并附原始失败回执（命令原文与退出码），再出裁决。"
       },
       "blocks": [
-        "body-shared-plan-reviewer"
+        "body-shared-plan-reviewer",
+        "body-doctrine-review-axis"
       ]
     },
     {
@@ -385,11 +387,13 @@
         "g104": "",
         "g105": "",
         "g106": "",
-        "g107": "向调度者只回报：报告路径、E 清单摘要、go/no-go 判定、三态计数、SEMANTIC_PASS 与 TRUTH_PASS，不复述全文。\n\n**转达闸门声明（逐字）**：\n",
+        "g107": "向调度者只回报：报告路径、E 清单摘要、go/no-go 判定、三态计数、SEMANTIC_PASS 与 TRUTH_PASS，不复述全文。\n",
         "gtail": ""
       },
       "blocks": [
-        "body-shared-pr-reviewer"
+        "body-shared-pr-reviewer",
+        "body-doctrine-review-axis",
+        "body-pr-reviewer-closing-gate"
       ]
     }
   ]

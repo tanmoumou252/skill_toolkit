@@ -21,6 +21,8 @@ ZCode 平台的三子代理计划流水线，解决原生计划模式产物不�
 
 将 `agents/` 下文件复制到 `~/.zcode/agents/`；将 `skills/` 下相关技能复制到 `~/.zcode/skills/`；将 `AGENTS.md` 放置于仓库根目录或 `~/.zcode/AGENTS.md`。MCP 双实例注册见 `mcp/README.md`。
 
+注意：本目录的 `AGENTS.md` 与 `agents/` 下文件为编译产物（由 `node checks/build-agents.mjs` 从 `spec/blocks/` 与 `spec/platform/*/manifest.json` 生成，头部带 GENERATED 版本戳）；修改必须改 `spec/` 后重生成，不得直改本仓产物（`skills/` 为源文件，不属产物）。
+
 ## 注意事项与暗坑
 
 - 批准计划后宿主可能自动切至 YOLO 模式；受控通道与宿主档位解耦，恒按最严档执法。

@@ -12,15 +12,9 @@ import {
   unclassifiedPlatformFiles,
   unscannedRoots,
 } from './invariants.mjs';
-// 新鲜度闸以命名空间导入存取：生成器空桩阶段零导出，命名导入会在 ESM 链接期抛 SyntaxError；
-// 命名空间 + 守卫把缺失降级为「闸不触发」，实现落盘后直取真函数。
-import * as buildNs from './build-agents.mjs';
-const checkFreshness = typeof buildNs.checkFreshness === 'function' ? buildNs.checkFreshness : () => [];
-// 新鲜度闸错误翻译层守卫别名：缺失时降级为「直调 checkFreshness、不翻译」（fail-noisy 不回退，
-// 仅失去风格归一），实现落盘后直取真函数（与 checkFreshness 同构命名空间守卫）。
-const freshnessFailures = typeof buildNs.freshnessFailures === 'function'
-  ? buildNs.freshnessFailures
-  : (fn, r) => ({ stale: fn(r), specError: null });
+// 新鲜度闸直连命名导入：空桩期守卫删除——导出缺失时 ESM 链接期即抛 SyntaxError（fail-loud），
+// 杜绝「守卫降级为空函数导致闸静默停用而输出逐字不变」的失效模式。
+import { checkFreshness, freshnessFailures } from './build-agents.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -68,6 +62,18 @@ const files = allFiles
   .sort((x, y) => (x.path < y.path ? -1 : 1));
 
 violations.push(...runAll(files));
+// 新鲜度闸（build-freshness-check）：generated-product-stale 已在 invariants.mjs FRESHNESS_GATE_IDS
+// 登记，与其他登记 id 同一 OK/FAIL 循环出报表（零违规时输出 OK generated-product-stale，正向在场
+// 证据）；违规计入 violations= 汇总行（口径统一：violations=0 即全绿）。spec 树不存在 / files 为空
+// = 编译未启用，空真不触发（不该触发域）。坏配置（loadSpec fail-loud）经 freshnessFailures 翻译为
+// 同族 FAIL 行，不再裸堆栈击穿（风格归一）。
+const freshGate = freshnessFailures(checkFreshness, root);
+if (freshGate.specError !== null) {
+  violations.push({ id: 'generated-product-stale', path: 'spec', msg: '新鲜度闸无法评估（spec/manifest 装载失败，非产物陈旧）: ' + freshGate.specError });
+}
+for (const stalePath of freshGate.stale) {
+  violations.push({ id: 'generated-product-stale', path: stalePath, msg: 'spec 已变更而三端产物未重生成，运行 node checks/build-agents.mjs 重生成' });
+}
 for (const id of allInvariantIds()) {
   const group = violations.filter((v) => v.id === id);
   if (group.length === 0) {
@@ -88,21 +94,6 @@ for (const v of violations) {
   }
 }
 
-// 新鲜度闸（build-freshness-check）：manifest 声明的产物与 spec 重算不一致或缺失即红；
-// spec 树不存在 / files 为空 = 编译未启用，空真不触发（不该触发域）。
-// 口径声明：generated-product-stale 为新鲜度违规，独立累加 failures 并逐条打印，
-// 不计入 violations= 汇总行（该行语义 = 不变量违规数，两者口径独立、不互相吞并）。
-// 坏配置（loadSpec fail-loud）经 freshnessFailures 翻译为同族 FAIL 行，不再裸堆栈击穿（风格归一）；
-// 复用既有 generated-product-stale 闸 id（path 段填 spec）避免新增未登记 id 触发注册表闸。
-const freshGate = freshnessFailures(checkFreshness, root);
-if (freshGate.specError !== null) {
-  failures += 1;
-  console.log(`FAIL generated-product-stale spec :: 新鲜度闸无法评估（spec/manifest 装载失败，非产物陈旧）: ${freshGate.specError}`);
-}
-for (const stalePath of freshGate.stale) {
-  failures += 1;
-  console.log(`FAIL generated-product-stale ${stalePath} :: spec 已变更而三端产物未重生成，运行 node checks/build-agents.mjs 重生成`);
-}
 console.log(`scanned=${files.length} invariants=${allInvariantIds().length} violations=${violations.length}`);
 console.log(failures === 0 ? 'TOOLKIT-INVARIANTS ALL OK' : 'TOOLKIT-INVARIANTS FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

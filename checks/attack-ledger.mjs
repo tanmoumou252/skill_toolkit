@@ -127,9 +127,11 @@ function sectionBody(text, headRe) {
   return { lines: lines.slice(s + 1, e), fenced: fenced.slice(s + 1, e), start: s + 1 };
 }
 
-// Files 节标题判据：容忍可选编号前缀（`## 5. Files 清单`），裸形态不回退；前瞻拒绝前缀近似
-// （ASCII \w 与 CJK \u4e00-\u9fff 均拒绝——\w 无 u 标志不含 CJK，中文近似后缀须显式入前瞻）。
-export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]+)?Files(?![\w\u4e00-\u9fff-])/;
+// Files 节标题判据：容忍可选编号前缀（编号后空白为零或多个——`## 5.Files清单` 无空格形态亦命中），
+// 中文尾缀以白名单收尾（清单/声明——仓内实测标题族；粘连形态 `## Files清单` 必须命中），
+// 白名单之外的 CJK 续写与 ASCII 近似词仍拒绝（前瞻）。台账侧 LEDGER_HEAD_RE 不做同款放宽：
+// 其过收方向为 fail-closed（误拒仅产生假红与选择域收窄），与 Files 侧的执法逃逸极性相反。
+export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]*)?Files(?:[ \t]*(?:清单|声明))?(?![\w\u4e00-\u9fff-])/;
 function filesSectionOf(text) {
   const sec = sectionBody(text, FILES_HEAD_RE);
   return sec ? sec.lines.join('\n') : '';
@@ -294,12 +296,16 @@ export function countAttackRows(reportText) {
 
 // 职责切分（勿合并）：本函数只消费 shadow 复审报告，四路校验行级互斥不重叠，合并即对 shadow 侧产生假红——
 //   ① 报告格式行（ATTACKS= / PENETRATIONS= / VERDICT: / SHADOW_PASS=）：存在性，逐行锚定；
-//   ② 攻击配额与实弹姿态：台账实数对账、击穿入 E 清单、零攻击/零实弹 GO 的 ECHO-RISK 标注；
+//   ② 攻击配额与实弹姿态：台账实数对账、击穿入 E 清单、零攻击 GO 分级处置（执法类计划禁止＝
+//      zero-attack-go-forbidden，非执法类保留 ECHO-RISK 明示）、零实弹 GO（ATTACKS>0）仍须 ECHO-RISK 标注；
 //   ③ SEMANTIC_PASS **不校验**——shadow 报告合法缺该行，其存在性归 pr-review 结构闸
 //      PR_REVIEW_GATE_RES、取值语义归 checkSemanticPassVerdict 与 checkTruthPassVerdict（PR 侧）；
 //   ④ SHADOW_PASS 存在性归 ①（恒执行路径，故非执法类计划亦被咬），取值语义归 checkShadowPassVerdict。
 //   SHADOW_PASS 与 SEMANTIC_PASS 的行级互斥即本函数与 PR 结构闸的分界：前者只属影子侧、后者只属 PR 侧。
-export function checkReportFormat(reportText, v) {
+// ctx.isSec（可选，缺省 false＝非执法类裁决面）：由唯一调用方 attackLedger 从被审计划 Files 节 ∩
+//   ENFORCEMENT_FILES 计算并贯通（复用 enfInFence/enfInRaw，与台账入闸条件同式）；直调面（selftest rv
+//   等仅报告文本场景）缺省按非执法类裁决。格式面（行存在性/实数对账/围栏掩蔽）与 ctx 无关恒执行。
+export function checkReportFormat(reportText, v, ctx = { isSec: false }) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。
   const { lines: rl, fenced: rf, unclosed } = lineView(reportText);
@@ -342,7 +348,14 @@ export function checkReportFormat(reportText, v) {
     }
     const seqs = rows.map((r) => r.seq);
     if (new Set(seqs).size !== seqs.length) v.push({ msg: '攻击行序号重复：计数可灌水' });
-    if (nAtk === 0 && isGo && !echo) v.push({ msg: '零攻击 GO 未标注 ECHO-RISK（回声放行必须明示人类）' });
+    if (nAtk === 0 && isGo) {
+      // zero-attack-go-forbidden（分级裁决面）：执法类计划（ctx.isSec，由 attackLedger 按计划 Files 节
+      //   ∩ ENFORCEMENT_FILES 计算）零攻击 GO 直接禁止——ECHO-RISK 不构成豁免，必须改出
+      //   ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN；非执法类计划保留既有
+      //   ECHO-RISK 明示语义（独立成行 ECHO-RISK 的零攻击 GO 放行，缺标注仍红）。
+      if (ctx.isSec) v.push({ msg: '零攻击（ATTACKS=0）与 GO 并存被禁止（zero-attack-go-forbidden）：必须改出 ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN，ECHO-RISK 不豁免' });
+      else if (!echo) v.push({ msg: '零攻击 GO 未标注 ECHO-RISK（回声放行必须明示人类）' });
+    }
   }
   // ② 击穿必须入 E 清单，且计数不得自相矛盾。
   if (nAtk !== null && nPen !== null && nPen > nAtk) v.push({ msg: 'PENETRATIONS=' + nPen + ' 大于 ATTACKS=' + nAtk + '：计数自相矛盾' });
@@ -430,17 +443,14 @@ export function checkReportStructureGate(text, kind, v) {
 
 export function attackLedger(planText, opts = {}) {
   const v = [];
-  const { unclosed } = lineView(planText);
-  const fsec = filesSectionOf(planText);
-  const enfInFence = ENFORCEMENT_FILES.some((f) => fsec.includes(f));
-  const enfInRaw = ENFORCEMENT_FILES.some((f) => planText.includes(f));
-  if (enfInFence || (enfInRaw && unclosed.length > 0)) {
+  const { unclosed, enfInFence, enforcement } = enforcementSignals(planText);
+  if (enforcement) {
     if (!enfInFence && unclosed.length > 0) {
       v.push({ msg: '计划含未闭合代码围栏（第 ' + unclosed.join('、') + ' 行起）：疑掩蔽 Files/台账判定位，按安全执法类 fail-closed 强制台账校验' });
     }
     checkLedgerRows(planText, opts, v);
   }
-  checkReportFormat(opts.reportText ?? null, v);
+  checkReportFormat(opts.reportText ?? null, v, { isSec: enforcement });
   if (opts.shadowReportText !== undefined) {
     checkReportStructureGate(opts.shadowReportText, 'shadow', v);
     // 两路文本不同时对 shadowReportText 整体走 checkReportFormat 全量格式闸（闸名登记：
@@ -454,7 +464,7 @@ export function attackLedger(planText, opts = {}) {
     //   SEMANTIC_PASS 行（缺行早退，既有负控不破），但围栏外出现该整行且非 done × GO 时会被判红
     //   ——属 fail-closed 方向的加严，非误伤。
     if (opts.reportText !== opts.shadowReportText && typeof opts.shadowReportText === 'string') {
-      checkReportFormat(opts.shadowReportText, v);
+      checkReportFormat(opts.shadowReportText, v, { isSec: enforcement });
     }
   }
   if (opts.prReviewReportText !== undefined) {
@@ -488,15 +498,62 @@ export function hasLedgerSection(planText) {
   return sectionBody(String(planText), LEDGER_HEAD_RE) !== null;
 }
 
-// 纯函数选择：candidates 为按 mtime 新→旧排序的 { f, text } 数组；返回首个含台账节者，
-//   skipped 收集被排除的未闭环产物名（CLI 逐个打印 LATEST-SKIPPED，不静默）；全排除时 f=null。
+// 安全执法类信号（单一事实源）：选择域 pickLatestEligible 与审计域 attackLedger 共用本判据，视图不分叉。
+//   enfInFence = Files 节命中 ENFORCEMENT_FILES；enforcement = enfInFence 或（原文命中 ENFORCEMENT_FILES
+//   且含未闭合围栏，fail-closed：未闭合围栏可掩蔽 Files/台账判定位，按执法类强制对账）。
+export function enforcementSignals(planText) {
+  const { unclosed } = lineView(planText);
+  const enfInFence = ENFORCEMENT_FILES.some((f) => filesSectionOf(planText).includes(f));
+  const enfInRaw = ENFORCEMENT_FILES.some((f) => planText.includes(f));
+  return { unclosed, enfInFence, enforcement: enfInFence || (enfInRaw && unclosed.length > 0) };
+}
+
+// 纯函数选择：candidates 为按 mtime 新→旧排序的 { f, text } 数组；返回首个入选者，
+//   skipped 收集被排除产物名（CLI 逐个打印 LATEST-SKIPPED，不静默）；全排除时 f=null。
+// 选择-审计同构：入选域与 attackLedger 审计判定同源——含围栏外台账节入选；缺台账节但
+//   enforcementSignals().enforcement 为真（Files 命中执法文件，或未闭合围栏+原文命中执法文件的
+//   fail-closed 变体）同样入选，交审计侧 checkLedgerRows loud 报缺节；严禁选择视图静默 skip 执法缺节
+//   候选（会漂移到更旧候选、与审计视图分叉）；仅「非执法类且缺台账」继续 skip（真未闭环产物）。
 export function pickLatestEligible(candidates) {
   const skipped = [];
   for (const c of candidates) {
-    if (hasLedgerSection(c.text)) return { f: c.f, skipped };
+    if (hasLedgerSection(c.text) || enforcementSignals(c.text).enforcement) return { f: c.f, skipped };
     skipped.push(c.f);
   }
   return { f: null, skipped };
+}
+
+// 候选装载（失败源分开归因）：readdirSync / statSync / readFileSync 三类失败逐条归因 faults，
+// 不再统一归并空候选集——「计划存在但不可读」不得误报为「无时间戳命名计划文件」。
+// 装载失败仍 fail-closed：调用方（--latest CLI）对 faults 无条件逐条打印 LATEST-LOAD-FAULT（部分
+// 不可读而仍有可选计划时不得静默漂移审计目标），空候选集且 faults 非空时以 EXIT-2 退出。
+export function collectLatestCandidates(plansDir) {
+  const faults = [];
+  let names;
+  try {
+    names = fs.readdirSync(plansDir).filter((f) => f.endsWith('.md') && isPlanFilename(f));
+  } catch {
+    faults.push('计划目录不可读: ' + plansDir);
+    return { candidates: [], faults };
+  }
+  const metas = [];
+  for (const f of names) {
+    try {
+      metas.push({ f, m: fs.statSync(path.join(plansDir, f)).mtimeMs });
+    } catch {
+      faults.push('候选元数据不可读（stat 失败）: ' + f);
+    }
+  }
+  metas.sort((a, b) => b.m - a.m);
+  const candidates = [];
+  for (const x of metas) {
+    try {
+      candidates.push({ f: x.f, text: fs.readFileSync(path.join(plansDir, x.f), 'utf8') });
+    } catch {
+      faults.push('候选内容不可读（read 失败）: ' + x.f);
+    }
+  }
+  return { candidates, faults };
 }
 
 function newestMd(dir, pred) {
@@ -520,14 +577,10 @@ if (isMain) {
   if (process.argv.includes('--latest')) {
     latestMode = true;
     const plansDir = path.join(root, '.kilo', 'plans');
-    let candidates = [];
-    try {
-      candidates = fs.readdirSync(plansDir)
-        .filter((f) => f.endsWith('.md') && isPlanFilename(f))
-        .map((f) => ({ f, m: fs.statSync(path.join(plansDir, f)).mtimeMs }))
-        .sort((a, b) => b.m - a.m)
-        .map((x) => ({ f: x.f, text: fs.readFileSync(path.join(plansDir, x.f), 'utf8') }));
-    } catch { candidates = []; } // 目录不可读或个别候选 stat/read 抛错，统一归并为空候选集——EXIT-2 文案不区分失败源（明示设计，见行为契约）
+    const { candidates, faults } = collectLatestCandidates(plansDir);
+    for (const f of faults) {
+      console.log('LATEST-LOAD-FAULT: ' + f);
+    }
     const picked = pickLatestEligible(candidates);
     for (const s of picked.skipped) {
       console.log('LATEST-SKIPPED: ' + s + ' （未命中台账节判据（裸或编号形态「攻击面台账」二级标题，围栏外）：latest-unclosed-exclude-gate）');
@@ -535,7 +588,9 @@ if (isMain) {
     planPath = picked.f ? path.join(plansDir, picked.f) : null;
     if (!planPath) {
       console.log(candidates.length === 0
-        ? 'ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件'
+        ? (faults.length > 0
+            ? 'ATTACK-LEDGER EXIT-2 候选装载失败（计划存在但不可读，不误报无计划文件）: ' + faults.join('; ')
+            : 'ATTACK-LEDGER EXIT-2 .kilo/plans 下无时间戳命名计划文件')
         : 'ATTACK-LEDGER EXIT-2 无可选计划：全部时间戳命名计划均未命中台账节判据（裸或编号形态「攻击面台账」，latest-unclosed-exclude-gate）');
       process.exit(2);
     }

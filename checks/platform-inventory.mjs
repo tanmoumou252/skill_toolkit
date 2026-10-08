@@ -290,9 +290,104 @@ export function inventory(files, clauses) {
 }
 
 // —— CLI 薄壳：读真实磁盘、写报告；不做任何裁决逻辑 ——
+// 写面函数化（参数化 + 可测）：collectPlatformFiles / runInventory / outBaseRejected 导出供
+// selftest 以真实文件集与 tmpdir 驱动全链，CLI 块仅保留参数解析与打印薄壳。
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL } from 'url';
+
+// --out 收容闸（纯函数）：拒绝绝对路径、盘符前缀与 .. 段（反斜杠先归一再判）；其余相对路径放行。
+export function outBaseRejected(outArg) {
+  const raw = String(outArg);
+  const norm = path.posix.normalize(raw.replace(/\\/g, '/'));
+  return path.posix.isAbsolute(norm) || /^[A-Za-z]:/.test(raw) || norm.split('/').includes('..');
+}
+
+// 三端文件集收集：任一已登记平台缺 AGENTS.md ⇒ 结构化抛错拒清点（fail-loud，拒绝静默跳过）；
+// agents/ 子目录缺失保持既有容忍（只清点 AGENTS.md）。
+export function collectPlatformFiles(root) {
+  const files = [];
+  for (const platform of PLATFORMS) {
+    const gov = path.join(root, platform, 'AGENTS.md');
+    if (!fs.existsSync(gov)) {
+      throw new Error('PLATFORM-INVENTORY FAIL 缺少平台治理文件 ' + platform + '/AGENTS.md（三端清点要求三份治理文件齐备，拒绝静默跳过）');
+    }
+    const agentsDir = path.join(root, platform, 'agents');
+    for (const name of ['AGENTS.md', ...(fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort().map((f) => 'agents/' + f) : [])]) {
+      files.push({ path: platform + '/' + name, text: fs.readFileSync(path.join(root, platform, name), 'utf8') });
+    }
+  }
+  return files;
+}
+
+// 清点 + 渲染 + 双报告写盘（路径全参数化，selftest 以 tmpdir 驱动；CLI 缺省仍落 .kilo/plans/）。
+export function runInventory(root, outDir, base) {
+  const files = collectPlatformFiles(root);
+  const result = inventory(files);
+  const jsonPath = path.join(outDir, base + '.json');
+  const mdPath = path.join(outDir, base + '-report.md');
+  // base 含路径段（如 reports/inv）时输出父目录可能不存在：写盘前按两份输出的共同父目录递归建目录
+  // （json 与 md 同父目录，一次 mkdir 覆盖两份输出），端到端可写、拒绝 ENOENT 裸崩。
+  // symlink 写逃逸守卫①（mkdir 前中间段预扫）：outBaseRejected 只挡字面绝对路径/盘符/.. 段，
+  //   挡不住 outDir 内既有符号链接——从 outDir 起逐段拼接至输出父目录，对每个已存在的中间段
+  //   lstat，任一为符号链接即拒（否则 recursive mkdir 会穿越链接在盘外递归建目录）；不存在的
+  //   中间段放行，由 mkdir 正常建立（链上某段不存在则更深段亦无既有链接，直接交 mkdir）。
+  const parentDir = path.dirname(jsonPath);
+  let probe = outDir;
+  for (const seg of path.relative(outDir, parentDir).split(path.sep)) {
+    if (seg === '' || seg === '.') break;
+    probe = path.join(probe, seg);
+    let st = null;
+    try { st = fs.lstatSync(probe); } catch { break; }
+    if (st.isSymbolicLink()) {
+      throw new Error('PLATFORM-INVENTORY FAIL 输出父目录中间段为既有符号链接（' + probe + '），拒绝经链接递归建目录');
+    }
+  }
+  // 守卫①（写前，mkdir 之前，仓库根锚定）：写盘的一切副作用（递归建目录与报告写）都必须落在解析后的
+  //   仓库根之内。先做词法收容（outDir 须在 root 之内），再自 root 起沿 outDir 的路径链逐段 lstat：
+  //   任一既有段为符号链接即拒——root→outDir 的 .kilo/plans 被指向仓库外的链接劫持时，recursive mkdir
+  //   会先在盘外建出目录、报告也会写到盘外；收容判定不得后置于 mkdir（mkdir 本身即写盘副作用）。
+  //   不存在的段放行（链断即无既有链接可劫持），交下方 mkdir 正常建立。
+  const rootReal = fs.realpathSync(root);
+  const relOut = path.relative(root, outDir);
+  if (path.isAbsolute(relOut) || relOut === '..' || relOut.startsWith('..' + path.sep)) {
+    throw new Error('PLATFORM-INVENTORY FAIL 输出目录越出仓库根（' + outDir + '），拒绝建目录与写盘');
+  }
+  let linkProbe = root;
+  for (const seg of relOut.split(path.sep)) {
+    if (seg === '' || seg === '.') continue;
+    linkProbe = path.join(linkProbe, seg);
+    let stLink = null;
+    try { stLink = fs.lstatSync(linkProbe); } catch { break; }
+    if (stLink.isSymbolicLink()) {
+      throw new Error('PLATFORM-INVENTORY FAIL 输出收容目录路径段为既有符号链接（' + linkProbe + '），拒绝经链接建目录与写盘');
+    }
+  }
+  fs.mkdirSync(parentDir, { recursive: true });
+  // 守卫②（mkdir 后收容域校验，收容根＝仓库根）：outDir 与输出父目录分别 realpath，解析结果必须落在
+  //   解析后的仓库根之内（=== rootReal 或以 rootReal + path.sep 为前缀）。锚定仓库根而非 outDir：若
+  //   root→outDir 段被链接劫持，outDir 的 realpath 会越出仓库根，此处直接拒绝（不以「可能被替换的
+  //   outDir」当收容根，避免链接目标劫持后「自洽相等」误判放行）；亦不依赖 CLI 入口的
+  //   cliOutDirSymlinkFree 预检——本函数被 selftest 与 CLI 双路调用，CLI 预检只覆盖其一。
+  //   守卫③（写盘前）：json/md 任一既有条目（含悬空链接）为符号链接即拒写。
+  for (const dir of [outDir, parentDir]) {
+    const real = fs.realpathSync(dir);
+    if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
+      throw new Error('PLATFORM-INVENTORY FAIL 输出目录符号链接逃逸仓库根（' + dir + ' -> ' + real + ' 越出收容域 ' + rootReal + '），拒绝写盘');
+    }
+  }
+  for (const p of [jsonPath, mdPath]) {
+    let st = null;
+    try { st = fs.lstatSync(p); } catch { /* 不存在：首次写，放行 */ }
+    if (st !== null && st.isSymbolicLink()) {
+      throw new Error('PLATFORM-INVENTORY FAIL 输出路径为既有符号链接（' + p + '），拒绝写盘');
+    }
+  }
+  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2));
+  fs.writeFileSync(mdPath, renderMarkdown(result));
+  const total = result.anchorSet.diffs.length + result.frontmatter.diffs.length + result.sections.diffs.length + result.fences.diffs.length + result.unanchored.diffs.length;
+  return { result, jsonPath, mdPath, total };
+}
 
 function mdEscape(s) {
   return String(s).replace(/\|/g, '\\|');
@@ -326,23 +421,38 @@ function renderMarkdown(result) {
   return lines.join('\n');
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const root = process.cwd();
-  const files = [];
-  for (const platform of PLATFORMS) {
-    const agentsDir = path.join(root, platform, 'agents');
-    for (const name of ['AGENTS.md', ...(fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir).filter((f) => f.endsWith('.md')).sort().map((f) => 'agents/' + f) : [])]) {
-      const full = path.join(root, platform, name);
-      files.push({ path: `${platform}/${name}`, text: fs.readFileSync(full, 'utf8') });
-    }
+// CLI 入口根相对 symlink 预检（纯函数，可 selftest tmpdir 直调）：runInventory 的收容根为 realpathSync(outDir)，
+//   不校验 root→outDir 之间的 .kilo / plans 段——若其为指向仓库外的符号链接，收容根被链接目标劫持，写盘可逃逸
+//   仓库根。故仅在 CLI 入口、调用 runInventory 之前，从 root 起对 .kilo、plans 逐段 lstat，任一既有段为符号链接
+//   即判不安全。不存在段（首次写）放行交 runInventory 的 mkdir 正常建立。返回 true=安全可写。
+export function cliOutDirSymlinkFree(root) {
+  let cur = root;
+  for (const seg of ['.kilo', 'plans']) {
+    cur = path.join(cur, seg);
+    let st = null;
+    try { st = fs.lstatSync(cur); } catch { return true; }
+    if (st.isSymbolicLink()) return false;
   }
-  const result = inventory(files);
+  return true;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const root = process.cwd();
+  const arg = (name) => { const i = process.argv.indexOf(name); return i > -1 ? process.argv[i + 1] : null; };
+  const outArg = arg('--out');
+  let outBase = new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-tri-platform-inventory';
+  if (outArg !== null) {
+    if (outBaseRejected(outArg)) {
+      console.log('PLATFORM-INVENTORY FAIL --out 拒绝（仅接受工作区内相对路径，禁止绝对路径/盘符/..段）: ' + outArg);
+      process.exit(2);
+    }
+    outBase = String(outArg).replace(/\\/g, '/').replace(/\.json$/, '');
+  }
   const outDir = path.join(root, '.kilo', 'plans');
-  fs.mkdirSync(outDir, { recursive: true });
-  const jsonPath = path.join(outDir, '20261005-tri-platform-inventory.json');
-  const mdPath = path.join(outDir, '20261005-tri-platform-inventory-report.md');
-  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2));
-  fs.writeFileSync(mdPath, renderMarkdown(result));
-  const total = result.anchorSet.diffs.length + result.frontmatter.diffs.length + result.sections.diffs.length + result.fences.diffs.length + result.unanchored.diffs.length;
-  console.log(`PLATFORM-INVENTORY files=${result.files.length} diffs=${total} json=${jsonPath} md=${mdPath}`);
+  if (!cliOutDirSymlinkFree(root)) {
+    console.log('PLATFORM-INVENTORY FAIL 输出收容目录 root→.kilo→plans 路径含既有符号链接，拒绝写盘（仓库根→outDir 段被链接劫持，越出收容域）');
+    process.exit(2);
+  }
+  const r = runInventory(root, outDir, outBase);
+  console.log(`PLATFORM-INVENTORY files=${r.result.files.length} diffs=${r.total} json=${r.jsonPath} md=${r.mdPath}`);
 }

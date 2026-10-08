@@ -43,6 +43,7 @@ export function allInvariantIds() {
   return [
     ...STRUCTURAL_IDS,
     ...ENTRY_GATE_IDS,
+    ...FRESHNESS_GATE_IDS,
     ...CLAUSES.map((c) => 'clause-' + c.id),
     ...DERIVED_CLAUSES.map((c) => 'clause-' + c.id),
     ...GATES.map((g) => 'gate-' + g.id),
@@ -113,6 +114,9 @@ export const SCAN_ROOTS = ['kilocode', 'codebuddy', 'zcode', 'skills'];
 export const NON_PLATFORM_ROOTS = ['checks', 'mcp', 'spec'];
 export const BUILD_ARTIFACT_ROOTS = ['node_modules'];
 export const ENTRY_GATE_IDS = ['unscanned-root-directory', 'unclassified-platform-file'];
+// 新鲜度闸 id 登记（单一事实源）：检测逻辑由 run.mjs 消费 freshnessFailures 承载，id 登记于此使
+// allInvariantIds() 正向枚举含该闸（run.mjs 零违规时输出 OK <id> 行），杜绝绿色盲区。
+export const FRESHNESS_GATE_IDS = ['generated-product-stale'];
 
 // 入口目录名过滤（纯函数）：点目录（内部内存）、显式登记的非平台工具根与本地构建产物根
 // 都不是"未登记扫描根"；其余顶层目录全部进入 unscannedRoots 差集判定。

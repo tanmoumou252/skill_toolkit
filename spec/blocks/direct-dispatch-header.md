@@ -18,6 +18,7 @@ MODE=single; BASE_REF=origin/main; SCOPE_DIRS=zcode skills checks; PLAN_PATH=本
    - `MODE` 默认 `single`（审未提交变更集）；审查已提交区间必须传 `cumulative`；
    - `BASE_REF` 由 `git rev-parse origin/main` → `git rev-parse main` → `git rev-parse origin/master` → `git rev-parse master` 探测链取首个成功解析者，严禁猜写；
    - `SCOPE_DIRS` 取变更集实际涉及的一级业务目录；`PLAN_PATH` 无主计划时传 `.`，并在本参数头同处声明"本分支下范围逃逸以 SCOPE_DIRS 为唯一判据"，消除接收端按字面比对 Files 集合产生的歧义；
-   - `EVIDENCE_LOG` 必须在派发前实跑基线验证命令并落盘 `.kilo/plans/test-evidence/<时间戳>-<英文主题>-test-evidence.md`，把该真实路径写入参数头，无豁免通道。
+   - `EVIDENCE_LOG` 必须在派发前实跑基线验证命令并落盘 `.kilo/plans/test-evidence/<时间戳>-<英文主题>-test-evidence.md`，把该真实路径写入参数头，无豁免通道。该清单是**被审对象、非接收端须接受的前提**：接收端先从地面真相（自跑 diff、自圈波及面、自读文档）自建图景，之后才读该基线并逐条复跑、比对差集——差集才是审查产出，基线在场不构成「已验证」背书。
 3. **顺序恒定**：先运行 `git status --short -uall` 完成工作区卫生检查 → 实跑基线并落盘 → 构造参数头 → 派发。三步缺一即视为派发未完成。
 4. **缺头的后果**（接收端缺省规则，见 `zcode/agents/pr-reviewer-subagent-sp.md`）：缺 `MODE` 按 `single` 处理（工作区干净时会得出"无待审 diff"）；`cumulative` 缺 `BASE_REF` 判"参数缺失，退回调度者"；缺 `PLAN_PATH` 时范围逃逸判定记"不可判"；缺 `EVIDENCE_LOG` 直接按证据日志节判 Critical。故缺头派发会产出被污染的判定，父会话自查发现缺头即撤回重派。
+5. **派发输入纪律（主张与前提分离）**：参数头之外的作者自由文本最小化，且必须以「以下为主张、未经验证」显式标记；派发词严禁夹带"已验证""已核实""已跑通"类断言。技术事实、基线指针与范围圈定在派发词中只作主张传递，其验证归宿是证据日志——主张进证据日志当被审对象，不进派发词当前提。

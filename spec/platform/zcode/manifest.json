@@ -27,7 +27,8 @@
       "frontmatter": "name: plan-writer-subagent-sp\ndescription: 计划撰写与回灌子代理（ZCode，SuperPower 规范内置版）。任务模式中由父会话分派：起草实现计划并物理写入磁盘，随后按 Reviewer 的 E 清单回灌主计划。\ncolor: red\ntools: [Read, Grep, Glob, mcp__plan-governor-main__exec_guarded_command, mcp__plan-governor-main__exec_sandboxed_command, mcp__plan-governor-main__copy_into_sandbox, mcp__plan-governor-main__write_scoped_file, TodoWrite]\npermissionMode: dontAsk\ninjectAgentsMd: true",
       "slots": {},
       "blocks": [
-        "body-zcode-plan-writer"
+        "body-zcode-plan-writer",
+        "body-doctrine-writer-laws"
       ]
     },
     {
@@ -153,7 +154,7 @@
         "g116": "",
         "g117": "",
         "g118": "### 五、契约执行闸（两段式黑盒派发的履行核验）\n",
-        "g119": "- Reviewer 在交付可证伪攻击清单与不变量枚举（本节一~三产物）并获第二段计划理由与方案选型依据之前，不得读取主计划动机/理由段定性；\n- 若派发 prompt 未按两段式执行（第一段即含主计划动机/理由），须在报告标注 `DISPATCH_CONTRACT_VIOLATED`，并按本节四「千行级 diff 零攻击发现」同级红旗处理：触发二轮换角度攻击，不得直接 GO。\n- 交接协议（两段之间的派发时序）：父会话必须以独立派发发出第一段（diff + 用户原始需求原文 + 探索所得可验证关键事实含基线指针 + 「枚举什么输入能到达这段代码」任务），并**等待** Reviewer 交付可证伪攻击清单与不变量枚举后，方可发起第二段派发（携带第一段产物原文 + 主计划理由与方案选型依据）；\n- 平台不支持同会话续派时，父会话须重新派发全新 Reviewer 并在 prompt 中附第一段产物原文；续派 Reviewer 从第一段产物续起完成定性，不得跳过枚举重做后直接定性，亦不得重复枚举稀释第一段产物效力；\n- 任何一方违反交接顺序（父会话第二段未附第一段产物 / Reviewer 未交枚举即定性）均标注 `DISPATCH_CONTRACT_VIOLATED`，按上条红旗处理。\n\n## 报告格式与交付（物理落盘并回读）\n\n报告落地至分派 prompt 中 `报告路径：` 标记指定的路径（缺省 `.kilo/plans/review/<主计划文件名>-shadow-plan.md`，第 2 轮返工核验为 `-r2-shadow-plan.md`）。**严重度校准**：`Critical`＝Files 清单差集、事实错误与幻觉断言；`Important`＝步骤覆盖差集、约束缺失、答案唯一的修正；`Minor`＝表述与格式。**严重度与结案闸**：除第⑤条事实对齐例外外，已确认的 Files/步骤差集不得由影子审查者单方面降级或作为 GO 结案；任何改变严重度或结论的请求必须在 E 清单记录具体证据（含可证伪输入与 `路径:行号`）并提交父会话（主编排器）裁决。产物须含以下核心段落：\n",
+        "g119": "- 适用条件：本闸仅标准模式、深度模式与分级不可判（缺 `DEPTH_BASIS=`，按 ⑦ 条按标准模式执行）执行；轻量模式（`DEPTH_BASIS=` 复核通过：Files ≤3 且纯文档）豁免两段式交接，其合法省略不得标注 `DISPATCH_CONTRACT_VIOLATED`。\n- Reviewer 在交付可证伪攻击清单与不变量枚举（本节一~三产物）并获第二段计划理由与方案选型依据之前，不得读取主计划动机/理由段定性；\n- 若派发 prompt（标准/深度模式下）未按两段式执行（第一段即含主计划动机/理由），须在报告标注 `DISPATCH_CONTRACT_VIOLATED`，并按本节四「千行级 diff 零攻击发现」同级红旗处理：触发二轮换角度攻击，不得直接 GO。\n- 交接协议（两段之间的派发时序）：父会话必须以独立派发发出第一段（diff + 用户原始需求原文 + 探索所得可验证关键事实含基线指针 + 「枚举什么输入能到达这段代码」任务），并**等待** Reviewer 交付可证伪攻击清单与不变量枚举后，方可发起第二段派发（携带第一段产物原文 + 主计划理由与方案选型依据）；\n- 平台不支持同会话续派时，父会话须重新派发全新 Reviewer 并在 prompt 中附第一段产物原文；续派 Reviewer 从第一段产物续起完成定性，不得跳过枚举重做后直接定性，亦不得重复枚举稀释第一段产物效力；\n- 任何一方违反交接顺序（父会话第二段未附第一段产物 / Reviewer 未交枚举即定性）均标注 `DISPATCH_CONTRACT_VIOLATED`，按上条红旗处理。\n\n## 报告格式与交付（物理落盘并回读）\n\n报告落地至分派 prompt 中 `报告路径：` 标记指定的路径（缺省 `.kilo/plans/review/<主计划文件名>-shadow-plan.md`，第 2 轮返工核验为 `-r2-shadow-plan.md`）。**严重度校准**：`Critical`＝Files 清单差集、事实错误与幻觉断言；`Important`＝步骤覆盖差集、约束缺失、答案唯一的修正；`Minor`＝表述与格式。**严重度与结案闸**：除第⑤条事实对齐例外外，已确认的 Files/步骤差集不得由影子审查者单方面降级或作为 GO 结案；任何改变严重度或结论的请求必须在 E 清单记录具体证据（含可证伪输入与 `路径:行号`）并提交父会话（主编排器）裁决。产物须含以下核心段落：\n",
         "g120": "",
         "g121": "   - **Files 清单镜像差集**：列出 `Shadow.Files \\ Master.Files`（主计划漏改文件，默认判 Critical）与 `Master.Files \\ Shadow.Files`（存疑文件）；\n",
         "g122": "",
@@ -170,7 +171,8 @@
         "gtail": "\n- **自检命令**：仅当本工作区存在 `checks/ledger/package.json` 时，报告落盘前运行 `npm test --prefix checks/ledger`，原始输出贴入报告尾部；非零退出先修自身格式再出裁决。工作区不存在该目录时（命令报路径缺失/找不到模块类失败，如 Exit 127 或 ENOENT），不得循环修格式、不得伪造输出：在报告尾部记一行「本仓库无 checks/ledger，台账自检豁免」并附原始失败回执（命令原文与退出码），再出裁决。"
       },
       "blocks": [
-        "body-shared-plan-reviewer"
+        "body-shared-plan-reviewer",
+        "body-doctrine-review-axis"
       ]
     },
     {
@@ -284,11 +286,13 @@
         "g104": "",
         "g105": "",
         "g106": "",
-        "g107": "**落盘写序纪律（防\"上下文回报替代落盘文件\"）：** 本代理只写该 `-pr-review.md`，绝不改源码或主计划。\n- **落盘优先于回报**：完整报告正文【必须】先用 `mcp__plan-governor-main__write_scoped_file` 物理写入 `-pr-review.md`，随后 `Read` 回读校验，最后才向父会话回报。\n- **回报只许摘要**：只回报 报告路径、E 清单摘要、go/no-go 判定、三态计数、SEMANTIC_PASS 与 TRUTH_PASS，不复述全文。**严禁把完整报告正文贴在聊天上下文当作交付**——父会话会做【物理在场】校验，发现文件缺失即驳回重派。\n- 若最终未能在磁盘留下 `-pr-review.md`，必须如实向父会话声明\"未落盘\"，不得假装完成。\n- **转达闸门声明（逐字）**：\n",
+        "g107": "**落盘写序纪律（防\"上下文回报替代落盘文件\"）：** 本代理只写该 `-pr-review.md`，绝不改源码或主计划。\n- **落盘优先于回报**：完整报告正文【必须】先用 `mcp__plan-governor-main__write_scoped_file` 物理写入 `-pr-review.md`，随后 `Read` 回读校验，最后才向父会话回报。\n- **回报只许摘要**：只回报 报告路径、E 清单摘要、go/no-go 判定、三态计数、SEMANTIC_PASS 与 TRUTH_PASS，不复述全文。**严禁把完整报告正文贴在聊天上下文当作交付**——父会话会做【物理在场】校验，发现文件缺失即驳回重派。\n- 若最终未能在磁盘留下 `-pr-review.md`，必须如实向父会话声明\"未落盘\"，不得假装完成。\n",
         "gtail": ""
       },
       "blocks": [
-        "body-shared-pr-reviewer"
+        "body-shared-pr-reviewer",
+        "body-doctrine-review-axis",
+        "body-pr-reviewer-closing-gate"
       ]
     }
   ]
