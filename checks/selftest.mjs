@@ -11,6 +11,7 @@ const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invaria
 const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? invariants.scanEntryDirNames : (xs) => xs;
 const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, FILES_HEAD_RE, isPlanFilename, hasLedgerSection } from './attack-ledger.mjs';
+import * as ledgerNs from './attack-ledger.mjs';
 import { PLATFORMS, CLAUSES, DERIVED_CLAUSES, GATES } from './registry.mjs';
 // 清点器以命名空间导入存取：红灯阶段该模块仅为空桩（零导出），命名导入会因「缺导出」在
 // ESM 链接期抛 SyntaxError 假红；命名空间导入把缺失延迟到守卫抛出
@@ -1069,9 +1070,9 @@ check('build-freshness-failures-translates-throw',
     let bugRethrown = false;
     try { freshnessFailures(() => { throw new TypeError('checker bug'); }, '.'); }
     catch (e) { bugRethrown = (e instanceof TypeError) && e.message === 'checker bug'; }
-    return bad.specError === 'loadSpec: 块文件缺 frontmatter id: x' && Array.isArray(bad.stale) && bad.stale.length === 0
-      && syntax.specError === 'Unexpected token } in JSON' && syntax.stale.length === 0
-      && good.specError === null && good.stale.join(',') === 'a/b.md'
+    return bad.specError === 'loadSpec: 块文件缺 frontmatter id: x' && Array.isArray(bad.payload) && bad.payload.length === 0
+      && syntax.specError === 'Unexpected token } in JSON' && syntax.payload.length === 0
+      && good.specError === null && good.payload.join(',') === 'a/b.md'
       && bugRethrown;
   })());
 // B7a loadSpec 读盘 fail-loud 正控（回归锁，锁定既有行为）：临时目录内未登记平台含 manifest.json →
@@ -1102,9 +1103,43 @@ check('build-manifest-missing-fail-loud',
       fs.writeFileSync(path.join(tmp, 'spec', 'blocks', 'a.md'), '---\nid: a\n---\n\n正文');
       fs.writeFileSync(path.join(tmp, 'spec', 'platform', 'kilocode', 'manifest.json'), JSON.stringify({ files: [{ output: 'agents/pw.md', blocks: ['a'] }] }));
       const r = freshnessFailures(checkFreshness, tmp);
-      return r.specError !== null && r.specError.includes('manifest-missing-fail-loud') && r.stale.length === 0;
+      return r.specError !== null && r.specError.includes('manifest-missing-fail-loud') && r.payload.length === 0;
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   })());
+// —— PR#5 收尾：F1 报错保真 / F4 吞锚判定域收窄 / F3 预载等价 / F6 FM 键序归一 / F9 id 分裂 / F12 故障闸 ——
+check('build-slot-residue-error-preserves-key', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'x {{my key}} y' }] }, { zcode: { files: [{ output: 'x.md', blocks: ['b1'], slots: {} }] } }, [], 'M');
+    return false;
+  } catch (e) {
+    return e.message.includes('{{my key}}') && !e.message.includes('{{mykey}}');
+  }
+})());
+check('build-anchor-swallow-ignores-frontmatter', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'body without anchor' }] }, { zcode: { files: [{ output: 'x.md', frontmatter: 'note: ONLY-IN-FRONTMATTER-ANCHOR', blocks: ['b1'], slots: {} }] } }, [{ id: 'c1', text: 'ONLY-IN-FRONTMATTER-ANCHOR', expect: [/x\.md/] }], 'M');
+    return false;
+  } catch (e) {
+    return e.message.includes('build-no-anchor-swallow');
+  }
+})());
+check('build-anchor-in-body-still-passes', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'has ANCHOR-OK inside' }] }, { zcode: { files: [{ output: 'x.md', blocks: ['b1'], slots: {} }] } }, [{ id: 'c2', text: 'ANCHOR-OK', expect: [/x\.md/] }], 'M');
+    return true;
+  } catch { return false; }
+})());
+check('check-freshness-preloaded-equivalent', (() => {
+  const { spec, profiles } = buildNs.loadSpec(SPEC_ROOT);
+  return JSON.stringify(buildNs.checkFreshness(SPEC_ROOT)) === JSON.stringify(buildNs.checkFreshness(SPEC_ROOT, { spec, profiles }));
+})());
+check('fm-diff-keyorder-canonical', inventoryNs.diffFmTrees({ a: { x: 1, y: 2 } }, { a: { y: 2, x: 1 } }).length === 0);
+check('fm-diff-value-still-detected', inventoryNs.diffFmTrees({ a: { x: 1 } }, { a: { x: 2 } }).length === 1);
+check('freshness-spec-error-id-registered', allInvariantIds().includes('generated-product-spec-error'));
+const latestFaultGate = typeof ledgerNs.latestFaultGate === 'function'
+  ? ledgerNs.latestFaultGate
+  : () => { throw new TypeError('latestFaultGate is not a function'); };
+check('latest-fault-gate-fail-closed', latestFaultGate(['any fault']) === 2 && latestFaultGate([]) === null && latestFaultGate(undefined) === null);
 // B7c CLI 装载 Outcome（M-2）：cliLoadOutcome 把 loadSpec fail-loud 经翻译闸结构化——夹具同 B7b
 //（仅 kilocode manifest 在场，loadSpec 抛 manifest-missing-fail-loud）；修复前函数缺失 → 守卫别名
 // 抛 TypeError（四维·目标契约缺失）。这是 CLI --check/写盘路径消费的同一函数（单一事实源）。

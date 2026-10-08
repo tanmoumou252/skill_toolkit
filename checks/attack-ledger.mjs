@@ -525,8 +525,8 @@ export function pickLatestEligible(candidates) {
 
 // 候选装载（失败源分开归因）：readdirSync / statSync / readFileSync 三类失败逐条归因 faults，
 // 不再统一归并空候选集——「计划存在但不可读」不得误报为「无时间戳命名计划文件」。
-// 装载失败仍 fail-closed：调用方（--latest CLI）对 faults 无条件逐条打印 LATEST-LOAD-FAULT（部分
-// 不可读而仍有可选计划时不得静默漂移审计目标），空候选集且 faults 非空时以 EXIT-2 退出。
+// 装载失败仍 fail-closed：调用方（--latest CLI）对 faults 逐条打印 LATEST-LOAD-FAULT 后经
+// latest-load-fault 闸以 EXIT-2 退出——faults 在场即不选取、不审计，杜绝审计目标静默漂移到更旧候选。
 export function collectLatestCandidates(plansDir) {
   const faults = [];
   let names;
@@ -556,6 +556,12 @@ export function collectLatestCandidates(plansDir) {
   return { candidates, faults };
 }
 
+// 纯函数（供 selftest 驱动，不读盘）：--latest 装载故障闸——faults 非空 ⇒ 退出码 2（fail-closed，
+// 故障状态下不选取不审计），否则 null（不干预选择流程）。
+export function latestFaultGate(faults) {
+  return (faults || []).length > 0 ? 2 : null;
+}
+
 function newestMd(dir, pred) {
   try {
     const xs = fs.readdirSync(dir)
@@ -580,6 +586,12 @@ if (isMain) {
     const { candidates, faults } = collectLatestCandidates(plansDir);
     for (const f of faults) {
       console.log('LATEST-LOAD-FAULT: ' + f);
+    }
+    // latest-load-fault 闸（fail-closed）：装载故障未清零即拒绝选取与审计——否则部分不可读时较旧
+    // 计划通过检查并 exit(0)，--latest 在未审计最新计划的情况下报告成功（PR#5 评审 4218745096）。
+    if (latestFaultGate(faults) !== null) {
+      console.log('ATTACK-LEDGER EXIT-2 --latest 存在装载故障，不选取、不审计（latest-load-fault）');
+      process.exit(latestFaultGate(faults));
     }
     const picked = pickLatestEligible(candidates);
     for (const s of picked.skipped) {

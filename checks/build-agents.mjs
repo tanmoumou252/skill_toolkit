@@ -36,7 +36,7 @@ export const SLOT_RESIDUE_RE = /\{\{\s*[A-Za-z0-9_][A-Za-z0-9_\s]*\}\}/g;
 // canonical-null-proto-merge 闸：null-原型累加器（Object.create(null)）保证 __proto__ 等危险键按自有
 //   数据键保留入哈希，而非触发原型 setter 被静默丢弃致哈希分叉（探针 probe-proto 已证伪"全局污染"、
 //   改证"自有键丢失"，故护栏目标是键保留而非防污染）。
-function canonicalizeValue(v) {
+export function canonicalizeValue(v) {
   if (Array.isArray(v)) return v.map(canonicalizeValue);
   if (v && typeof v === 'object') {
     const out = Object.create(null);
@@ -101,7 +101,8 @@ export function build(spec, profiles, clauses = CLAUSES, generatedMark = GENERAT
       const parts = [];
       if (f.frontmatter) parts.push('---\n' + String(f.frontmatter).trimEnd() + '\n---\n');
       parts.push(generatedMark, '');
-      parts.push((f.blocks || []).map((id) => renderBlock(blockById.get(id), f.slots)).join('\n\n'));
+      const rendered = (f.blocks || []).map((id) => renderBlock(blockById.get(id), f.slots)).join('\n\n');
+      parts.push(rendered);
       const text = parts.join('\n').trimEnd() + '\n';
       // build-unrendered-slot：渲染后残留插槽扫描（fail-closed）。触发域：产物文本含插槽形态（词法域
       //   并集——字母/数字/下划线首、内部允许标识字符与空白；数字首键与空白键均在检测域）；判定不看
@@ -109,13 +110,17 @@ export function build(spec, profiles, clauses = CLAUSES, generatedMark = GENERAT
       //   残留、空串槽值（split/join 已消解）、无键可提形（{{}}、{{ }}）、单层与非 ASCII 形。退化语义：
       //   命中即抛错拒产（键集 Set 归一、消息含产物路径），「全 slot 命中」与「残留」可区分；错误前缀
       //   build: 由翻译闸结构化承接。
-      const residueKeys = [...new Set([...text.matchAll(SLOT_RESIDUE_RE)].map((m) => m[0].replace(/[{}\s]/g, '')))];
+      // 报错保真：仅剥包裹花括号并 trim 首尾空白，键内空白原样保留——`{{my key}}` 残留仍报 `{{my key}}`，
+      // 报错键必须能逐字对回 manifest slots 的真实键名（PR#5 评审 4218735255）。
+      const residueKeys = [...new Set([...text.matchAll(SLOT_RESIDUE_RE)].map((m) => m[0].replace(/[{}]/g, '').trim()))];
       if (residueKeys.length > 0) {
         throw new Error('build: 产物残留未渲染插槽 ' + residueKeys.map((k) => '{{' + k + '}}').join(', ') + '（build-unrendered-slot）: ' + outPath);
       }
       // build-no-anchor-swallow：渲染后逐条校验 expect 命中该路径的条款锚文本仍在（fail-closed）。
+      // 判定域＝渲染块正文（rendered），不含 frontmatter 与 GENERATED 标记——锚文本恰在 frontmatter/
+      // 标记中出现而正文缺席时同样判丢失（PR#5 评审 4218735277）。
       for (const c of clauses) {
-        if ((c.expect || []).some((re) => re.test(outPath)) && !text.includes(c.text)) {
+        if ((c.expect || []).some((re) => re.test(outPath)) && !rendered.includes(c.text)) {
           throw new Error('build-no-anchor-swallow: ' + outPath + ' 丢失锚文本 [' + c.id + ']: ' + c.text);
         }
       }
@@ -142,7 +147,7 @@ export function unknownPlatformDirs(dirNames) {
   return (dirNames || []).filter((n) => !set.has(n));
 }
 
-function loadSpec(root) {
+export function loadSpec(root) {
   const platformRoot = path.join(root, 'spec', 'platform');
   if (fs.existsSync(platformRoot)) {
     const unknown = unknownPlatformDirs(
@@ -180,8 +185,8 @@ function loadSpec(root) {
   return { spec: { blocks }, profiles };
 }
 
-export function checkFreshness(root) {
-  const { spec, profiles } = loadSpec(root);
+export function checkFreshness(root, preloaded) {
+  const { spec, profiles } = preloaded || loadSpec(root);
   // 版本戳自洽（契约 4.4 ④）：期望产物标记与 CLI 写盘标记由同一 spec 重算哈希生成，
   // 哈希随 spec 变化 ⇒ 旧产物立即 stale；两侧同构注入，无假红、无漏报。
   const generatedMark = '<!-- GENERATED from spec@' + specHash(spec, profiles) + '; do not edit -->';
@@ -195,23 +200,25 @@ export function checkFreshness(root) {
 // freshness-gate-error-translated 闸：把 checkFreshness 的 loadSpec fail-loud 抛错翻译为结构化结果，
 //   供 run.mjs 以统一 FAIL 行报告——坏配置不再以裸堆栈击穿常驻不变式检查（报错风格归一，探针
 //   probe-m2-config-throw 实测裸抛）。纯函数（checkFreshnessFn 作参注入），selftest 可驱动抛错/正常
-//   两路，不读盘。返回 { stale: string[], specError: string|null }；抛错时 stale=[] 且 specError=消息。
+//   两路，不读盘。返回 { payload: 回调原样返回值, specError: string|null }；抛错时 payload=[] 且 specError=消息。
 //   spec-load-fault-family 谓词：转译域仅限配置装载失效族——显式 fail-loud Error（消息前缀
 //   loadSpec:/build:；throw 站点以符号锚计＝resolveOutputPath 两处、build 的未知平台 profile 与
 //   manifest 引用缺失块、build-no-anchor-swallow 拒产、loadSpec 的未登记平台 manifest、块文件缺
 //   frontmatter id、已登记平台缺 manifest；JSON.parse 位于 loadSpec 读 manifest 处。行号锚随
 //   插入漂移，故以符号锚为准）；
 //   TypeError/ReferenceError 等＝检查器自身编码缺陷，原样上抛保留堆栈诊断，严禁被翻译层吞没。
+//   specError≠null（装载失败族）由 run.mjs 以独立 id `generated-product-spec-error` 报告（与产物陈旧
+//   `generated-product-stale` 可区分，登记见 invariants.mjs FRESHNESS_GATE_IDS）——双失效模式经独立 id 分流。
 //   前缀谓词与消息文案的耦合是明示退化设计：文案变更致谓词失配时行为回落为原样上抛（= 修复前
 //   形态，fail-noisy 不减损），不产生静默放行。
 export function freshnessFailures(checkFreshnessFn, root) {
   try {
-    return { stale: checkFreshnessFn(root), specError: null };
+    return { payload: checkFreshnessFn(root), specError: null };
   } catch (err) {
     const isSpecLoadFault = (err instanceof SyntaxError)
       || (err instanceof Error && /^(loadSpec|build)/.test(err.message));
     if (!isSpecLoadFault) throw err;
-    return { stale: [], specError: (err && err.message) ? String(err.message) : String(err) };
+    return { payload: [], specError: (err && err.message) ? String(err.message) : String(err) };
   }
 }
 
@@ -220,8 +227,8 @@ export function freshnessFailures(checkFreshnessFn, root) {
 // isMain 分支消费本函数：specError 非 null → 结构化 FAIL 行 + exit 1（fail-closed 不变，报错形态归一）。
 export function cliLoadOutcome(root) {
   return freshnessFailures((r) => {
-    const stale = checkFreshness(r);
     const { spec, profiles } = loadSpec(r);
+    const stale = checkFreshness(r, { spec, profiles });
     const generatedMark = '<!-- GENERATED from spec@' + specHash(spec, profiles) + '; do not edit -->';
     const products = build(spec, profiles, CLAUSES, generatedMark);
     return { stale, spec, profiles, generatedMark, products };
@@ -263,7 +270,11 @@ export function assertProductDirWithinRoot(root, dir) {
 //   当前是否仍为符号链接」，**通过之后**才 ftruncate 并写入——校验失败时既有内容保持原样（先验证后毁，
 //   不以 O_TRUNC 在校验前破坏旧内容）。写盘以 Buffer 循环补写并检测零进展（writeSync 返回 0 即抛错，
 //   不死循环）。平台无 O_NOFOLLOW 常量（本工作区 win32 实测 undefined）时走回退分支：写前复核父目录
-//   收容并做最终组件 lstat 拒绝（由 O_NOFOLLOW_AVAIL 常量显式判定，非静默降级）。退出语义：主流程异常
+//   收容并做最终组件 lstat 拒绝（由 O_NOFOLLOW_AVAIL 常量显式判定，非静默降级）。已知平台限制：
+//   回退分支 lstat 复核与 writeFileSync 之间存在 TOCTOU 残窗（目标可在两步间被替换为符号链接），
+//   写前复核仅收窄而不消除；用户态可进一步收窄（先开后验 fd-first 形态），
+//   本计划按零行为变更收尾不引入该重构，留待专项；主分支（内核原子 ELOOP 拒绝）不受限。
+//   退出语义：主流程异常
 //   优先上抛；无主异常时 close 失败也上抛（不吞）。打开模式取 0o666（与 writeFileSync 默认一致、由
 //   umask 收敛）。闸门标识 output-atomic-open-nofollow。
 // 路径当前是否为符号链接：仅 ENOENT（确实不存在）视为「否」；其它元数据错误（如 EACCES）fail-closed 上抛。
@@ -330,16 +341,16 @@ if (isMain) {
   const checkOnly = process.argv.includes('--check');
   // stale 判定单一真相源 = checkFreshness（与 run.mjs 消费同一函数，杜绝 --check 绿而 run.mjs 红的双口径）；
   // 装载与构建整体经 cliLoadOutcome 翻译闸（M-2）：坏配置归一为结构化 FAIL 行，不再裸栈击穿；
-  // 两次 loadSpec 为确定性纯读，结果一致。
+  // loadSpec 单次读盘，同一 {spec, profiles} 注入 checkFreshness 与构建路径（读盘去重，结果同源一致）。
   const outcome = cliLoadOutcome(root);
   if (outcome.specError !== null) {
     console.log('FAIL ' + outcome.specError);
     process.exit(1);
   }
-  // 键名注记：freshnessFailures 成功路径把整体载荷挂在 .stale 键下（历史键名，易误读）——成功时
-  // outcome.stale 实为 { stale: 路径数组, spec, profiles, generatedMark, products } 载荷整体，非仅
-  // stale 数组；失败路径仅 specError 非 null（此时不消费 .stale 键）。
-  const { stale, spec, profiles, generatedMark, products } = outcome.stale;
+  // 键名注记：payload = freshnessFailures 回调原样返回值（CLI 路径下为
+  // { stale: 路径数组, spec, profiles, generatedMark, products } 载荷整体）；失败路径仅
+  // specError 非 null（此时 payload=[]，不消费载荷键）。
+  const { stale, spec, profiles, generatedMark, products } = outcome.payload;
   if (checkOnly) {
     if (stale.length > 0) {
       console.log('STALE ' + stale.length + ' 件产物与 spec 不一致，运行 node checks/build-agents.mjs 重生成');

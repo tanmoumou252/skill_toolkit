@@ -5,6 +5,7 @@
 //   围栏掩蔽与 frontmatter 解析复用 invariants 既有导出（scanFences/parseFrontmatter），零新依赖。
 import { CLAUSES, DERIVED_CLAUSES, PLATFORMS } from './registry.mjs';
 import { scanFences, parseFrontmatter } from './invariants.mjs';
+import { canonicalizeValue } from './build-agents.mjs';
 
 // 规范化：行尾 trim、折叠连续空行——跨端正文块比对前的最小归一。
 function normalizeLines(lines) {
@@ -109,7 +110,7 @@ export function diffFmTrees(treeA, treeB) {
     const inB = Object.prototype.hasOwnProperty.call(treeB || {}, key);
     if (inB && !inA) diffs.push({ key, kind: 'fm-key-extra', values: [null, treeB[key]] });
     else if (inA && !inB) diffs.push({ key, kind: 'fm-key-missing', values: [treeA[key], null] });
-    else if (JSON.stringify(treeA[key]) !== JSON.stringify(treeB[key])) diffs.push({ key, kind: 'fm-value', values: [treeA[key], treeB[key]] });
+    else if (JSON.stringify(canonicalizeValue(treeA[key])) !== JSON.stringify(canonicalizeValue(treeB[key]))) diffs.push({ key, kind: 'fm-value', values: [treeA[key], treeB[key]] });
   }
   return diffs;
 }

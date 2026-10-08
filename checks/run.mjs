@@ -66,12 +66,13 @@ violations.push(...runAll(files));
 // 登记，与其他登记 id 同一 OK/FAIL 循环出报表（零违规时输出 OK generated-product-stale，正向在场
 // 证据）；违规计入 violations= 汇总行（口径统一：violations=0 即全绿）。spec 树不存在 / files 为空
 // = 编译未启用，空真不触发（不该触发域）。坏配置（loadSpec fail-loud）经 freshnessFailures 翻译为
-// 同族 FAIL 行，不再裸堆栈击穿（风格归一）。
+// 独立 id generated-product-spec-error 的 FAIL 行（与产物陈旧 generated-product-stale 可区分），
+// 不再裸堆栈击穿（风格归一）。
 const freshGate = freshnessFailures(checkFreshness, root);
 if (freshGate.specError !== null) {
-  violations.push({ id: 'generated-product-stale', path: 'spec', msg: '新鲜度闸无法评估（spec/manifest 装载失败，非产物陈旧）: ' + freshGate.specError });
+  violations.push({ id: 'generated-product-spec-error', path: 'spec', msg: '新鲜度闸无法评估（spec/manifest 装载失败，非产物陈旧）: ' + freshGate.specError });
 }
-for (const stalePath of freshGate.stale) {
+for (const stalePath of freshGate.payload) {
   violations.push({ id: 'generated-product-stale', path: stalePath, msg: 'spec 已变更而三端产物未重生成，运行 node checks/build-agents.mjs 重生成' });
 }
 for (const id of allInvariantIds()) {
