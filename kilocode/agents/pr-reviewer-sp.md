@@ -25,6 +25,7 @@ permission:
   plan-governor-main_exec_sandboxed_command: deny
   plan-governor-main_copy_into_sandbox: deny
   plan-governor-main_write_scoped_file: deny
+  plan-governor-main_edit_scoped_file: deny
   plan-governor-subagent_exec_guarded_command: allow
 ---
 
