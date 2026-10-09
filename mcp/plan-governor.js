@@ -1308,7 +1308,7 @@ function startServer() {
               name: 'write_scoped_file',
               description: ROLE === 'subagent'
                 ? '【受控写·不可用】subagent 实例不得经本通道写计划文件，调用即被拒。'
-                : '【受控写·zcode 子代理专用】仅在 .kilo/plans/ 下写 .md 产物（计划/复审报告/取证）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁 `.kilo/plans/`（含 `review/`、`test-evidence/`、`pr-review/` 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB。主代理与未知调用方一律拒绝。',
+                : '【受控写·zcode 子代理专用】仅在 .kilo/plans/ 下写 .md 产物（计划/复审报告/取证）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁 `.kilo/plans/`（含 `review/`、`test-evidence/`、`pr-review/` 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB。主代理与未知调用方一律拒绝。新建文件按默认权限创建（新建场景无既有权限可继承）；如需保留既有权限位请改用 edit_scoped_file。写入全程持与 edit_scoped_file 同名的同目录 O_EXCL 锁文件互斥（陈旧崩溃残留锁自愈回收，Atomics.wait 零 CPU 退避，取得超时以 isError 拒绝并审计）。',
               inputSchema: {
                 type: 'object',
                 properties: {
@@ -1316,6 +1316,22 @@ function startServer() {
                   content: { type: 'string', description: 'Markdown 正文' }
                 },
                 required: ['filename', 'content']
+              }
+            },
+            {
+              name: 'edit_scoped_file',
+              description: ROLE === 'subagent'
+                ? '【受控编辑·不可用】subagent 实例不得经本通道编辑计划文件，调用即被拒。'
+                : '【受控编辑·zcode 子代理专用】对 .kilo/plans/ 下已存在 .md 做精确串替换（old_string 逐字命中 expected_count 次才放行，缺省 1；计数不符即拒并报实际计数）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁与符号链接校验同 write_scoped_file；新建文件请用 write_scoped_file。主代理与未知调用方一律拒绝。编辑既有文件时尽力保留其权限位（不跟随符号链接读取，读取失败回退默认写行为），与 write_scoped_file 新建文件的默认权限为有意差异；读-改-写全程持同目录 O_EXCL 锁文件互斥，取得超时以 isError 拒绝并审计。',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  filename: { type: 'string', description: '.kilo/plans/ 下的相对 .md 路径（必须已存在）' },
+                  old_string: { type: 'string', description: '被替换的逐字原文（必须与文件内容精确匹配）' },
+                  new_string: { type: 'string', description: '替换后的新文本' },
+                  expected_count: { type: 'integer', description: 'old_string 预期出现次数，缺省 1' }
+                },
+                required: ['filename', 'old_string', 'new_string']
               }
             }
           ]
@@ -1520,49 +1536,57 @@ function startServer() {
         // （宿主注入 main/subagent 两态实测在场）；ROLE 为服务端启动期
         // 模块变量、客户端不可伪造。若未来宿主把客户端可控 _meta 原样透传，scope 锚
         // 可被伪造——届时须在宿主侧收紧，server 侧双锚仅为纵深。
-        const rel = String(args.filename || '').replace(/\\/g, '/');
-        if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。' }] } });
+        const g = resolveScopedPlanTarget(args.filename);
+        if (!g.ok) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
           return;
         }
-        const root = path.resolve(WORKSPACE, '.kilo', 'plans');
-        const target = path.resolve(root, rel);
-        if (target !== root && !target.startsWith(root + path.sep)) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标越出 .kilo/plans/。' }] } });
-          return;
-        }
-        // 符号链接二次判定（祖先重锚版）：旧口径以 realpathSync(root) 为对照基准，存在两处失明——
-        //   ① `.kilo` 整体为指向区外的链接时，realRoot 与 realParent 同在区外且互为前缀（区外 plans
-        //      预建时直接判等放行），root 尚不存在时 realRoot 为 null，判定被整体跳过；
-        //   ② `link/sub/x.md` 中段 link 指区外而 sub 未创建时 realParent 为 null，判定跳过，
-        //      随后 mkdirSync(recursive) 直接把 sub 建到区外并写盘。
-        // 新口径：基准锚"真实工作区派生的 expectRoot"（与 root 的词法路径解耦，
-        //   root 在场与否、是否经链接解析均不参与判据），对 target 父路径取最近存在祖先三态判定：
-        //   a) 祖先在 expectRoot 内或其下 → 放行（正常路径）；
-        //   b) 祖先是 expectRoot 自身祖先且仍在工作区真实根内 → 放行（plans 尚未创建的合法首写）；
-        //   c) 其余（含祖先经链接落到区外、WORKSPACE 无法解析）→ fail-closed 拒绝。
-        const withinReal = (p, base) => p === base || p.startsWith(base + path.sep);
-        const nearestReal = (p) => { let c = p; for (;;) { try { return fs.realpathSync(c); } catch { const up = path.dirname(c); if (up === c) return null; c = up; } } };
-        const realWs = nearestReal(WORKSPACE);
-        const expectRoot = realWs ? path.join(realWs, '.kilo', 'plans') : null;
-        const anc = nearestReal(path.dirname(target));
-        if (!realWs || !anc || !(withinReal(anc, expectRoot) || (withinReal(expectRoot, anc) && withinReal(anc, realWs)))) {
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' }] } });
-          return;
-        }
-        try {
-          if (fs.lstatSync(target).isSymbolicLink()) {
-            send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 目标文件为符号链接，禁止写入。' }] } });
-            return;
-          }
-        } catch { /* 目标文件不存在时忽略 ENOENT */ }
+        const target = g.target;
+        const withinReal = g.withinReal;
+        const expectRoot = g.expectRoot;
         const content = String(args.content || '');
         if (Buffer.byteLength(content, 'utf8') > 262144) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 内容超 256KB。' }] } });
           return;
         }
+        const lockPath = scopedLockPath(target);
+        let lockFd = null;
+        let lockMeta = { pid: null, time: null };
+        let lockMetaWritten = false;
+        // RX2：unlink 前经 releaseScopedLock 校验锁的 pid+time 标识本进程本次持锁，
+        //   防止陈旧恢复竞态后路径上已是替换锁时误删他者活锁。
+        const releaseLock = () => {
+          if (lockFd === null) return { released: false, error: 'NO_FD' };
+          const result = releaseScopedLock(lockPath, lockFd, lockMeta, lockMetaWritten);
+          lockFd = null;
+          return result;
+        };
         try {
           fs.mkdirSync(path.dirname(target), { recursive: true });
+          const acq = acquireScopedLock(lockPath);
+          if (acq.error) {
+            send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写失败] 无法创建写锁：' + acq.error }] } });
+            return;
+          }
+          if (acq.timeout) {
+            appendAuditRecord({
+              event: 'scoped_write',
+              command: null,
+              role: ROLE,
+              workspace: WORKSPACE,
+              sessionId: null,
+              allowed: false,
+              gateType: 'scoped-write',
+              reason: 'scoped-write-lock-timeout',
+              timestamp: new Date().toISOString(),
+              durationMs: 0,
+            });
+            send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-write-lock-timeout] 另一会话正持有 .kilo/plans/ 写锁（' + path.relative(WORKSPACE, lockPath) + '），' + LOCK_TIMEOUT_MS + 'ms 内未能取得，拒绝写入以免覆盖其修改；请稍后重试。' }] } });
+            return;
+          }
+          lockFd = acq.fd;
+          lockMeta = acq.meta;
+          lockMetaWritten = acq.wroteMeta;
           // 建后复核：recursive 可能沿区外链接新建中间目录，创建完成后以真实路径重判一次；
           //   目标文件本身若在写入瞬间成为链接同样拒写（ENOENT 视为可创建的合法新文件）。
           //   残余窗口（本复核与 writeFileSync 之间的本机进程级抢占竞态）超出恶意仓库威胁模型，
@@ -1570,6 +1594,8 @@ function startServer() {
           const realDir = fs.realpathSync(path.dirname(target));
           if (!withinReal(realDir, expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
           try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+          // 权限口径：新建文件按默认权限落盘，不继承既有权限位（编辑路径 edit_scoped_file 才尽力继承
+          //   既有权限位）。新建场景无既有权限可继承，该差异为有意设计，非疏漏。
           fs.writeFileSync(target, content, 'utf8');
           appendAuditRecord({
             event: 'scoped_write',
@@ -1584,6 +1610,30 @@ function startServer() {
             timestamp: new Date().toISOString(),
             durationMs: 0,
           });
+          // 时序纠偏（Fact Supremacy，证据日志 R2 节）：成功回执前必须先释放锁。
+          //   Windows 上 stdout 管道写经 libuv uv_try_write 可同步送达，若 send 先于
+          //   releaseLock，客户端在收到「已写入」回执的瞬间 readdir 仍可能观测到锁残留
+          //   （实弹复现：write 成功路 9/10 即时 readdir 见 .tmp-lock- 残留，50ms 延迟
+          //   复读全部干净——释放本身正确，纯属回执与释放的观测次序缺陷）。本行与
+          //   edit 成功路同型；终末 releaseLock() 保留作异常汇合点，成功路此处已置空、
+          //   终末调用为幂等 no-op。
+          const writeRelease = releaseLock();
+          if (writeRelease && !writeRelease.released) {
+            appendAuditRecord({
+              event: 'scoped_write',
+              command: null,
+              role: ROLE,
+              workspace: WORKSPACE,
+              sessionId: null,
+              allowed: true,
+              gateType: 'scoped-write',
+              reason: path.relative(WORKSPACE, target),
+              bytes: Buffer.byteLength(content, 'utf8'),
+              timestamp: new Date().toISOString(),
+              durationMs: 0,
+              releaseStatus: writeRelease,
+            });
+          }
           send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: '已写入 ' + path.relative(WORKSPACE, target) + '（' + Buffer.byteLength(content, 'utf8') + ' 字节）' }] } });
         } catch (err) {
           appendAuditRecord({
@@ -1600,6 +1650,215 @@ function startServer() {
           });
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写失败] ' + err.message }] } });
         }
+        // WRITE_CONVERGE_AUDIT: 本块为 write 成功路与错误路的显式汇合点——两路 send() 后均落至
+        //   此处且不加 return，属有意设计（评审 5466425829 ①：两路各加 return 会跳过对方需要的
+        //   汇合释放审计；finally 重构会把成功路 NO_FD 幂等域的旁路消费改成必经判定——均拒用，
+        //   仅以本锚把有意性声明为机读事实）。
+        // 释放状态审计（PR #7 review 5462744798 comment 4224045096）：write 路闭包与 edit 路闭包
+        //   不同型——write 闭包不内置 scoped_lock_release 审计，本汇合点的释放若失败（Windows
+        //   EBUSY/EPERM、NOT_OWNER、ENOENT_GONE 等）将无任何审计痕迹；此处捕获补记。NO_FD 不记：
+        //   成功路已在 writeRelease 捕获处（write 成功路释放状态消费点）释放置空、控制流必然
+        //   落至本行（幂等 no-op），锁从未取得的预抛错路径亦为 NO_FD——排除该域防止成功写误记
+        //   失败审计。成功路释放状态消费在 writeRelease 捕获处，与本处
+        //   经 NO_FD 排除域互斥，同一失败至多一条审计（单源）。
+        /* AUDIT-SLICE-BEGIN */
+        const writeErrorRelease = releaseLock();
+        if (writeErrorRelease && !writeErrorRelease.released && writeErrorRelease.error !== 'NO_FD') {
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: false,
+            gateType: 'scoped-write',
+            reason: writeErrorRelease.error,
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+            releaseStatus: writeErrorRelease,
+          });
+        }
+        /* AUDIT-SLICE-END */
+        return;
+      }
+
+      // 受控编辑工具: 对 .kilo/plans/ 下已存在 .md 做精确串替换（同 write 的双锚与路径锁；
+      // 严禁建目录——目标必须已存在，readFileSync ENOENT 早拒保证）
+      if (toolName === 'edit_scoped_file') {
+        const _m = params?._meta || {};
+        const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
+        if (ROLE !== 'main' || scope !== 'subagent') {
+          process.stderr.write(`[edit_scoped_file] REJECTED role=${ROLE} scope=${JSON.stringify(scope)}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
+          return;
+        }
+        const g = resolveScopedPlanTarget(args.filename);
+        if (!g.ok) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
+          return;
+        }
+        const oldS = String(args.old_string ?? '');
+        const newS = String(args.new_string ?? '');
+        if (!oldS || oldS === newS) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-identical-args] old_string 不得为空，且不得与 new_string 相同（无操作拒绝）。' }] } });
+          return;
+        }
+        if (Buffer.byteLength(oldS, 'utf8') > 262144 || Buffer.byteLength(newS, 'utf8') > 262144) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-input-size-cap] old_string/new_string 任一超 256KB。' }] } });
+          return;
+        }
+        // 缺省仅认 undefined；JSON 无 NaN 值，JS 侧 NaN 经 JSON.stringify 序列化为 null，故 null 必须走值域拒绝而非静默缺省
+        const expected = args.expected_count === undefined ? 1 : args.expected_count;
+        if (!Number.isInteger(expected) || expected < 1) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-expected-count-domain] expected_count 必须为正整数（缺省 1），0/负数/小数/字符串数字一律拒绝。' }] } });
+          return;
+        }
+        // —— 跨进程文件级互斥（O_EXCL 锁文件；锁名/陈旧回收/退避的单一事实源 = 模块级
+        //   scopedLockPath + isStaleScopedLock + acquireScopedLock，与 write_scoped_file 共用同一锁名）：
+        //   同进程 tools/call 同步串行，但不同会话 main 实例可共享同一工作区；两实例同读同计划、
+        //   各自改不同片段时双方 expected_count 均可通过，后提交的 renameSync 会用旧快照覆盖先前
+        //   修改（静默丢失更新）。持锁贯穿 读→expected_count 校验→替换体构造→renameSync；取得失败
+        //   （非 EEXIST）立刻 isError 拒绝不退避；陈旧锁（崩溃残留）由 isStaleScopedLock 按
+        //   LOCK_STALE_MS + 同机 PID 判活自愈回收；活锁以 Atomics.wait 零 CPU 退避至 LOCK_TIMEOUT_MS
+        //   超时 fail-closed 拒绝并审计；各退出路径经 releaseLock() 释放（先 closeSync 后 unlinkSync）。
+        //   残余窗口：锁仅对遵守本协议且共享同一文件系统的同机进程互斥，跨主机/NFS 与宿主原生
+        //   写工具直写不经本锁（见「明确不纳入的事项」）。
+        const lockPath = scopedLockPath(g.target);
+        let lockFd = null;
+        let lockMeta = { pid: null, time: null };
+        let lockMetaWritten = false;
+        // RX2：unlink 前经 releaseScopedLock 校验锁的 pid+time 标识本进程本次持锁，
+        //   防止陈旧恢复竞态后路径上已是替换锁时误删他者活锁。
+        const releaseLock = () => {
+          if (lockFd === null) return { released: false, error: 'NO_FD' };
+          const result = releaseScopedLock(lockPath, lockFd, lockMeta, lockMetaWritten);
+          lockFd = null;
+          if (!result.released) {
+            appendAuditRecord({
+              event: 'scoped_lock_release',
+              command: null,
+              role: ROLE,
+              workspace: WORKSPACE,
+              sessionId: null,
+              allowed: result.released,
+              gateType: 'scoped-edit',
+              reason: result.error,
+              timestamp: new Date().toISOString(),
+              durationMs: 0,
+              releaseStatus: result,
+            });
+          }
+          return result;
+        };
+        const acq = acquireScopedLock(lockPath);
+        if (acq.error) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控编辑失败] 无法创建编辑锁：' + acq.error }] } });
+          releaseLock();
+          return;
+        }
+        if (acq.timeout) {
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: false,
+            gateType: 'scoped-edit',
+            reason: 'scoped-edit-lock-timeout',
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+          });
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-lock-timeout] 另一会话正持有 .kilo/plans/ 编辑锁（' + path.relative(WORKSPACE, lockPath) + '），' + LOCK_TIMEOUT_MS + 'ms 内未能取得，拒绝编辑以免覆盖其修改；请稍后重试。' }] } });
+          releaseLock();
+          return;
+        }
+        lockFd = acq.fd;
+        lockMeta = acq.meta;
+        lockMetaWritten = acq.wroteMeta;
+        let text;
+        try {
+          text = fs.readFileSync(g.target, 'utf8');
+        } catch (err) {
+          const hint = err.code === 'ENOENT' ? '目标不存在，新建文件请用 write_scoped_file。' : err.message;
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-missing] ' + hint }] } });
+          releaseLock();
+          return;
+        }
+        const actual = text.split(oldS).length - 1;
+        if (actual !== expected) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: `[scoped-edit-count-guard] old_string 逐字匹配计数与 expected_count 不符（actual=${actual}，expected=${expected}）；old_string 必须逐字取自 Read 的实际内容。` }] } });
+          releaseLock();
+          return;
+        }
+        const result = text.split(oldS).join(newS);
+        if (Buffer.byteLength(result, 'utf8') > 262144) {
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-result-size-cap] 替换后结果体超 256KB。' }] } });
+          releaseLock();
+          return;
+        }
+        try {
+          // 写盘前复核（同 write 建后复核口径，但不含 mkdirSync——edit 禁建目录）：
+          const realDir = fs.realpathSync(path.dirname(g.target));
+          if (!g.withinReal(realDir, g.expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
+          try { if (fs.lstatSync(g.target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+          // C7 原子替换：结果先完整写入同目录临时文件（.kilo/plans/ 锁域内），再同卷 rename 替换
+          //   目录项——ENOSPC/配额半写时截断的是临时文件，原文无损；rename 直接替换目录项，
+          //   目标在检查后被换成符号链接的窗口下同样是替换链接而非穿透写。
+          const tmpTarget = path.join(path.dirname(g.target), '.tmp-edit-' + crypto.randomUUID() + '.md');
+          // 权限继承：临时文件在 rename 前继承既有目标文件的权限位，避免原子替换后权限位丢失。
+          // 读取用 lstatSync（不跟随符号链接），与上方 lstatSync 符号链接拒绝语义一致：statSync 会
+          //   跟随链接读到链接目标的权限位，若目标在复核后被换成符号链接，chmodSync 会把 tmp 设成
+          //   错误 mode。lstat 失败（含复核与写盘之间目标消失）时 existingMode 置 null，保持默认写
+          //   行为不报错——继承是尽力而为，不阻断编辑主流程。残余窗口如实声明：本 lstat 与下方
+          //   renameSync 之间目标仍可被本机进程替换，但 renameSync 替换的是目录项本身、不穿透链接写，
+          //   故无写出逃逸，仅权限读取可能取错。权限口径：本路径继承既有权限位；write_scoped_file
+          //   新建文件无既有权限可继承、按默认权限创建（差异为有意设计）。Windows 上 chmodSync 为
+          //   声明性操作（仅只读位生效），与本文件迁移路径 chmodSync 注释口径一致。
+          let existingMode = null;
+          try { existingMode = fs.lstatSync(g.target).mode & 0o7777; } catch { /* 目标不可 lstat：回退默认写行为 */ }
+          try {
+            fs.writeFileSync(tmpTarget, result, 'utf8');
+            if (existingMode !== null) fs.chmodSync(tmpTarget, existingMode);
+            fs.renameSync(tmpTarget, g.target);
+          } catch (e) {
+            try { fs.unlinkSync(tmpTarget); } catch { /* 临时文件未落盘或已完成 rename */ }
+            throw e;
+          }
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: true,
+            gateType: 'scoped-edit',
+            reason: path.relative(WORKSPACE, g.target) + ' matched=' + actual,
+            bytes: Buffer.byteLength(result, 'utf8'),
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+          });
+          // 时序纠偏（Fact Supremacy，证据日志 R2 节）：成功回执前必须先释放锁——与
+          //   write_scoped_file 成功路同型；renameSync 已落盘、锁可即刻释放，终末
+          //   releaseLock() 保留作异常汇合点（成功路此处 lockFd 已置空，终末为幂等 no-op）。
+          releaseLock();
+          send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: '已编辑 ' + path.relative(WORKSPACE, g.target) + '（' + Buffer.byteLength(text, 'utf8') + ' → ' + Buffer.byteLength(result, 'utf8') + ' 字节，matched=' + actual + '）' }] } });
+        } catch (err) {
+          appendAuditRecord({
+            event: 'scoped_write',
+            command: null,
+            role: ROLE,
+            workspace: WORKSPACE,
+            sessionId: null,
+            allowed: false,
+            gateType: 'scoped-edit',
+            reason: err.message,
+            timestamp: new Date().toISOString(),
+            durationMs: 0,
+          });
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控编辑失败] ' + err.message }] } });
+        }
+        releaseLock();
         return;
       }
 
@@ -1620,6 +1879,279 @@ function startServer() {
       send({ jsonrpc: '2.0', id: (typeof msgId !== 'undefined' ? msgId : null), error: { code: -32000, message: err.message } });
     }
   });
+}
+
+// —— 跨进程文件级互斥锁原语（write_scoped_file 与 edit_scoped_file 共用；单一事实源）——
+const LOCK_TIMEOUT_MS = 2000;
+const LOCK_RETRY_MS = 25;
+const LOCK_STALE_MS = 10000;
+// K5：零 CPU 退避 sleep；主路径用 Atomics.wait（Node>=20 SharedArrayBuffer 默认在场），
+//   极端环境（禁用 SharedArrayBuffer）降级为有界忙等兜底，仅作防御不计入主路径 CPU 预算。
+//   实测 node v22：Atomics.wait 对非共享 Int32Array 恒抛 "not a shared typed array"——
+//   无 SAB 时 JS 不存在同步零 CPU 睡眠原语，同步函数也无法让出，忙等是唯一同步兜底；
+//   故保留忙等，仅在首次降级时输出一次性 stderr 警告使该环境可观测（退避语义不变）。
+let scopedLockSleepFallbackWarned = false;
+function scopedLockSleep(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch {
+    if (!scopedLockSleepFallbackWarned) {
+      scopedLockSleepFallbackWarned = true;
+      process.stderr.write('[scopedLockSleep] SharedArrayBuffer 不可用，锁退避降级为有界忙等（同步上下文无零 CPU 睡眠原语）\n');
+    }
+    const end = Date.now() + ms;
+    while (Date.now() < end) { /* DESIGN-NOT-BUG: 有界忙等兜底（仅极端环境触发）——同步持锁域内唯一可行退避原语，setImmediate 需异步化整条 acquire 链、破坏同步串行锁语义（评审 5466425829 ③ 不采纳） */ }
+  }
+}
+function scopedLockPath(target) {
+  return path.join(path.dirname(target), '.tmp-lock-' + path.basename(target) + '.lock');
+}
+function isStaleScopedLock(lockPath) {
+  // R21 实装显式区分两段判定：① 龄项判定（mtime 项 OR JSON.time 项，任一满即交 pid 域）；
+  //   ② pid 域判定（龄满之后判 pid 是否可解析/存活）。两段不得混用 early-return：
+  //   旧稿把「龄未满」写成串行 return false（AND），并把「无效 pid / 内容不可解析」写成
+  //   return false（与契约 1.4 要求回收=true 相反），直接击穿陈旧锁自愈（Risk ①）。
+  // RX 修复：返回 { stale, raw } 携带"陈旧判定时观测到的原始内容"，供 acquireScopedLock
+  //   以 quarantine 捕获比对（避免 TOCTOU 误删替换活锁）；raw 为 null 表示观测时不可读。
+  let s;
+  try { s = fs.statSync(lockPath); } catch { return { stale: false, raw: null }; }  // 锁已消失→走正常重试
+  const ageFull = (Date.now() - s.mtimeMs >= LOCK_STALE_MS);  // mtime 龄项
+  let meta = null, timeFull = false;
+  const raw = (() => { try { return fs.readFileSync(lockPath, 'utf8'); } catch { return null; } })();
+  if (raw !== null) {
+    try {
+      meta = JSON.parse(raw);
+      if (typeof meta.time === 'number') timeFull = (Date.now() - meta.time >= LOCK_STALE_MS);  // time 龄项
+    } catch { /* 内容不可解析→交龄判定（仅看 mtime 项） */ }
+  }
+  if (!ageFull && !timeFull) return { stale: false, raw };  // 两龄项均未满
+  if (!meta || typeof meta.pid !== 'number' || !Number.isInteger(meta.pid) || meta.pid <= 0) return { stale: true, raw };  // 不可解析/无效 pid→回收
+  // K1/C4：自身遗留锁（pid === 本进程）且龄满 → 必判陈旧回收，杜绝 Windows 下 release 失败残留的永久孤儿锁与
+  //   后续编辑/写入 2000ms 永久超时。process.kill(self,0) 恒返回存活（BUG 根因），故 self-pid 短路须位于探活之前；
+  //   已通过 isStaleScopedLock 的龄满门，未龄满的本进程活锁仍判活不被误伤（fail-closed 不变）。
+  if (meta && meta.pid === process.pid) return { stale: true, raw };
+  try { process.kill(meta.pid, 0); return { stale: false, raw }; } catch (e) { return { stale: e.code === 'ESRCH', raw }; }
+}
+// 串行化陈旧锁回收：通过每个锁专属的 reaper 锁实现互斥回收，杜绝 TOCTOU 误删替换活锁。
+function acquireReaperLock(reaperPath) {
+  const token = crypto.randomUUID();
+  const createFresh = () => {
+    const fd = fs.openSync(reaperPath, 'wx');
+    try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, time: Date.now(), token })); } catch {}
+    return { fd, token };
+  };
+  try {
+    return createFresh();
+  } catch (e) {
+    if (e && e.code === 'EEXIST') {
+      const v = isStaleScopedLock(reaperPath);
+      if (v.stale) {
+        // 严禁凭陈旧观测盲删：原子 rename 移入唯一隔离件，回读核验仍等于观测陈旧件方可回收，否则回移放弃。
+        if (v.raw === null) {
+          process.stderr.write(`[acquireReaperLock] 观测不可读，保留 reaper 锁: ${reaperPath}\n`);
+          return { code: 'REAPER_HELD' };
+        }
+        const quarantine = reaperPath + '.stale-' + crypto.randomUUID();
+        try {
+          fs.renameSync(reaperPath, quarantine);
+        } catch (er) {
+          return { code: (er && er.code) || 'REAPER_BUSY' };
+        }
+        let observed = null;
+        try { observed = fs.readFileSync(quarantine, 'utf8'); } catch { observed = null; }
+        if (observed !== v.raw) {
+          // 无覆盖恢复：linkSync 在目标已存在时以 EEXIST 失败；失败即保留隔离件。
+          //   quarantine 恒为 reaperPath 同目录派生路径（'.stale-<uuid>' 后缀），同目录树内
+          //   link 不可能 EXDEV；但 EPERM/EBUSY 等环境级失败不可静默，记录实际错误码
+          //   以便排障（恢复语义不变：失败即保留隔离件、返回 REAPER_HELD）。
+          try {
+            fs.linkSync(quarantine, reaperPath);
+          } catch (e) {
+            // DESIGN-NOT-BUG: stderr 诊断写包内层空 catch 是有意隔离（评审 5466425829 ⑤ 建议拆分
+            //   不采纳）——外层 catch 体在诊断写自身失败（EPIPE）时若裸抛，acquireReaperLock
+            //   返回值协议失守；既有实弹回归 scoped-reaper-restore-stderr-failure-still-held
+            //   要求此路仍必须返回 REAPER_HELD。
+            try { process.stderr.write(`[acquireReaperLock] 恢复 reaper 锁 linkSync 失败（隔离件保留）: ${e && e.code}\n`); } catch {}
+            return { code: 'REAPER_HELD' };
+          }
+          try { fs.unlinkSync(quarantine); } catch {}
+          return { code: 'REAPER_HELD' };
+        }
+        try { fs.unlinkSync(quarantine); } catch {}
+        try {
+          return createFresh();
+        } catch (e2) {
+          return { code: (e2 && e2.code) || 'REAPER_BUSY' };
+        }
+      }
+      return { code: 'REAPER_HELD' };
+    }
+    return { code: (e && e.code) || 'REAPER_ERROR' };
+  }
+}
+function releaseReaperLock(reaperPath, fd, token) {
+  if (typeof fd === 'number') {
+    try { fs.closeSync(fd); } catch {}
+  }
+  // 仅当盘面内容仍匹配本次 token 才删；否则视为他者替换活锁，close fd 保留不删。
+  let cur = null;
+  try { cur = JSON.parse(fs.readFileSync(reaperPath, 'utf8')); } catch { cur = null; }
+  if (cur && cur.token === token) {
+    try { fs.unlinkSync(reaperPath); } catch {}
+  }
+}
+function quarantineScopedLock(lockPath, observedRaw) {
+  // DESIGN-NOT-BUG: 观测不可读时放弃回收是 fail-closed 有意设计（评审 5466425829 ⑥ 不采纳）。
+  //   "quarantine 时再读"＝以观测窗之后的内容裁决回收，正是 reaper-restore-no-clobber 链修掉的
+  //   TOCTOU 误删形态（他者可能已重建新活锁）。非永久不可恢复：acquire 每轮重新 statSync/
+  //   readFileSync 观测（瞬态不可读下轮自愈），真不可读锁龄满后由 mtime 龄项走同一回收域。
+  if (observedRaw === null || observedRaw === undefined) {
+    process.stderr.write(`[quarantineScopedLock] 缺观测值，放弃回收: ${lockPath}\n`);
+    return { code: 'MISSING_OBSERVATION' };
+  }
+  const reaperPath = lockPath + '.reaper';
+  const reaper = acquireReaperLock(reaperPath);
+  if (!reaper || typeof reaper.fd !== 'number') {
+    return { code: (reaper && reaper.code) || 'REAPER_BUSY' };
+  }
+  try {
+    let currentRaw = null;
+    try {
+      currentRaw = fs.readFileSync(lockPath, 'utf8');
+    } catch (e) {
+      return { code: (e && e.code) || 'ENOENT' };
+    }
+    // DESIGN-NOT-BUG: 逐字比对是刻意设计（TOCTOU 防误删闸；评审 5466425829 ⑦ 建议的 JSON 归一化
+    //   比对不采纳——锁内容由 createFresh 单写者一次写出、无第二写入方，"序列化空白漂移"无来源）：
+    //   两值均为磁盘 readFileSync 原文，同一未变文件
+    //   两次读到的字节串恒等，不存在序列化空白差异；CONTENT_MISMATCH 即「观测后锁内容已变」，
+    //   此时保守放弃回收——若改语义化比对，第三方以等义异形内容改写锁时会被误判未变并误删
+    //   他者活锁，击穿回收互斥。
+    if (currentRaw === observedRaw) {
+      try {
+        fs.unlinkSync(lockPath);
+        return { deleted: true };
+      } catch (eu) {
+        return { code: (eu && eu.code) || 'UNLINK_BUSY' };
+      }
+    }
+    return { code: 'CONTENT_MISMATCH' };
+  } finally {
+    releaseReaperLock(reaperPath, reaper.fd, reaper.token);
+  }
+}
+function acquireScopedLock(lockPath) {
+  const start = Date.now();
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      let wroteMeta = false;
+      const meta = { pid: process.pid, time: Date.now() };
+      try { fs.writeSync(fd, JSON.stringify(meta)); wroteMeta = true; } catch { /* 元数据写失败回退纯 mtime 判龄，不解除持锁 */ }
+      return { fd, meta, wroteMeta };
+    } catch (e) {
+      if (e && e.code === 'EEXIST') {
+        const v = isStaleScopedLock(lockPath);
+        if (v.stale) {
+          // E1 修复（RX1）：回收路径同样受 deadline 约束（行为契约 1.4「回收成功仍受 deadline
+          //   约束，防病态循环」）；回收失败（Windows 上 AV/索引器以无 FILE_SHARE_DELETE 方式
+          //   打开锁 → renameSync EBUSY/EPERM；ACL 受限 → EACCES）时带 Atomics.wait 退避重试，
+          //   到期 fail-closed 返回 timeout，杜绝 stale 分支无界忙轮询挂死单线程 server。
+          if (Date.now() - start >= LOCK_TIMEOUT_MS) return { timeout: true };
+          const q = quarantineScopedLock(lockPath, v.raw);
+          if (q.code && q.code !== 'ENOENT') {
+            scopedLockSleep(LOCK_RETRY_MS);
+          }
+          // ENOENT = 他者已先回收：立即重试（下一轮 openSync 视锁文件在场性再裁决，受 deadline 兜底）
+          continue;
+        }
+        if (Date.now() - start >= LOCK_TIMEOUT_MS) return { timeout: true };
+        scopedLockSleep(LOCK_RETRY_MS);
+        continue;
+      }
+      return { error: e.message };
+    }
+  }
+}
+// RX2（releaseLock 身份校验，共用）：unlink 前必须确认锁的 pid+time 标识本进程本次持锁——
+//   本进程 pid 在场且 time 与获取时一致 → 删除；元数据写失败（wroteMeta=false）时文件无时间戳
+//   可比，仅当仍属本进程 pid 方可删；否则视为他者替换活锁，保留不删（调用方 close fd 即可，
+//   POSIX 下他者锁以路径名存续，与捕获件无关）。
+//   返回 { released, error? } 供调用方程序化审计释放结果（行为增量仅返回值，控制流不变）：
+//   released=true 删除完成；error='ENOENT_GONE' 锁已被陈旧回收/并发释放（正常竞态，不打日志）；
+//   error='NOT_OWNER' 他者替换活锁（既有静默保留语义）；error='NO_FD' 无 fd 可释放；
+//   其余 error 为 unlinkSync 实际错误码（同时输出既有 stderr 日志，单源不重复）。
+function releaseScopedLock(lockPath, lockFd, meta, wroteMeta) {
+  if (lockFd === null) return { released: false, error: 'NO_FD' };
+  try { fs.closeSync(lockFd); } catch { /* 已关闭 */ }
+  // K6：lockPath 恒为 scopedLockPath() 返回的字符串，删冗余 null 守卫。
+  let cur = null;
+  try { cur = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { /* 不可读/不可解析 */ }
+  const mine = !!(cur && cur.pid === process.pid) && (wroteMeta ? (cur.time === meta.time) : true);
+  if (!mine) return { released: false, error: 'NOT_OWNER' };
+  // K2：unlinkSync 失败（Windows EBUSY/EPERM/EACCES 等残留孤儿锁根因）须可观测，仅 ENOENT（已被陈旧回收/并发释放）静默。
+  try {
+    fs.unlinkSync(lockPath);
+    return { released: true };
+  } catch (e) {
+    if (e && e.code !== 'ENOENT') {
+      process.stderr.write(`[releaseScopedLock] unlinkSync 失败（可能残留孤儿锁）: ${e && e.code}\n`);
+      // 评审 5466425829 ④：unlink 失败即打 mtime 老化戳，使下轮 acquire 经 mtime 龄项即时回收
+      //   self-pid/死 pid 孤儿锁，消灭"未龄满判活" ~10s 空窗；utimes 失败静默回退龄满自然回收。
+      //   不该触发域：ENOENT_GONE 不入本分支；NOT_OWNER 已早退，他者活锁 mtime 不被改写。残余窗口
+      //   （E1 声明）：mine 校验读与本释放域写非原子，跨进程 swap + unlink 失败时 utimes 可能触及
+      //   替换锁 mtime，受双龄项约束（JSON.time 新鲜 + pid 存活判活）不误伤健康竞争者，误伤仅
+      //   wroteMeta=false 退化链，与既有锁协议同机进程互斥口径一致。
+      try {
+        const aged = new Date(Date.now() - LOCK_STALE_MS - 1000);
+        fs.utimesSync(lockPath, aged, aged);
+      } catch { /* 老化失败：龄满自然回收兜底 */ }
+    }
+    return { released: false, error: (e && e.code === 'ENOENT') ? 'ENOENT_GONE' : ((e && e.code) || 'UNLINK_ERROR') };
+  }
+}
+// 受控写/受控编辑共用守卫：filename 归一 → .kilo/plans/ 路径锁 → 符号链接祖先重锚 →
+// 目标自身 lstat。返回 { ok: true, target, expectRoot, withinReal } 或 { ok: false, text }。
+// write 与 edit 必须共用本函数，严禁复制两份（单一事实源）。
+function resolveScopedPlanTarget(filename) {
+  const rel = String(filename || '').replace(/\\/g, '/');
+  if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {
+    return { ok: false, text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。' };
+  }
+  const root = path.resolve(WORKSPACE, '.kilo', 'plans');
+  const target = path.resolve(root, rel);
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    return { ok: false, text: '[受控写拦截] 目标越出 .kilo/plans/。' };
+  }
+  // 攻击面台账 block@ 闸名锚对齐：本文件须逐字可检——resolveScopedPlanTarget、scopedLockPath、
+  //   isStaleScopedLock（E2/C3 元数据域闸）、acquireScopedLock、scoped-edit-count-guard、
+  //   scoped-edit-expected-count-domain、符号链接、主代理/未知调用方不得直接编辑计划文件。
+  //   其中 scopedLockPath/isStaleScopedLock/acquireScopedLock 由下方模块级锁原语（R21）引入，
+  //   write 取锁（R18）与 edit 取锁（R7）共用同一套标识，台账 block@ 断言因此可复跑命中。
+  // 符号链接二次判定（祖先重锚版）：旧口径以 realpathSync(root) 为对照基准，存在两处失明——
+  //   ① `.kilo` 整体为指向区外的链接时，realRoot 与 realParent 同在区外且互为前缀（区外 plans
+  //      预建时直接判等放行），root 尚不存在时 realRoot 为 null，判定被整体跳过；
+  //   ② `link/sub/x.md` 中段 link 指区外而 sub 未创建时 realParent 为 null，判定跳过，
+  //      随后 mkdirSync(recursive) 直接把 sub 建到区外并写盘。
+  // 新口径：基准锚"真实工作区派生的 expectRoot"（与 root 的词法路径解耦，
+  //   root 在场与否、是否经链接解析均不参与判据），对 target 父路径取最近存在祖先三态判定：
+  //   a) 祖先在 expectRoot 内或其下 → 放行（正常路径）；
+  //   b) 祖先是 expectRoot 自身祖先且仍在工作区真实根内 → 放行（plans 尚未创建的合法首写）；
+  //   c) 其余（含祖先经链接落到区外、WORKSPACE 无法解析）→ fail-closed 拒绝。
+  const withinReal = (p, base) => p === base || p.startsWith(base + path.sep);
+  const nearestReal = (p) => { let c = p; for (;;) { try { return fs.realpathSync(c); } catch { const up = path.dirname(c); if (up === c) return null; c = up; } } };
+  const realWs = nearestReal(WORKSPACE);
+  const expectRoot = realWs ? path.join(realWs, '.kilo', 'plans') : null;
+  const anc = nearestReal(path.dirname(target));
+  if (!realWs || !anc || !(withinReal(anc, expectRoot) || (withinReal(expectRoot, anc) && withinReal(anc, realWs)))) {
+    return { ok: false, text: '[受控写拦截] 目标经符号链接越出 .kilo/plans/。' };
+  }
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      return { ok: false, text: '[受控写拦截] 目标文件为符号链接，禁止写入。' };
+    }
+  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  return { ok: true, target, expectRoot, withinReal };
 }
 
 if (require.main === module) {

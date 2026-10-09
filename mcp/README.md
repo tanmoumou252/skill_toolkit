@@ -46,7 +46,7 @@ node mcp/webui.js
 ## 注意事项与暗坑
 
 - 恒定最严档执法：服务不解析宿主模式信号，恒按最严档执行；仅白名单只读与测试命令静默放行，灰区与写命令一律拒绝。
-- 写蜜罐通道：`write_plan` 等写工具恒 isError 拦截，引导 zcode 走受控写 `write_scoped_file`、kilocode/codebuddy 走原生写工具。
+- 写蜜罐通道：`write_plan` 等写工具恒 isError 拦截，引导 zcode 走受控写 `write_scoped_file`（新建文件）；已存在 .md 的精确串替换走同域同锁的 `edit_scoped_file`（old_string 逐字命中 expected_count 次才放行，计数不符即拒），两者仅放行 runtime_scope=subagent 且实例角色为 main 的调用。`edit_scoped_file` 的读-改-写全程持同目录 O_EXCL 锁文件互斥（按目标基名一文件一锁，取得超时以 isError 拒绝并审计），避免不同会话 main 实例同文件并发编辑的静默丢失更新；该互斥仅对共享同一文件系统的同机进程生效。新建文件按默认权限落盘，编辑既有文件用不跟随链接的方式尽力继承其权限位（读取失败回退默认写行为）。
 - 终端分流与加固：自动探测 PortableGit 并强制排除 WSL 下的 bash.exe；引号包裹命令名词（如 `'git' diff`）会被加固闸拦截。
 - 真实审计与隐私：需注入 `"MCP_AUDIT_LOG": "1"` 并重启宿主客户端；流水落 `~/.config/kilo/governor-audit.jsonl`，记录 stdout 前 400 字符。
 - WebUI 安全边界：仅绑定 127.0.0.1 并强制校验 Host；受控终端【模拟执行】为纯前端模拟，不产生实际审计流水。
