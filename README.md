@@ -2,32 +2,39 @@
 
 Windows 平台 AI 编程的技能规程、代理流水线与受控 MCP 终端集合。
 
+## 编译产物（重要）
+
+三端 12 份平台文件（3×AGENTS.md + 9×agents）是编译产物：由 `node checks/build-agents.mjs` 从 `spec/blocks/` 与 `spec/platform/*/manifest.json` 生成，头部带 `<!-- GENERATED from spec@<hash> -->` 版本戳，手改会被新鲜度闸（`node checks/build-agents.mjs --check`）判红。修改入口在 `spec/`，改完重生成。
+
+## 分层修改指南
+
+| 改什么 | 去哪里改 |
+|---|---|
+| 机器执法规则 | `checks/registry.mjs` |
+| 三端 AGENTS.md 共享散文 | `spec/blocks/agents-md-*.md` |
+| 三端差异（插槽值） | `spec/platform/*/manifest.json` 的 `slots` |
+| agents 角色散文（三端共享） | `spec/blocks/body-shared-*.md` |
+| zcode plan-writer 独有散文 | `spec/blocks/body-zcode-plan-writer.md` |
+| agents frontmatter | manifest 的 `frontmatter` 字段 |
+| zcode 独有 AGENTS 块（直连派发参数头） | `spec/blocks/direct-dispatch-header.md`（经 zcode manifest 的 `AGENTS.md` 条目装配；执法条款「直连派发参数头」见 `checks/registry.mjs`） |
+
+收尾三连：`node checks/build-agents.mjs` → `node checks/run.mjs` → `node checks/build-agents.mjs --check`。
+
 ## 生效方式
 
 - 技能：将 `skills/<skill-name>/` 复制到 `~/.config/kilo/skills/`（Kilo Code）、`~/.zcode/skills/`（ZCode）或 `~/.codebuddy/skills/`（CodeBuddy）。
-- 代理：将各平台 `agents/` 下文件复制到对应配置目录（Kilo Code 为 `~/.config/kilo/agents/`，ZCode 为 `~/.zcode/agents/`，CodeBuddy 为 `~/.codebuddy/agents/`）。
+- 平台文件：将各平台 `AGENTS.md` 与 `agents/` 复制到对应配置目录（Kilo Code 为 `~/.config/kilo/`，ZCode 为 `~/.zcode/`，CodeBuddy 为 `~/.codebuddy/`）。安装仍是复制；这些文件是编译产物，修改必须改 `spec/` 后重生成，不得直改本仓产物。
 - MCP：将 `mcp/plan-governor.js` 以双实例（main / subagent）注册进平台配置。
 - 前置依赖：便携版 PowerShell 7 与 PortableGit 解压后加入 PATH。
 
 ## 架构导航
 
-- zcode: ZCode 平台三子代理流水线、调度纪律与 MCP 绑定
-- kilocode: Kilo Code 平台独立主编排代理与双复审流水线
-- codebuddy: CodeBuddy 平台三代理职责与工具名基线
-- skills: 通用技能规程集（计划先行、终端互操作、提交信息等）
-- mcp: plan-governor 双实例受控终端与写面引导闸
+- zcode: ZCode 三子代理流水线（约束: zcode/AGENTS.md；主编排: zcode/agents/plan-writer-subagent-sp.md）
+- kilocode: Kilo Code 独立主编排与双复审流水线（约束: kilocode/AGENTS.md；主编排: kilocode/agents/plan-writer-sp.md）
+- codebuddy: CodeBuddy 三代理职责与工具名基线（约束: codebuddy/AGENTS.md；主编排: codebuddy/agents/plan-writer-sp.md）
+- skills: 通用技能规程集（核心: skills/plan-file-first/SKILL.md）
+- mcp: plan-governor 双实例受控终端（守卫服务: mcp/plan-governor.js）
 - checks: 规程文档常驻不变式自动化质检套件（零依赖自测与防漂移守卫）
-
-## 核心入口
-
-- ZCode 约束: zcode/AGENTS.md
-- Kilo Code 约束: kilocode/AGENTS.md
-- CodeBuddy 约束: codebuddy/AGENTS.md
-- ZCode 主编排: zcode/agents/plan-writer-subagent-sp.md
-- Kilo Code 主编排: kilocode/agents/plan-writer-sp.md
-- CodeBuddy 主编排: codebuddy/agents/plan-writer-sp.md
-- MCP 守卫服务: mcp/plan-governor.js
-- 核心技能: skills/plan-file-first/SKILL.md
 
 ## 全局约束
 

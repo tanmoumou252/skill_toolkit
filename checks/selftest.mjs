@@ -10,7 +10,23 @@ const unclassifiedPlatformFiles = typeof invariants.unclassifiedPlatformFiles ==
 const unscannedRoots = typeof invariants.unscannedRoots === 'function' ? invariants.unscannedRoots : () => [];
 const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? invariants.scanEntryDirNames : (xs) => xs;
 const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
-import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, isPlanFilename } from './attack-ledger.mjs';
+import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, FILES_HEAD_RE, isPlanFilename, hasLedgerSection } from './attack-ledger.mjs';
+import * as ledgerNs from './attack-ledger.mjs';
+import { PLATFORMS, CLAUSES, DERIVED_CLAUSES, GATES } from './registry.mjs';
+// 清点器以命名空间导入存取：红灯阶段该模块仅为空桩（零导出），命名导入会因「缺导出」在
+// ESM 链接期抛 SyntaxError 假红；命名空间导入把缺失延迟到守卫抛出
+// TypeError: inventory is not a function（四维真红 [PASS-RED] 目标契约缺失）。
+// 注：PLATFORMS 导入随本 Replacement 落刀即在场，后续用例的 PLATFORMS.map(...) 不会 ReferenceError。
+import * as inventoryNs from './platform-inventory.mjs';
+const inventory = typeof inventoryNs.inventory === 'function' ? inventoryNs.inventory : () => { throw new TypeError('inventory is not a function'); };
+// 生成器以命名空间导入存取：红灯阶段空桩零导出，命名导入会在 ESM 链接期抛 SyntaxError 假红；
+// 命名空间导入把缺失延迟到守卫抛出 TypeError（[PASS-RED] 目标契约缺失），实现落盘后直取真函数。
+import * as buildNs from './build-agents.mjs';
+const build = typeof buildNs.build === 'function' ? buildNs.build : () => { throw new TypeError('build is not a function'); };
+const diffProducts = typeof buildNs.diffProducts === 'function' ? buildNs.diffProducts : () => { throw new TypeError('diffProducts is not a function'); };
+const unknownPlatformDirs = typeof buildNs.unknownPlatformDirs === 'function' ? buildNs.unknownPlatformDirs : () => { throw new TypeError('unknownPlatformDirs is not a function'); };
+const specHash = typeof buildNs.specHash === 'function' ? buildNs.specHash : () => { throw new TypeError('specHash is not a function'); };
+const GENERATED_MARK = typeof buildNs.GENERATED_MARK === 'string' ? buildNs.GENERATED_MARK : '<未实现>';
 // VERDICT 单源常量以命名空间 + instanceof 守卫存取：红灯阶段 VERDICT_LINE_RE 尚未导出，直接命名
 // 导入会在 ESM 链接期抛 SyntaxError，把「逐条断言真红」降级成「脚手架崩溃假红」（四维语义真红
 // [REJECT-FAKE]）；typeof null === 'object' 故用 instanceof RegExp 判定，实现落盘后即直取真常量。
@@ -197,8 +213,8 @@ check('ledger-section-absent-detected', attackLedger('# p\n## Files\n| Modify | 
 check('ledger-nonsecurity-plan-exempt', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', {}).length === 0);
 // 计划未闭合围栏掩蔽 Files 段 ⇒ 不得被误判为非执法而静默跳过台账校验（fail-open）；修复后必须判红
 check('ledger-plan-unclosed-fence-failclosed', attackLedger('# p\n```\n未闭合\n\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n\n## 攻击面台账\n\n- 台账行\n  - 类别：视图-执行语义分叉\n  - 处置：block@x\n', { implText: 'x', testText: "check('assert', true);" }).some((v) => v.msg.includes('未闭合')));
-check('ledger-report-zero-go-echo-required', attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO' }).some((v) => v.msg.includes('ECHO-RISK')));
-check('ledger-report-zero-go-echo-annotated-ok', !attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nECHO-RISK' }).some((v) => v.msg.includes('ECHO-RISK')));
+check('ledger-report-zero-go-forbidden', attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO' }).some((v) => v.msg.includes('zero-attack-go-forbidden')));
+check('ledger-report-zero-go-echo-annotated-still-forbidden', attackLedger(planLedgerGood, { implText: implGood, testText: testGood, reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nECHO-RISK' }).some((v) => v.msg.includes('zero-attack-go-forbidden')));
 check('ledger-nonsecurity-report-still-checked', attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'VERDICT: GO' }).some((v) => v.msg.includes('ATTACKS=')));
 check('ledger-files-title-trailing-note-detected', attackLedger('# p\n## Files（批间互斥）\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
 check('ledger-fenced-fake-files-section-denied', attackLedger('# p\n\n```md\n## Files\n| Modify | `README.md` | x |\n```\n\n## Files\n| Modify | `mcp/plan-governor.js` | x |\n', {}).some((v) => v.msg.includes('攻击面台账')));
@@ -251,7 +267,7 @@ check('ledger-plan-spoofed-field-in-fence-not-counted', attackLedger('# p\n## Fi
 // 38 零实弹 GO 必须标 ECHO-RISK
 check('ledger-report-offline-go-echo-required', rvSome([atkRow(1), atkRow(2), '', 'PROBE=OFFLINE', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '零实弹'));
 // 39（负控制）散文引用两标记字面量不得构成姿态声明（误伤对照）
-check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；契约另要求零攻击 GO 标注 ECHO-RISK。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
+check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；零实弹 GO 须标注 ECHO-RISK（零攻击 GO 的处置按计划分级）。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
 // 40 格式行末次取值：前塞裸行遮蔽尾部真值
 check('ledger-report-format-line-last-wins', rvSome(['# r', '', 'ATTACKS=9', '', '## 格式行', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
 // 41 ECHO-RISK 散文撞词不足以免标
@@ -351,6 +367,7 @@ check('assert-chain-filter-same-scope',
 check('assert-latest-companion-exclude-gate',
   isPlanFilename('20260929-0837-plan.md') === true
   && isPlanFilename('20260731153000-add-export-plan.md') === true
+  && isPlanFilename('20261005-date-only-topic-plan.md') === true
   && isPlanFilename('202609291234567890-x.md') === false
   && isPlanFilename('20260731-153000-auth-r3-refactor.md') === true
   && isPlanFilename('20260929-0837-plan-test-evidence.md') === false
@@ -358,6 +375,44 @@ check('assert-latest-companion-exclude-gate',
   && isPlanFilename('20260929-0837-plan-shadow-plan.md') === false
   && isPlanFilename('20260929-0837-plan.lease.md') === false
   && isPlanFilename('commit_msg.md') === false);
+
+// 66 latest-unclosed-exclude-gate 闸：--latest 选择域排除未闭环工作内存产物——缺「## 攻击面台账」
+//   节（围栏外）的时间戳命名计划不进入审计选择域；选择与审计共用同一台账节判定（同源不分叉）。
+//   全部候选被排除时选择结果为空，CLI 落 EXIT-2 明确报无可选计划（fail-loud，严禁静默 Exit 0）。
+check('assert-latest-unclosed-exclude-gate',
+  attackLedgerNs.pickLatestEligible([
+    { f: '20261005-agent-body-shared-blocks.md', text: '# 计划\n## Files\n| Modify | `README.md` | x |\n' },
+    { f: '20261006-rework.md', text: '# 计划\n## Files\n| Modify | `checks/attack-ledger.mjs` | x |\n\n## 攻击面台账\n- 台账行\n- 类别：视图-执行语义分叉\n' },
+  ]).f === '20261006-rework.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'b.md', text: '# 计划\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).skipped.join(',') === 'b.md'
+  && attackLedgerNs.pickLatestEligible([{ f: 'only.md', text: '# 计划\n' }]).f === null
+  && attackLedgerNs.pickLatestEligible([]).f === null);
+// 67 台账节判定围栏掩蔽：围栏内的假台账标题不得使候选合格（与审计侧 scanFences 掩蔽同口径）。
+check('assert-latest-unclosed-exclude-gate-fence-masked',
+  attackLedgerNs.pickLatestEligible([{ f: 'a.md', text: '```md\n## 攻击面台账\n```\n' }]).f === null);
+// 选择-审计同构（视图-执行语义分叉闭合）：缺「## 攻击面台账」节但 Files 节命中执法文件的候选必须被
+//   选中（fail-closed，交审计侧 loud 报缺节，严禁静默 skip 漂移到更旧候选）；未闭合围栏 + 原文命中执法
+//   文件名的 fail-closed 变体同入选；围栏掩蔽的假 Files 节不触发入选；非执法类缺节候选仍 skip。
+check('assert-latest-enforcement-no-ledger-selected',
+  attackLedgerNs.pickLatestEligible([
+    { f: 'c.md', text: '# 计划\n## Files\n| Modify | `checks/attack-ledger.mjs` | x |\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'c.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'd.md', text: '# 计划\n```md\nchecks/build-agents.mjs\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'd.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'e.md', text: '# 计划\n```md\n| Modify | `checks/attack-ledger.mjs` |\n```\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'a.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'f.md', text: '# 计划\n## Files\n| Modify | `README.md` | x |\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'a.md');
 // 66 PR 复审报告机读行结构闸（pr-report-semantic-pass-gate）：三端 pr-reviewer 规程硬要求
 //   SEMANTIC_PASS=done|partial 行；缺行必咬、含行零违反（partial 禁 GO 不得停留在散文面）。
 const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'TRUTH_PASS=done', ''].join('\n');
@@ -497,7 +552,7 @@ check('assert-scan-entry-ignores-build-artifacts',
 // 80 登记常量单一事实源漂移断言：run.mjs 报错文案引用的常量名必须与代码实参同源。
 check('assert-scan-registry-constants-drift',
   invariants.SCAN_ROOTS.join(',') === 'kilocode,codebuddy,zcode,skills'
-  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp'
+  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp,spec'
   && invariants.BUILD_ARTIFACT_ROOTS.join(',') === 'node_modules');
 // 81 入口闸 id 登记：防"删掉 run.mjs 闸调用、汇总与 OK 行静默消失"的接线漂移。
 check('assert-entry-gate-ids-registered',
@@ -727,6 +782,732 @@ check('assert-clause-writer-duty-anchors-clean-not-flagged',
   WRITER_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], WRITER_IDS[i])));
 check('assert-clause-duty-anchors-scope-locked',
   FOUR_DUTIES.every((t, i) => !has([{ path: 'zcode/agents/plan-writer-subagent-sp.md', text: PW_ZC_FM.join('\n') + t + '\n' }], FOUR_IDS[i])));
+
+// —— 平台清点器（合成文件集，不读磁盘；期望值全部由第 5 节工具契约推导，非抄录实现） ——
+const INV_FM = ['---', 'name: pw', 'description: d', 'tools: []', '---', ''];
+const ANCHOR_A = '未见红严禁开工';
+const mk = (lines) => lines.join('\n');
+const invBase = () => PLATFORMS.map((p) => ({ path: `${p}/agents/pw.md`, text: mk([...INV_FM, '前导段', ANCHOR_A, '条款体', '尾段']) }));
+// 106 三端同文 ⇒ 全部差异面为零（负控制，锚切分不产生假差异）。
+check('inv-identical-zero-diff',
+  (() => { const r = inventory(invBase()); return r.anchorSet.diffs.length === 0 && r.sections.diffs.length === 0 && r.frontmatter.diffs.length === 0 && r.fences.diffs.length === 0; })());
+// 107 锚集差：一端缺锚文本 ⇒ anchor-set 恰一条、side=missing（锚集差本身记为一条差异）。
+check('inv-anchor-set-missing-detected',
+  (() => { const f = invBase(); f[1].text = mk([...INV_FM, '前导段', '无锚正文']); const r = inventory(f);
+    return r.anchorSet.diffs.some((d) => d.path === 'codebuddy/agents/pw.md' && d.side === 'missing'); })());
+// 108 frontmatter 键级 diff：一端多键 ⇒ fm-key-extra 恰一条、键名正确（结构化对比，非文本 diff）。
+check('inv-fm-key-extra-detected',
+  (() => { const f = invBase(); f[2].text = mk(['---', 'name: pw', 'description: d', 'tools: []', 'color: orange', '---', '前导段', ANCHOR_A, '尾段']); const r = inventory(f);
+    return r.frontmatter.diffs.some((d) => d.path === 'zcode/agents/pw.md' && d.key === 'color' && d.kind === 'fm-key-extra'); })());
+// 109 围栏内隔离：围栏内差异不进正文块差异、单独归 fences 面（与 lineView 围栏掩蔽同口径）。
+const BT = String.fromCharCode(96, 96, 96);
+check('inv-fence-isolation',
+  (() => { const f = invBase(); f[0].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 A', BT, '尾段']); f[1].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 B 不同内容', BT, '尾段']); f[2].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例 A', BT, '尾段']);
+    const r = inventory(f); return r.sections.diffs.length === 0 && r.fences.diffs.length === 1; })());
+// 110 负控制：围栏内同文 ⇒ fences 面为零（防隔离面误伤）。
+check('inv-fence-clean-not-flagged',
+  (() => { const f = invBase().map((x) => ({ ...x, text: mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例', BT, '尾段']) })); const r = inventory(f);
+    return r.fences.diffs.length === 0; })());
+// 111 锚重复出现：取首处为块边界，其余出现各计一条 anchor-repeat 差异（防重复正文被静默吸收）；
+// line 断言为文件绝对行号（INV_FM 6 行偏移后重复锚位于第 10 行），防行号回退为掩蔽空间相对序号。
+check('inv-anchor-repeat-counted',
+  (() => { const f = invBase(); f[0].text = mk([...INV_FM, '前导段', ANCHOR_A, '条款体', ANCHOR_A, '重复段']); const r = inventory(f);
+    const d = r.anchorSet.diffs.find((d) => d.path === 'kilocode/agents/pw.md' && d.kind === 'anchor-repeat');
+    return !!d && d.line === 10; })());
+// 112 三端围栏数不等：按出现序逐对配对，多出的围栏块计一条 fences 差异（不静默丢弃）。
+check('inv-fence-count-unequal',
+  (() => { const f = invBase(); f[1].text = mk([...INV_FM, '前导段', ANCHOR_A, BT, '示例', BT, BT, '多余围栏', BT, '尾段']); const r = inventory(f);
+    return r.fences.diffs.length === 1; })());
+// 113 frontmatter 跨角色不配对：CLI 真实混合形态（AGENTS.md 无 frontmatter + agents 有 frontmatter）
+// 分属不同 roleOf 组，不得产生任何逐键 fm-key-extra 噪声（组间零对照）。每角色两成员
+// （2×AGENTS.md + 2×agents），组内对照真实发生（AGENTS 组双方均无 frontmatter → 合法静默 0 条；
+// agents 组键集叶值全等 → 0 条），排除"单成员组平凡 0 差异"的假绿：跨角色误配对即现逐键噪声。
+check('inv-fm-cross-role-no-noise',
+  (() => { const f = [
+      { path: 'kilocode/AGENTS.md', text: mk(['# kilocode 约束', '正文段']) },
+      { path: 'zcode/AGENTS.md', text: mk(['# zcode 约束', '正文段']) },
+      { path: 'kilocode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+      { path: 'zcode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+    ]; const r = inventory(f); return r.frontmatter.diffs.length === 0; })());
+// 114 组参照缺 frontmatter：同组（agents/pw.md）内参照无 frontmatter、成员有 → 恰一条 fm-reference-absent
+// 登记信号（非逐键噪声）；成员亦无 frontmatter → 零条目（合法静默）。
+check('inv-fm-reference-absent-registered-not-noise',
+  (() => { const f = [
+      { path: 'kilocode/agents/pw.md', text: mk(['前导段', ANCHOR_A]) },
+      { path: 'zcode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+    ]; const r = inventory(f);
+    return r.frontmatter.diffs.length === 1 && r.frontmatter.diffs[0].kind === 'fm-reference-absent'
+      && r.frontmatter.diffs[0].reference === 'kilocode/agents/pw.md'
+      && inventory([
+        { path: 'kilocode/agents/pw.md', text: mk(['前导段', ANCHOR_A]) },
+        { path: 'zcode/agents/pw.md', text: mk(['前导段', ANCHOR_A]) },
+      ]).frontmatter.diffs.length === 0; })());
+// 119 反向不对称对称化（M-1）：组参照有 frontmatter、成员无 → 恰一条 fm-member-absent 登记信号
+//（修复前走 diffFmTrees 逐键 fm-key-missing 噪声：INV_FM 三键各一条，计数断言红灯）；成员亦有
+// frontmatter → 零条目（合法静默，正控排除过度拦截）。
+check('inv-fm-member-absent-registered-not-noise',
+  (() => { const f = [
+      { path: 'kilocode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+      { path: 'zcode/agents/pw.md', text: mk(['前导段', ANCHOR_A]) },
+    ]; const r = inventory(f);
+    return r.frontmatter.diffs.length === 1 && r.frontmatter.diffs[0].kind === 'fm-member-absent'
+      && r.frontmatter.diffs[0].reference === 'kilocode/agents/pw.md'
+      && inventory([
+        { path: 'kilocode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+        { path: 'zcode/agents/pw.md', text: mk([...INV_FM, '前导段', ANCHOR_A]) },
+      ]).frontmatter.diffs.length === 0; })());
+// 115 围栏偏移下 unanchored startLine 为文件绝对行号：以重复锚构造 tail 段（E3 修复后单锚后尾段
+// 并入块 lines、unanchored 面不再承接，故必须经重复锚后的 tail 冲刷进入 unanchored），尾段在文件
+// 第 12 行（INV_FM 6 行 + 锚/围栏三行/重复锚），修复前掩蔽空间 pendingStart 相对值为 4——断言 12
+// 即钉死绝对行号契约。
+check('inv-unanchored-line-absolute-with-fence',
+  (() => { const f = invBase(); f[0].text = mk([...INV_FM, ANCHOR_A, BT, 'code', BT, ANCHOR_A, '尾段A']); f[1].text = mk([...INV_FM, ANCHOR_A, BT, 'code', BT, ANCHOR_A, '尾段B']);
+    const r = inventory(f); const d = r.unanchored.diffs.find((d) => d.path === 'codebuddy/agents/pw.md');
+    return !!d && d.line === 12; })());
+// 116 锚行装饰差异可检出：两端锚后正文逐字相同、仅锚行渲染不同（列表前缀 vs 标题层级）→
+// sections 面恰一条差异且锚集面零差异（对齐单元 = 条款锚，锚行本身属比对域）。
+check('inv-anchor-line-decoration-diff-detected',
+  (() => { const f = [
+      { path: 'kilocode/agents/pw.md', text: mk([...INV_FM, '前导段', '- ' + ANCHOR_A, '条款体', '尾段']) },
+      { path: 'zcode/agents/pw.md', text: mk([...INV_FM, '前导段', '### ' + ANCHOR_A, '条款体', '尾段']) },
+    ]; const r = inventory(f);
+    return r.sections.diffs.length === 1 && r.anchorSet.diffs.length === 0; })());
+// 117 roleOf 别名归一形态锁定（断言面 = unanchored，唯一消费 roleOf 的差异面）：zcode 的
+// -subagent-sp 别名归一为 -sp 后两文件同组，组内前导段差异恰计 1 条 unanchored 差异；
+// 别名归一坏（两文件异组不配对）⇒ 0 条即本用例红灯。sections 面按 clauseId 跨全文件配对、
+// 不消费 roleOf（platform-inventory.mjs:190-204），不得作为本契约断言面。
+check('inv-roleof-subagent-alias-grouped',
+  (() => { const f = [
+      { path: 'zcode/agents/plan-writer-sp.md', text: mk(['前导段A', ANCHOR_A]) },
+      { path: 'zcode/agents/plan-writer-subagent-sp.md', text: mk(['前导段B', ANCHOR_A]) },
+    ]; const r = inventory(f); return r.unanchored.diffs.length === 1; })());
+// 118 prefix 前导段（首个锚前）unanchored 起始行绝对化锁定（钉死锚命中冲刷与 EOF 冲刷两处无守卫 push）：
+// 两同角色 zcode 文件、无 frontmatter、前导段内容互异且各含同一锚。红值推演链（盘面实算）：
+// 无 frontmatter → fm 偏移 0；夹具前 3 行为围栏（BT/'code'/BT，scanFences 返回 1-based
+// openLine/closeLine），被掩蔽剔除出 outside；'前导段甲/乙' 位于文件
+// 第 4 行 → outside 下标 0、outsideLineNos[0] = 4（绝对行号，platform-inventory.mjs 的 lineNo 与
+// outsideLineNos 定义处）；splitByAnchors 内 pendingStart = outside 下标 + 1 = 1（掩蔽空间相对
+// 序号，splitByAnchors else 分支的 pendingStart 赋值处）——锚命中冲刷时 current 为 null，走
+// `else if (pending.length)` 分支体内的无守卫 unanchored.push，
+// 修复前 line = 1（红）；修复后 ln(pendingStart - 1) = outsideLineNos[0] = 4（绿）。注：纯无
+// frontmatter 且无围栏时掩蔽序号恰等于绝对行号（i+1 双向重合），不可判别——故引入围栏偏移制造
+// 掩蔽差，使本用例对锚命中冲刷 push 与 EOF 冲刷 push 漏改真红可复现（防 green-wash）。
+check('inv-unanchored-prefix-line-absolute-no-fm',
+  (() => { const f = [
+      { path: 'zcode/agents/plan-writer-sp.md', text: mk([BT, 'code', BT, '前导段甲', ANCHOR_A]) },
+      { path: 'zcode/agents/plan-writer-subagent-sp.md', text: mk([BT, 'code', BT, '前导段乙', ANCHOR_A]) },
+    ]; const r = inventory(f);
+    return r.unanchored.diffs.length === 1 && r.unanchored.diffs[0].line === 4; })());
+
+// —— 编译产物生成器与新鲜度闸（合成 spec/profile，不读磁盘；期望值由计划第 4 节契约推导） ——
+// 夹具路径一律用 expect 域为空的合成路径 agents/pw.md（registry 全表无任何 expect 匹配该形态），
+// 避免与 registry 多锚 expect 域碰撞；吞锚闸校验经 build 第三参 clauses 注入合成条款驱动。
+const B1_SPEC = { blocks: [
+  { id: 'no-green-no-start', text: '未见红严禁开工\n铁律正文。' },
+  { id: 'escalate-to-human', text: 'ESCALATE_TO_HUMAN\n呈报人类。' },
+] };
+const B1_PROFILES = {
+  kilocode: { files: [{ output: 'agents/pw.md', frontmatter: 'mode: all\ndescription: d', blocks: ['no-green-no-start', 'escalate-to-human'], slots: {} }] },
+  zcode: { files: [{ output: 'agents/pw.md', blocks: ['no-green-no-start'], slots: {} }] },
+};
+// B1 golden：输出文件集、frontmatter 围栏、生成标记与块序（契约 4.2 行 1）；生成标记断言按
+// 版本戳契约（4.1 版本戳行）取模板公共前缀 `GENERATED from spec@`（默认 GENERATED_MARK 为含
+// <hash> 占位的模板形态，断言不绑定具体哈希字面量，保证确定性）。
+check('build-core-golden',
+  (() => { const ps = build(B1_SPEC, B1_PROFILES); return ps.length === 2
+    && ps.some((p) => p.path === 'kilocode/agents/pw.md' && p.text.startsWith('---\nmode: all') && p.text.includes('GENERATED from spec@') && p.text.indexOf('未见红严禁开工') < p.text.indexOf('ESCALATE_TO_HUMAN'))
+    && ps.some((p) => p.path === 'zcode/agents/pw.md' && !p.text.startsWith('---') && p.text.includes('GENERATED from spec@')); })());
+// B2 AGENTS.md 豁免语义：manifest 不声明即不生成（契约 4.2 行 6，编译范围外文件零触碰）。
+check('build-agents-md-only-when-declared',
+  build(B1_SPEC, { kilocode: { files: [{ output: 'agents/pw.md', frontmatter: 'mode: all', blocks: ['no-green-no-start'], slots: {} }] } }).every((p) => !p.path.endsWith('AGENTS.md')));
+// B3 吞锚闸（build-no-anchor-swallow）真吞锚反例（契约 4.1 行 2；夹具保真度）：
+// 合成路径 agents/pw.md 的 expect 域为空，经 build 第三参 clauses 显式注入合成条款
+//（expect 命中该合成路径），闸校验域与 registry 多锚域零碰撞；块文本渲染前含锚
+//「未跟踪新文件铁律」，插槽替换后锚文本被吞 ⇒ 抛错拒产。闸须对「域内锚缺失」与
+//「插槽吞掉既有锚」可区分，本用例触发后者。
+check('build-swallowed-anchor-rejected',
+  (() => { const syn = [{ id: 'synthetic-anchor', expect: [/^zcode\/agents\/pw\.md$/], text: '未跟踪新文件铁律' }]; try { build({ blocks: [{ id: 'b', text: '未跟踪{{x}}铁律：正文' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '' } }] } }, syn); return false; } catch (e) { return e.message.includes('build-no-anchor-swallow'); } })());
+// B3 正控制：同块同路径同合成条款，插槽值补齐锚文本 ⇒ 渲染后锚仍在，正常产出（与 B3 反例构成「被吞 vs 在场」对照）。
+check('build-swallowed-anchor-preserved-positive',
+  (() => { const syn = [{ id: 'synthetic-anchor', expect: [/^zcode\/agents\/pw\.md$/], text: '未跟踪新文件铁律' }]; const ps = build({ blocks: [{ id: 'b', text: '未跟踪{{x}}铁律：正文' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '新文件' } }] } }, syn); return ps.length === 1 && ps[0].text.includes('未跟踪新文件铁律'); })());
+// B4 吞锚闸负控制：合成路径默认 CLAUSES 域为空（闸不触发、不误伤），插槽值本身含锚文本子串时渲染后文本保留该子串。
+check('build-slot-anchor-substring-preserved-positive',
+  (() => { const ps = build({ blocks: [{ id: 'b', text: '条款引用 {{x}} 结束' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { x: '未跟踪新文件铁律' } }] } }); return ps.length === 1 && ps[0].text.includes('未跟踪新文件铁律'); })());
+// B4b 残留插槽闸（build-unrendered-slot）：manifest 缺 slot 键 ⇒ 占位符残留进产物，build 必须抛错拒产。
+//   期望值溯源装配契约（不得交付未替换插槽），非抄录当前静默出货行为；词法域并集——空白容忍形态
+//   {{ g16 }} 与数字首键 {{123}}/{{1x}} 同判；同键多形态/多次出现经 Set 归一（消息中 {{g16}} 恰一次）。
+//   正控：全 slot 命中不抛。
+check('build-unrendered-slot-rejected',
+  (() => { try { build({ blocks: [{ id: 'b', text: 'A {{g16}} B {{ g16 }} C {{123}} D {{1x}}' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: {} }] } }); return false; } catch (e) { return /^build:/.test(e.message) && e.message.includes('build-unrendered-slot') && e.message.includes('agents/pw.md') && e.message.includes('{{g16}}') && e.message.includes('{{123}}') && e.message.includes('{{1x}}') && (e.message.match(/\{\{g16\}\}/g) || []).length === 1; } })());
+check('build-unrendered-slot-positive',
+  (() => { const ps = build({ blocks: [{ id: 'b', text: 'A {{g16}} B' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { g16: 'X' } }] } }); return ps.length === 1 && ps[0].text.includes('A X B') && !ps[0].text.includes('{{'); })());
+// B4c 重复块 id 闸（build-duplicate-block-id）：同 id 两块 ⇒ 映射后写覆盖前写且枚举序非契约，必须抛错拒产。
+check('build-duplicate-block-id-rejected',
+  (() => { try { build({ blocks: [{ id: 'dup', text: 'AAAA' }, { id: 'dup', text: 'BBBB' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['dup'], slots: {} }] } }); return false; } catch (e) { return /^build:/.test(e.message) && e.message.includes('build-duplicate-block-id') && e.message.includes('dup'); } })());
+check('build-duplicate-block-id-positive',
+  (() => { const ps = build({ blocks: [{ id: 'd1', text: 'AAAA' }, { id: 'd2', text: 'BBBB' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['d1', 'd2'], slots: {} }] } }); return ps.length === 1 && ps[0].text.includes('AAAA') && ps[0].text.includes('BBBB'); })());
+// B5 路径锁（build-output-path-locked）：manifest 文件名映射逃逸平台目录 ⇒ 抛错（契约 4.1 行 1），
+// 含反斜杠分隔符变异（path.posix 不识别反斜杠段，先归一再判定）。
+check('build-output-path-escape-rejected',
+  (() => { const hit = (out) => { try { build(B1_SPEC, { zcode: { files: [{ output: out, blocks: ['no-green-no-start'], slots: {} }] } }); return false; } catch (e) { return e.message.includes('build-output-path-locked'); } }; return hit('../spec/evil.md') && hit('..\\spec\\evil.md'); })());
+// B6 新鲜度三态（契约 4.1 行 3）：不一致报 stale；一致零违规；磁盘缺失（null）计 stale；
+// 行尾 CRLF/LF 漂移两侧归一后比对，语义一致不判 stale（autocrlf checkout 防假红）。
+check('build-freshness-stale-detected',
+  diffProducts([{ path: 'zcode/AGENTS.md', text: 'new' }], (p) => (p === 'zcode/AGENTS.md' ? 'old' : null)).join(',') === 'zcode/AGENTS.md'
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'same' }], () => 'same').length === 0
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'x' }], () => null).length === 1
+  && diffProducts([{ path: 'zcode/AGENTS.md', text: 'x\n' }], () => 'x\r\n').length === 0);
+// B7 未知平台目录 fail-loud（契约 4.1 行 5）：spec/platform/ 下非 PLATFORMS 目录被识别，
+// loadSpec 对其中含 manifest.json 者报错拒产（读盘判定在 CLI/loadSpec 层，selftest 依纯函数惯例只测识别函数）。
+check('build-unknown-platform-dir-rejected',
+  unknownPlatformDirs(['kilocode', 'codebuddy', 'zcode']).length === 0
+  && unknownPlatformDirs(['kilocode', 'foo']).join(',') === 'foo');
+// B8 specHash 确定性（契约 4.4 ①）：同 spec 同 profiles 恒同哈希（深拷贝输入，排除对象同一性干扰；
+// sha256 前 12 位十六进制，node:crypto 内置零新依赖）。
+check('build-spec-hash-deterministic',
+  specHash(B1_SPEC, B1_PROFILES) === specHash({ blocks: B1_SPEC.blocks.map((b) => ({ ...b })) }, JSON.parse(JSON.stringify(B1_PROFILES))));
+// B9 specHash 敏感性（契约 4.4 ②）：块正文或 manifest（profiles）任一字符变化 ⇒ 哈希变化。
+check('build-spec-hash-sensitive',
+  specHash({ blocks: [{ id: 'a', text: 'x' }] }, {}) !== specHash({ blocks: [{ id: 'a', text: 'y' }] }, {})
+  && specHash({ blocks: [{ id: 'a', text: 'x' }] }, {}) !== specHash({ blocks: [{ id: 'a', text: 'x' }] }, { zcode: { files: [] } }));
+// B10 generatedMark 注入（契约 4.1 版本戳行 / 4.4 ③⑤）：build 第四参注入固定 mark ⇒
+// golden 确定性可断言（纯函数不计算真实哈希，真实哈希注入面在 CLI/checkFreshness 层）。
+check('build-generated-mark-injectable',
+  build(B1_SPEC, B1_PROFILES, undefined, 'GENERATED from spec@v1; do not edit').every((p) => p.text.includes('GENERATED from spec@v1') && !p.text.includes('spec@<hash>')));
+
+// —— 真实 spec 装配 golden（期望值由装配契约推导：registry expect 域 + manifest 装配清单）——
+// 与上文合成用例不同，本组用例加载磁盘上的真实 spec/blocks 与三平台 manifest（loadSpec 语义的
+// 最小复现，经 fileURLToPath 锚定仓库根，不依赖 cwd），断言产物件数与关键锚段/载体/闸门文本在场。
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+// 缺导出负控去向：空桩守卫删除后，导出缺失使 checkFreshness 为 undefined，新鲜度自洽断言处以
+// TypeError（目标契约缺失，[PASS-RED]）响红——防护不静默丢失；run.mjs 侧同态失效为 ESM 链接期
+// SyntaxError（fail-loud）。
+const checkFreshness = buildNs.checkFreshness;
+const SPEC_ROOT = fileURLToPath(new URL('..', import.meta.url));
+function loadRealSpec() {
+  const blocksDir = path.join(SPEC_ROOT, 'spec', 'blocks');
+  const blocks = fs.readdirSync(blocksDir).filter((f) => f.endsWith('.md')).map((f) => {
+    const raw = fs.readFileSync(path.join(blocksDir, f), 'utf8');
+    const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!m) throw new Error('块文件缺 frontmatter: spec/blocks/' + f);
+    const id = (m[1].match(/^id:\s*(\S+)\s*$/m) || [])[1];
+    if (!id) throw new Error('块文件缺 frontmatter id: spec/blocks/' + f);
+    return { id, text: raw.slice(m[0].length).replace(/^\r?\n/, '').trimEnd() };
+  });
+  const profiles = {};
+  for (const platform of PLATFORMS) {
+    const mf = path.join(SPEC_ROOT, 'spec', 'platform', platform, 'manifest.json');
+    if (fs.existsSync(mf)) profiles[platform] = JSON.parse(fs.readFileSync(mf, 'utf8'));
+  }
+  return { spec: { blocks }, profiles };
+}
+const REAL = loadRealSpec();
+const REAL_PRODUCTS = build(REAL.spec, REAL.profiles);
+const realByText = new Map(REAL_PRODUCTS.map((p) => [p.path, p.text]));
+const realText = (p) => realByText.get(p) || '';
+// golden：12 件产物；三份 AGENTS.md 含铁律锚；zcode/AGENTS.md 承载直连派发参数头与租约三闸（派生载体=AGENTS.md）；
+// kilocode/codebuddy 的 plan-writer-sp.md 承载租约三闸（派生载体=plan-writer-sp.md）；plan-gate 逐字文本
+// 装配进 zcode 两份 agents 文件；pr-gate 逐字文本装配进三平台 pr-reviewer 文件。
+check('build-real-spec-agents-md-golden',
+  REAL_PRODUCTS.length === 12
+  && ['kilocode', 'codebuddy', 'zcode'].every((p) => realText(p + '/AGENTS.md').includes('未见红严禁开工'))
+  && realText('zcode/AGENTS.md').includes('直连派发参数头')
+  && realText('zcode/AGENTS.md').includes('派发去重租约')
+  && realText('zcode/AGENTS.md').includes('写后立即回读核验首行')
+  && realText('zcode/AGENTS.md').includes('严禁复用固定字面量')
+  && ['kilocode', 'codebuddy'].every((p) => realText(p + '/agents/plan-writer-sp.md').includes('派发去重租约')
+    && realText(p + '/agents/plan-writer-sp.md').includes('写后立即回读核验首行')
+    && realText(p + '/agents/plan-writer-sp.md').includes('严禁复用固定字面量'))
+  && ['zcode/agents/plan-writer-subagent-sp.md', 'zcode/agents/plan-reviewer-subagent-sp.md'].every((p) => realText(p).includes('本次审批仅为计划审批——批准后不得直接执行') && realText(p).includes('Git 集成需再单独授权。*'))
+  && ['kilocode/agents/pr-reviewer-sp.md', 'codebuddy/agents/pr-reviewer-sp.md', 'zcode/agents/pr-reviewer-subagent-sp.md'].every((p) => realText(p).includes('本次审批仅为代码变更审查——审查通过不等于合入授权；合入、提交或推送需用户在审查通过后另行明确授权。')));
+// 新鲜度自洽：真实 spec 与磁盘产物逐件一致（build --check 同源判定）。
+check('build-real-spec-freshness-self-consistent', checkFreshness(SPEC_ROOT).length === 0);
+// CLI 装配路径契约（diffProducts 的 diskGet 回调参数恒为路径字符串）：build-agents CLI 层
+// 按 p.path 取属性曾致首次非空构建崩溃（undefined.split），本用例钉死字符串参数契约防回退。
+check('build-diff-products-path-string-contract', (() => {
+  let allStrings = true;
+  const stale = diffProducts([{ path: 'zcode/AGENTS.md', text: 'x' }, { path: 'kilocode/AGENTS.md', text: 'y' }], (p) => { allStrings = allStrings && typeof p === 'string'; return p === 'zcode/AGENTS.md' ? 'x' : null; });
+  return allStrings && stale.join(',') === 'kilocode/AGENTS.md';
+})());
+
+// —— M1/M2/M3 收尾断言（合并计划 C9；期望值由行为契约推导，非抄录实现）——
+// M1 键序归一：profiles 仅对象键插入序不同、语义相同 ⇒ 哈希必等（不该触发域）；
+//   正控：值变化 ⇒ 哈希必不等（触发域，B9 不回退）。canonicalizeValue 未接入前先红（AssertionError）。
+check('build-spec-hash-key-order-invariant',
+  specHash({ blocks: [] }, { zcode: { files: [{ output: 'x', blocks: ['b'] }] } })
+    === specHash({ blocks: [] }, { zcode: { files: [{ blocks: ['b'], output: 'x' }] } })
+  && specHash({ blocks: [] }, { zcode: { files: [{ output: 'x', blocks: ['b'] }] } })
+    !== specHash({ blocks: [] }, { zcode: { files: [{ output: 'y', blocks: ['b'] }] } }));
+// M1 __proto__ 自有键保留（回归锁）：含 __proto__ 自有键的 profiles，canonicalize 后该键仍影响哈希
+//   （不被原型 setter 静默丢弃），且不污染全局 Object.prototype（探针 probe-proto 证伪污染假设）。
+check('build-spec-hash-proto-key-preserved',
+  (() => {
+    const withProto = JSON.parse('{ "__proto__": { "z": 1 }, "zcode": { "files": [] } }');
+    const withoutProto = { zcode: { files: [] } };
+    const before = ({}).polluted;
+    const h1 = specHash({ blocks: [] }, withProto);
+    const h2 = specHash({ blocks: [] }, withoutProto);
+    return typeof h1 === 'string' && h1.length === 12 && h1 !== h2 && before === undefined && ({}).polluted === undefined;
+  })());
+// M2 闸错误翻译（契约四格，含 r1 E2 回灌族谓词）：loadSpec: 前缀 Error 翻译 / SyntaxError 翻译 /
+//   正常透传 / 非族 TypeError 原样上抛。freshnessFailures 未落盘前守卫别名抛
+//   TypeError('freshnessFailures is not a function')（四维·目标契约缺失），进程崩溃红。
+const freshnessFailures = typeof buildNs.freshnessFailures === 'function'
+  ? buildNs.freshnessFailures
+  : () => { throw new TypeError('freshnessFailures is not a function'); };
+const cliLoadOutcome = typeof buildNs.cliLoadOutcome === 'function'
+  ? buildNs.cliLoadOutcome
+  : () => { throw new TypeError('cliLoadOutcome is not a function'); };
+check('build-freshness-failures-translates-throw',
+  (() => {
+    const bad = freshnessFailures(() => { throw new Error('loadSpec: 块文件缺 frontmatter id: x'); }, '.');
+    const syntax = freshnessFailures(() => { throw new SyntaxError('Unexpected token } in JSON'); }, '.');
+    const good = freshnessFailures(() => ['a/b.md'], '.');
+    let bugRethrown = false;
+    try { freshnessFailures(() => { throw new TypeError('checker bug'); }, '.'); }
+    catch (e) { bugRethrown = (e instanceof TypeError) && e.message === 'checker bug'; }
+    return bad.specError === 'loadSpec: 块文件缺 frontmatter id: x' && Array.isArray(bad.payload) && bad.payload.length === 0
+      && syntax.specError === 'Unexpected token } in JSON' && syntax.payload.length === 0
+      && good.specError === null && good.payload.join(',') === 'a/b.md'
+      && bugRethrown;
+  })());
+// B7a loadSpec 读盘 fail-loud 正控（回归锁，锁定既有行为）：临时目录内未登记平台含 manifest.json →
+// checkFreshness 经翻译闸返回 loadSpec: 前缀 specError。用例不要求先红（行为已在场），防读盘路径回退。
+check('build-loadspec-unknown-platform-manifest-throws',
+  (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-unknown-platform-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'spec', 'blocks'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'spec', 'platform', 'foo'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'spec', 'blocks', 'a.md'), '---\nid: a\n---\n\n正文');
+      fs.writeFileSync(path.join(tmp, 'spec', 'platform', 'foo', 'manifest.json'), '{}');
+      const r = freshnessFailures(checkFreshness, tmp);
+      return r.specError !== null && r.specError.includes('loadSpec:');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// B7b 已登记平台 manifest 缺失 fail-loud：三 manifest 缺二（kilocode 在场）→ loadSpec 抛
+// manifest-missing-fail-loud 前缀错误并经翻译闸结构化；修复前静默降级（specError=null 且 stale 含
+// 'agents/pw.md'）即本用例红灯。output 选 'agents/pw.md'（CLAUSES/GATES expect 域外）：若用
+// 'AGENTS.md'，修复前 build 先因块文本缺锚抛 build-no-anchor-swallow（specError 非 null），把吞锚
+// 错误误当"已拦静默降级"，未隔离 E5 缺陷。
+check('build-manifest-missing-fail-loud',
+  (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-manifest-missing-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'spec', 'blocks'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'spec', 'platform', 'kilocode'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'spec', 'blocks', 'a.md'), '---\nid: a\n---\n\n正文');
+      fs.writeFileSync(path.join(tmp, 'spec', 'platform', 'kilocode', 'manifest.json'), JSON.stringify({ files: [{ output: 'agents/pw.md', blocks: ['a'] }] }));
+      const r = freshnessFailures(checkFreshness, tmp);
+      return r.specError !== null && r.specError.includes('manifest-missing-fail-loud') && r.payload.length === 0;
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// —— PR#5 收尾：F1 报错保真 / F4 吞锚判定域收窄 / F3 预载等价 / F6 FM 键序归一 / F9 id 分裂 / F12 故障闸 ——
+check('build-slot-residue-error-preserves-key', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'x {{my key}} y' }] }, { zcode: { files: [{ output: 'x.md', blocks: ['b1'], slots: {} }] } }, [], 'M');
+    return false;
+  } catch (e) {
+    return e.message.includes('{{my key}}') && !e.message.includes('{{mykey}}');
+  }
+})());
+check('build-anchor-swallow-ignores-frontmatter', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'body without anchor' }] }, { zcode: { files: [{ output: 'x.md', frontmatter: 'note: ONLY-IN-FRONTMATTER-ANCHOR', blocks: ['b1'], slots: {} }] } }, [{ id: 'c1', text: 'ONLY-IN-FRONTMATTER-ANCHOR', expect: [/x\.md/] }], 'M');
+    return false;
+  } catch (e) {
+    return e.message.includes('build-no-anchor-swallow');
+  }
+})());
+check('build-anchor-in-body-still-passes', (() => {
+  try {
+    buildNs.build({ blocks: [{ id: 'b1', text: 'has ANCHOR-OK inside' }] }, { zcode: { files: [{ output: 'x.md', blocks: ['b1'], slots: {} }] } }, [{ id: 'c2', text: 'ANCHOR-OK', expect: [/x\.md/] }], 'M');
+    return true;
+  } catch { return false; }
+})());
+check('check-freshness-preloaded-equivalent', (() => {
+  const { spec, profiles } = buildNs.loadSpec(SPEC_ROOT);
+  return JSON.stringify(buildNs.checkFreshness(SPEC_ROOT)) === JSON.stringify(buildNs.checkFreshness(SPEC_ROOT, { spec, profiles }));
+})());
+check('fm-diff-keyorder-canonical', inventoryNs.diffFmTrees({ a: { x: 1, y: 2 } }, { a: { y: 2, x: 1 } }).length === 0);
+check('fm-diff-value-still-detected', inventoryNs.diffFmTrees({ a: { x: 1 } }, { a: { x: 2 } }).length === 1);
+check('freshness-spec-error-id-registered', allInvariantIds().includes('generated-product-spec-error'));
+const latestFaultGate = typeof ledgerNs.latestFaultGate === 'function'
+  ? ledgerNs.latestFaultGate
+  : () => { throw new TypeError('latestFaultGate is not a function'); };
+check('latest-fault-gate-fail-closed', latestFaultGate(['any fault']) === 2 && latestFaultGate([]) === null && latestFaultGate(undefined) === null);
+// B7c CLI 装载 Outcome（M-2）：cliLoadOutcome 把 loadSpec fail-loud 经翻译闸结构化——夹具同 B7b
+//（仅 kilocode manifest 在场，loadSpec 抛 manifest-missing-fail-loud）；修复前函数缺失 → 守卫别名
+// 抛 TypeError（四维·目标契约缺失）。这是 CLI --check/写盘路径消费的同一函数（单一事实源）。
+check('build-cli-load-outcome-translated',
+  (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-load-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'spec', 'blocks'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'spec', 'platform', 'kilocode'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'spec', 'blocks', 'a.md'), '---\nid: a\n---\n\n正文');
+      fs.writeFileSync(path.join(tmp, 'spec', 'platform', 'kilocode', 'manifest.json'), JSON.stringify({ files: [{ output: 'agents/pw.md', blocks: ['a'] }] }));
+      const r = cliLoadOutcome(tmp);
+      return r.specError !== null && r.specError.includes('manifest-missing-fail-loud');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// M3 tail 段合并：重复锚后 3 行连续无锚 ⇒ 单一 unanchored 段（对照旧逐行 3 段，探针
+//   probe-m3-tail 实测 tailSegCount=3）；repeats 计数不变（不该触发域）。
+//   合并修正：经 inventoryNs 命名空间调用（selftest:19 已导入，消除源计划 A1 具名导入不确定项）。
+check('inv-tail-region-coalesced',
+  (() => {
+    const A = 'ANCHORX';
+    const r = inventoryNs.splitByAnchors(['前导段', A, '条款体', A, 'tail1', 'tail2', 'tail3'], [{ id: 'c1', text: A }]);
+    const tailSegs = r.unanchored.filter((s) => /^tail/.test(s.lines[0] || ''));
+    return tailSegs.length === 1 && tailSegs[0].lines.length === 3 && r.repeats.length === 1;
+  })());
+// M3 tail 后接不同新锚：tail 残留冲刷入 unanchored，新锚另起块，重复锚既有块 .lines 不被误清（退化语义）。
+check('inv-tail-then-new-anchor-no-clobber',
+  (() => {
+    const A = 'ANCHORX';
+    const B = 'ANCHORY';
+    const r = inventoryNs.splitByAnchors([A, '条款体', A, 'tail1', 'tail2', B, '新块体'], [{ id: 'c1', text: A }, { id: 'c2', text: B }]);
+    const tailSeg = r.unanchored.find((s) => (s.lines[0] || '') === 'tail1');
+    const blockC1 = r.blocks.get('c1');
+    return !!tailSeg && tailSeg.lines.length === 2 && r.blocks.has('c2') && r.repeats.length === 1
+      && !!blockC1 && blockC1.lines.length > 0;
+  })());
+
+// —— 台账/Files 编号形态判据（判据单一事实源 = attack-ledger 常量；期望值由标题语法契约推导）——
+// L1 台账节判据：编号形态（整数与多级小数）与裸形态同为在场；前缀近似（含中文近似后缀）与围栏内示例不在场。
+check('ledger-ledger-head-numbered-tolerant',
+  hasLedgerSection('# t\n\n## 6. 攻击面台账\n\n- 台账行\n') === true
+  && hasLedgerSection('## 攻击面台账\n') === true
+  && hasLedgerSection('## 6.2. 攻击面台账\n') === true
+  && hasLedgerSection('## 攻击面台账笔记\n') === false
+  && hasLedgerSection('```\n## 攻击面台账\n```\n') === false);
+// L2 编号形态 Files 节的执法识别：Files 节含执法文件（编号标题 `## 5. Files 清单`）→ 计划进入
+// 台账审计域，缺台账节产出结构性红（修复前 isSec=false 静默豁免即红灯）。
+check('ledger-numbered-files-enforcement-detected',
+  attackLedger('# p\n\n## 5. Files 清单\n\n| Create | `checks/build-agents.mjs` | 生成器 |\n').some((x) => x.msg.includes('攻击面台账')));
+// L3 Files 标题粘连与无空格编号形态（检测域回归锁）：粘连与无空格编号形态必须命中 FILES_HEAD_RE
+// 并使执法类计划进入台账对账域（缺台账节判红）；白名单尾缀外的 CJK 续写与 ASCII 近似词仍拒；
+// 多级编号与既有在用形态不回退。期望值由标题语法契约推导。
+check('ledger-files-head-cjk-glued-detected',
+  FILES_HEAD_RE.test('## Files清单') === true
+  && FILES_HEAD_RE.test('## 5.Files清单') === true
+  && FILES_HEAD_RE.test('## Files 清单') === true
+  && FILES_HEAD_RE.test('## 5. Files 清单') === true
+  && FILES_HEAD_RE.test('## Files 声明') === true
+  && FILES_HEAD_RE.test('## 6.2. Files 清单') === true
+  && FILES_HEAD_RE.test('## Files') === true
+  && FILES_HEAD_RE.test('## Files清单占位') === false
+  && FILES_HEAD_RE.test('## Files清单说明') === false
+  && FILES_HEAD_RE.test('## FilesNotes') === false
+  && FILES_HEAD_RE.test('## 文件清单') === false
+  && attackLedger('# p\n\n## Files清单\n\n| Modify | `checks/attack-ledger.mjs` | 对账器 |\n').some((x) => x.msg.includes('攻击面台账')));
+// L4 --latest 候选装载归因（readdir/stat/read 分开归因）：happy path 零 fault、目录不可读归因为
+// 「计划目录不可读」且候选空——「计划存在但不可读」不得再误报「无时间戳命名计划文件」。
+check('assert-latest-candidates-collect-tmpdir',
+  (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-candidates-'));
+    try {
+      fs.writeFileSync(path.join(tmp, '20260101-0000-plan-a.md'), '# a\n## 攻击面台账\n- 台账行\n');
+      fs.writeFileSync(path.join(tmp, '20260101-0000-plan-a-test-evidence.md'), 'x');
+      fs.writeFileSync(path.join(tmp, 'notes.md'), 'x');
+      const r1 = attackLedgerNs.collectLatestCandidates(tmp);
+      const r2 = attackLedgerNs.collectLatestCandidates(path.join(tmp, 'missing-dir'));
+      return r1.candidates.length === 1 && r1.candidates[0].f === '20260101-0000-plan-a.md' && r1.faults.length === 0
+        && r2.candidates.length === 0 && r2.faults.length === 1 && r2.faults[0].includes('计划目录不可读');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// 分级回归锁·非执法类（by-design 正控语义保留，落刀前后恒绿，不计红灯）：非执法类计划（Files 不含
+// ENFORCEMENT_FILES）零攻击 GO 带独立成行 ECHO-RISK 放行、缺标注仍红（期望值由分级契约推导）。
+check('ledger-report-nonsec-zero-go-echo-annotated-ok',
+  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done\nECHO-RISK' }).length === 0);
+check('ledger-report-nonsec-zero-go-echo-required',
+  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done' }).some((v) => v.msg.includes('ECHO-RISK')));
+
+// 新鲜度闸 id 正向在场断言：generated-product-stale 必须进入 allInvariantIds()（run.mjs 输出出现
+// OK 行），杜绝「实现在场、登记缺席」的绿色盲区。
+check('assert-freshness-gate-id-registered', allInvariantIds().includes('generated-product-stale'));
+// 真实 12 文件集 golden：期望区间按实测基准
+// （files=12 / anchorSet=374 / frontmatter=60 / sections=64 / fences=5 / unanchored=35 / 总 538）
+// 外扩良性漂移带宽核定；接线断裂（面数错乱/文件数错）即越界红。
+// 注：anchorSet/总带上界系审查方法论补强计划（10 条 partial-domain CLAUSES）执行期重标定，
+// 先例 8c6edc9（上次加 CLAUSES 同步重标定本带）。
+check('inv-real-12-file-golden',
+  (() => {
+    const files = inventoryNs.collectPlatformFiles(SPEC_ROOT);
+    const r = inventory(files);
+    const inRange = (x, lo, hi) => x >= lo && x <= hi;
+    const total = r.anchorSet.diffs.length + r.frontmatter.diffs.length + r.sections.diffs.length + r.fences.diffs.length + r.unanchored.diffs.length;
+    return files.length === 12
+      && inRange(r.anchorSet.diffs.length, 240, 440) && inRange(r.frontmatter.diffs.length, 40, 80)
+      && inRange(r.sections.diffs.length, 30, 85) && inRange(r.fences.diffs.length, 1, 15)
+      && inRange(r.unanchored.diffs.length, 10, 60) && inRange(total, 370, 640);
+  })());
+// CLI 写链 tmpdir 化：真实 12 文件读入 + renderMarkdown + 双报告写盘全链，写面落 tmpdir（只读铁律
+// 安全）；带段 base（seg/inv-seg）锁定输出父目录递归建目录契约（端到端可写，无 ENOENT）。
+check('inv-cli-write-chain-tmpdir',
+  (() => {
+    fs.mkdirSync(path.join(SPEC_ROOT, '.kilo'), { recursive: true });   // .kilo 可能不存在（未初始化克隆）：先保证父目录，避免夹具 ENOENT 假红
+    const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.inv-selftest-out-'));
+    try {
+      const r = inventoryNs.runInventory(SPEC_ROOT, tmp, 'inv-golden');
+      const rSeg = inventoryNs.runInventory(SPEC_ROOT, tmp, 'seg/inv-seg');
+      return r.result.files.length === 12 && typeof r.total === 'number'
+        && fs.existsSync(path.join(tmp, 'inv-golden.json')) && fs.existsSync(path.join(tmp, 'inv-golden-report.md'))
+        && fs.existsSync(path.join(tmp, 'seg', 'inv-seg.json')) && fs.existsSync(path.join(tmp, 'seg', 'inv-seg-report.md'));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// 缺治理文件 fail-loud：任一平台缺 AGENTS.md ⇒ 结构化抛错（消息含平台与文件路径），拒绝静默跳过。
+check('inv-cli-missing-agents-fail-loud',
+  (() => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-missing-agents-'));
+    try { inventoryNs.runInventory(tmp, tmp, 'x'); return false; }
+    catch (e) { return e.message.includes('缺少平台治理文件') && e.message.includes('AGENTS.md'); }
+    finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  })());
+// --out 收容闸：拒绝 .. 段 / 盘符 / 绝对路径，接受普通相对路径、带段相对路径与纯名（带段名端到端
+// 可写由 runInventory 建目录保障）。
+check('inv-out-base-guard',
+  inventoryNs.outBaseRejected('../evil') === true
+  && inventoryNs.outBaseRejected('C:/evil') === true
+  && inventoryNs.outBaseRejected('reports/inv') === false
+  && inventoryNs.outBaseRejected('inv-base') === false);
+// --out symlink 写逃逸守卫：outDir 内指向目录外的目录符号链接（junction）与既有输出文件符号链接
+// 均拒绝写盘；Node 建 symlink 在 Windows 可能需权限，创建失败时容忍跳过该断言（环境限制非逻辑通过）。
+check('inv-symlink-escape-rejected', (() => {
+  fs.mkdirSync(path.join(SPEC_ROOT, '.kilo'), { recursive: true });     // 同上：保证 .kilo 存在，避免夹具 ENOENT 假红
+  const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.inv-selftest-sym-'));
+  try {
+    const out = path.join(tmp, 'out');
+    fs.mkdirSync(out);
+    const outside = path.join(tmp, 'outside');
+    fs.mkdirSync(outside);
+    let dirLink = true;
+    try { fs.symlinkSync(outside, path.join(out, 'seg'), 'junction'); } catch { dirLink = false; }
+    if (dirLink) {
+      let threw = false;
+      try { inventoryNs.runInventory(SPEC_ROOT, out, 'seg/inv'); }
+      catch (e) { threw = e.message.includes('PLATFORM-INVENTORY FAIL'); }
+      if (!threw) return false;
+      // 多段 base：首段即既有 junction，递归建目录会穿越链接在盘外产生 out/a 等目录——同样必须拒绝。
+      let threwMulti = false;
+      try { inventoryNs.runInventory(SPEC_ROOT, out, 'seg/a/inv'); }
+      catch (e) { threwMulti = e.message.includes('PLATFORM-INVENTORY FAIL'); }
+      if (!threwMulti) return false;
+      fs.rmSync(path.join(out, 'seg'), { recursive: true, force: true });
+    }
+    let fileLink = true;
+    try { fs.symlinkSync(outside, path.join(out, 'inv.json'), 'file'); } catch { fileLink = false; }
+    if (fileLink) {
+      try { inventoryNs.runInventory(SPEC_ROOT, out, 'inv'); return false; }
+      catch (e) { return e.message.includes('PLATFORM-INVENTORY FAIL'); }
+    }
+    return true;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// —— build-agents 写盘守卫：逐段 lstat 拒软链 + mkdir 后 realpath 收容 ——
+// 期望值溯源（非抄录实现行为）：契约「任一既有段软链即拒」→ 攻击根下 .kilo 指向外部时，
+//   assertSafeProductOutput(root,'.kilo/plans/x.md') 必须抛错；对照（全不存在/普通目录）不抛。
+check('build-symlink-segment-reject', (() => {
+  const g = buildNs.assertSafeProductOutput;
+  if (typeof g !== 'function') return false;            // 红灯阶段守卫未实现 → 断言真红（[PASS-RED] 目标契约缺失）
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-sym-'));
+  try {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-ext-'));
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    try { fs.symlinkSync(external, path.join(tmp, '.kilo', 'plans'), 'junction'); } catch { return false; }
+    let threw = false;
+    try { g(tmp, '.kilo/plans/kilocode/AGENTS.md'); } catch (e) { threw = /output-symlink-segment-guard/.test(String(e.message)); }
+    if (!threw) return false;
+    // 对照：全不存在的新建链（首段普通、.kilo 为真目录）不得误拒——plans 不存在→放行交 mkdir。
+    try { g(tmp, '.kilo/newdir/x.md'); } catch { return false; }
+    return true;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// 期望值溯源：契约「realpath 越出 rootReal 即拒」→ 攻击父目录 realpath 落在 root 外必抛；正常嵌套放行。
+check('build-realpath-root-containment', (() => {
+  const g = buildNs.assertProductDirWithinRoot;
+  if (typeof g !== 'function') return false;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-contain-'));
+  try {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-cext-'));
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    let threw = false;
+    try { g(tmp, external); } catch (e) { threw = /output-realpath-root-containment/.test(String(e.message)); }
+    if (!threw) return false;                            // 外部目录作父目录：realpath 越界必须拒
+    const legit = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(legit, { recursive: true });
+    try { g(tmp, legit); } catch { return false; }        // 正常子目录：恰为 rootReal+sep 前缀，放行
+    return true;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// —— platform-inventory CLI 根段预检：.kilo/plans 任一软链 → 拒绝（不入 runInventory）——
+// 期望值溯源：契约「root→outDir 段软链即拒、不存在放行」，与 runInventory 的 tmpdir 直调语义正交。
+check('inventory-cli-root-segment-symlink-reject', (() => {
+  const g = inventoryNs.cliOutDirSymlinkFree;
+  if (typeof g !== 'function') return false;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-sym-'));
+  try {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-ext-'));
+    try { fs.symlinkSync(external, path.join(tmp, '.kilo'), 'junction'); } catch { return false; }
+    try { if (g(tmp) !== false) return false; } finally { fs.rmSync(path.join(tmp, '.kilo'), { recursive: true, force: true }); }
+    fs.mkdirSync(path.join(tmp, '.kilo'));                // .kilo 真目录、plans 不存在 → 放行
+    if (g(tmp) !== true) return false;
+    return true;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// —— Rework（PR 复审 E1/E2）：真实写盘入口与 CLI 黑盒端到端断言 ——
+// E1：build 写盘循环不再只测 helper——经 writeProducts 真实写链（lstat 预检→mkdir→realpath 收容→writeFileSync）
+//   在隔离根驱动 junction 攻击，断言拒写且盘外零文件；正控验证正常嵌套写盘落点与内容。
+check('build-write-loop-junction-rejected', (() => {
+  if (typeof buildNs.writeProducts !== 'function') return false;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-loop-sym-'));
+  try {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-loop-ext-'));
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    try { fs.symlinkSync(external, path.join(tmp, '.kilo', 'plans'), 'junction'); } catch { return false; }
+    let threw = false;
+    try { buildNs.writeProducts(tmp, [{ path: '.kilo/plans/kilocode/AGENTS.md', text: 'x' }]); }
+    catch (e) { threw = /output-symlink-segment-guard/.test(String(e.message)); }
+    if (!threw) return false;
+    return fs.readdirSync(external).length === 0;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+check('build-write-loop-normal-dir-ok', (() => {
+  if (typeof buildNs.writeProducts !== 'function') return false;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-loop-ok-'));
+  try {
+    buildNs.writeProducts(tmp, [{ path: '.kilo/plans/kilocode/AGENTS.md', text: 'hello' }]);
+    return fs.readFileSync(path.join(tmp, '.kilo', 'plans', 'kilocode', 'AGENTS.md'), 'utf8') === 'hello';
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// 断言夹具前置：.kilo 可能不存在（未初始化克隆）→ 先确保父目录存在，避免 mkdtemp 抛 ENOENT 造成夹具假红。
+fs.mkdirSync(path.join(SPEC_ROOT, '.kilo'), { recursive: true });
+// —— build-agents 最终组件软链拒写（原子打开 + 逐段 lstat 双保险）——
+// 期望值溯源（非抄录实现行为）：契约「最终组件软链不得被跟随」→ 目标文件本身为指向盘外受害文件的软链时，
+//   writeProducts 必须拒绝且绝不经链接覆写 victim（内容保持 ORIG）。
+// fail-closed：链接创建失败即判失败返回 false，不设 made 静默跳过分支（攻击前置无法成立时不得报 OK）。
+check('build-write-final-symlink-rejected', (() => {
+  if (typeof buildNs.writeProducts !== 'function') return false;   // 红灯阶段守卫未实现 → 断言真红（[PASS-RED] 目标契约缺失）
+  const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.bao-final-sym-'));
+  const ext = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.bao-final-ext-'));
+  try {
+    const victim = path.join(ext, 'victim.txt');
+    fs.writeFileSync(victim, 'ORIG');
+    fs.mkdirSync(path.join(tmp, '.kilo', 'plans', 'kilocode'), { recursive: true });
+    try { fs.symlinkSync(victim, path.join(tmp, '.kilo', 'plans', 'kilocode', 'AGENTS.md'), 'file'); } catch { return false; }
+    let threw = false;
+    try { buildNs.writeProducts(tmp, [{ path: '.kilo/plans/kilocode/AGENTS.md', text: 'x' }]); }
+    catch (e) { threw = /output-symlink-segment-guard|output-atomic-open-nofollow|ELOOP/.test(String(e.message)); }
+    if (!threw) return false;
+    return fs.readFileSync(victim, 'utf8') === 'ORIG';             // 受害文件未被经链接覆写
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(ext, { recursive: true, force: true });
+  }
+})());
+// —— runInventory 写前仓库根锚定收容（本计划权威守卫的回归锁：未加固实现下必然红）——
+// 期望值溯源：契约「root→outDir 任一段为既有符号链接即拒，且 mkdir 与报告写均不得经链接逃逸」。
+//   变体 A：root→outDir 末段（.kilo/plans）为指向盘外的 junction（审查意见场景）→ 必抛且盘外零文件。
+//   变体 B：链中段为 junction → 拒绝必须前置于 mkdir：递归建目录不得在盘外产生任何新条目。
+check('inv-root-anchored-containment-rejected', (() => {
+  const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.inv-root-sym-'));
+  const outA = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-root-a-'));
+  const outB = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-root-b-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'a', '.kilo'), { recursive: true });
+    try { fs.symlinkSync(outA, path.join(tmp, 'a', '.kilo', 'plans'), 'junction'); } catch { return false; }
+    let threwA = false;
+    try { inventoryNs.runInventory(SPEC_ROOT, path.join(tmp, 'a', '.kilo', 'plans'), 'inv'); }
+    catch (e) { threwA = /PLATFORM-INVENTORY FAIL/.test(String(e.message)); }
+    if (!threwA) return false;
+    if (fs.readdirSync(outA).length !== 0) return false;
+    try { fs.symlinkSync(outB, path.join(tmp, 'b'), 'junction'); } catch { return false; }
+    let threwB = false;
+    try { inventoryNs.runInventory(SPEC_ROOT, path.join(tmp, 'b', 'plans'), 'inv'); }
+    catch (e) { threwB = /PLATFORM-INVENTORY FAIL/.test(String(e.message)); }
+    if (!threwB) return false;
+    return fs.readdirSync(outB).length === 0;                      // 盘外零新条目：mkdir 未逃逸
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(outA, { recursive: true, force: true });
+    fs.rmSync(outB, { recursive: true, force: true });
+  }
+})());
+// —— 写盘完整性：一次写盘必须完整落位全部字节（短写不得产生截断产物）——
+// 期望值溯源：契约「完整写入」→ 2 MiB 文本写盘后逐字等值；截断/少写即失败。
+// 说明：本断言是写完整性契约的回归锁（对比实现行为，非竞态注入）；它不锁定 O_NOFOLLOW 分支——
+//   该分支的可达性由平台常量决定（见 §12 未验证假设），本文件不伪造其在本机的红/绿。
+check('build-write-large-text-complete', (() => {
+  if (typeof buildNs.writeProducts !== 'function') return false;
+  const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.bao-large-'));
+  try {
+    const text = 'A'.repeat(2 * 1024 * 1024);
+    buildNs.writeProducts(tmp, [{ path: '.kilo/plans/kilocode/AGENTS.md', text }]);
+    return fs.readFileSync(path.join(tmp, '.kilo', 'plans', 'kilocode', 'AGENTS.md'), 'utf8') === text;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// E2：inventory CLI 拒绝出口不再只测 helper——真实 CLI 子进程（cwd=隔离根）验证退出码 2 + 失败文案 + 盘外零报告；
+//   正控验证普通/缺失目录预检放行（CLI 正常出 0，输出 PLATFORM-INVENTORY files=3）。
+check('inventory-cli-reject-exit-2-no-outside-write', (() => {
+  const cli = path.join(SPEC_ROOT, 'checks', 'platform-inventory.mjs');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-atk-'));
+  try {
+    const external = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-atk-ext-'));
+    try { fs.symlinkSync(external, path.join(tmp, '.kilo'), 'junction'); } catch { return false; }
+    const r = spawnSync(process.execPath, [cli], { cwd: tmp, encoding: 'utf8' });
+    const out = String(r.stdout || '') + String(r.stderr || '');
+    if (r.status !== 2) return false;
+    if (!out.includes('PLATFORM-INVENTORY FAIL') || !out.includes('含既有符号链接')) return false;
+    return fs.readdirSync(external).length === 0;
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+check('inventory-cli-normal-missing-dir-not-rejected', (() => {
+  const cli = path.join(SPEC_ROOT, 'checks', 'platform-inventory.mjs');
+  const mkPlat = (r) => { for (const q of ['kilocode', 'codebuddy', 'zcode']) { fs.mkdirSync(path.join(r, q)); fs.writeFileSync(path.join(r, q, 'AGENTS.md'), '---\nname: x\n---\n\nbody\n'); } };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-ok-'));
+  try {
+    mkPlat(tmp);
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    const r1 = spawnSync(process.execPath, [cli], { cwd: tmp, encoding: 'utf8' });
+    const out1 = String(r1.stdout || '') + String(r1.stderr || '');
+    if (r1.status !== 0 || !out1.includes('PLATFORM-INVENTORY files=3') || out1.includes('含既有符号链接')) return false;
+    const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-cli-ok2-'));
+    try {
+      mkPlat(tmp2);
+      const r2 = spawnSync(process.execPath, [cli], { cwd: tmp2, encoding: 'utf8' });
+      const out2 = String(r2.stdout || '') + String(r2.stderr || '');
+      if (r2.status !== 0 || !out2.includes('PLATFORM-INVENTORY files=3') || out2.includes('含既有符号链接')) return false;
+      return fs.existsSync(path.join(tmp2, '.kilo', 'plans'));
+    } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// anchor-library ↔ registry 漂移棘轮（回归锁）：registry 各条目 id 的归档块
+// 必须在场且承载锚文本（CLAUSES/DERIVED 按 text，GATES 按 parts 逐片段）；豁免集动态取自
+// 活跃装配块 id 集（当前仅 direct-dispatch-header 仍在 spec/blocks 装配、无归档义务）。
+// 归档文件名映射：闸块归档名带 gate- 前缀（gate-plan-gate.md 等，盘面实测），条款块不带。
+check('anchor-library-registry-no-drift',
+  (() => {
+    const libDir = path.join(SPEC_ROOT, 'spec', 'anchor-library');
+    const activeIds = new Set(REAL.spec.blocks.map((b) => b.id));
+    const missing = [];
+    const checkOne = (id, texts) => {
+      if (activeIds.has(id)) return;
+      const f = path.join(libDir, id + '.md');
+      const fg = path.join(libDir, 'gate-' + id + '.md');
+      const file = fs.existsSync(f) ? f : (fs.existsSync(fg) ? fg : null);
+      if (file === null) { missing.push(id + '（归档缺席）'); return; }
+      const content = fs.readFileSync(file, 'utf8');
+      for (const t of texts) if (!content.includes(t)) missing.push(id + '（缺锚文本）');
+    };
+    for (const c of CLAUSES) checkOne(c.id, [c.text]);
+    for (const c of DERIVED_CLAUSES) checkOne(c.id, [c.text]);
+    for (const g of GATES) checkOne(g.id, g.parts);
+    return missing.length === 0;
+  })());
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
