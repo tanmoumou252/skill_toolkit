@@ -132,9 +132,28 @@ function sectionBody(text, headRe) {
 // 白名单之外的 CJK 续写与 ASCII 近似词仍拒绝（前瞻）。台账侧 LEDGER_HEAD_RE 不做同款放宽：
 // 其过收方向为 fail-closed（误拒仅产生假红与选择域收窄），与 Files 侧的执法逃逸极性相反。
 export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]*)?Files(?:[ \t]*(?:清单|声明))?(?![\w\u4e00-\u9fff-])/;
+// 合并扫描全部围栏外 FILES_HEAD_RE 节：诱饵节在前不得遮蔽其后的真实执法节（视图-执行语义
+//   分叉闭合）。节边界＝下一个围栏外 `## ` 标题（与 sectionBody 同口径）；相邻两个 Files 标题
+//   视为两节各自入集。sections 数组与正文分离：空正文的可识别节 sections.length≥1，
+//   与「无任何可识别 Files 节」（sections.length===0）语义可区分。
+//   view 可选（同一调用链已算 lineView 时传入复用，避免重复围栏扫描；缺省自算）。
+function filesSectionsOf(text, view = null) {
+  const { lines, fenced } = view || lineView(text);
+  const sections = [];
+  let s = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i]) continue;
+    if (s === -1) { if (FILES_HEAD_RE.test(lines[i])) s = i; continue; }
+    if (/^## (?!#)/.test(lines[i])) {
+      sections.push(lines.slice(s + 1, i));
+      s = FILES_HEAD_RE.test(lines[i]) ? i : -1;
+    }
+  }
+  if (s !== -1) sections.push(lines.slice(s + 1));
+  return sections;
+}
 function filesSectionOf(text) {
-  const sec = sectionBody(text, FILES_HEAD_RE);
-  return sec ? sec.lines.join('\n') : '';
+  return filesSectionsOf(text).map((c) => c.join('\n')).join('\n');
 }
 
 function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -498,14 +517,26 @@ export function hasLedgerSection(planText) {
   return sectionBody(String(planText), LEDGER_HEAD_RE) !== null;
 }
 
-// 安全执法类信号（单一事实源）：选择域 pickLatestEligible 与审计域 attackLedger 共用本判据，视图不分叉。
-//   enfInFence = Files 节命中 ENFORCEMENT_FILES；enforcement = enfInFence 或（原文命中 ENFORCEMENT_FILES
-//   且含未闭合围栏，fail-closed：未闭合围栏可掩蔽 Files/台账判定位，按执法类强制对账）。
+// 安全执法类信号（单一事实源）：选择域 pickLatestEligible、审计域 attackLedger 与 CLI isSec 消费
+//   共用本判据，视图不分叉。
+//   enfInFence = 可识别 Files 节（全部围栏外 FILES_HEAD_RE 节并集）命中 ENFORCEMENT_FILES；
+//   enforcement = enfInFence，或满足以下任一 fail-closed 变体：
+//   ① 无任何可识别 Files 节（filesSectionsOf 为空集）且执法文件名命中围栏外原文——标题白名单外
+//      变体如 `## Files列表` 列出执法文件，判定位不可识别 → 按执法类强制对账，假红方向可接受；
+//      围栏掩蔽的命中不计入本分支（围栏内示例/文档引用不构成执法意图）；空正文的可识别节
+//      sections.length≥1，不落入本分支，不误加严；② 含未闭合围栏（可掩蔽 Files/台账判定位）
+//      且执法文件名命中任意原文（含围栏内——未闭合围栏使内外不可区分，fail-closed 收全量）。
 export function enforcementSignals(planText) {
-  const { unclosed } = lineView(planText);
-  const enfInFence = ENFORCEMENT_FILES.some((f) => filesSectionOf(planText).includes(f));
-  const enfInRaw = ENFORCEMENT_FILES.some((f) => planText.includes(f));
-  return { unclosed, enfInFence, enforcement: enfInFence || (enfInRaw && unclosed.length > 0) };
+  const view = lineView(planText);
+  const { lines, fenced, unclosed } = view;
+  const fileSections = filesSectionsOf(planText, view);
+  const fsec = fileSections.map((c) => c.join('\n')).join('\n');
+  const enfInFence = ENFORCEMENT_FILES.some((f) => fsec.includes(f));
+  const outside = lines.map((l, i) => (fenced[i] ? '' : l)).join('\n');
+  const enfInRawOutside = ENFORCEMENT_FILES.some((f) => outside.includes(f));
+  const enfInRawAll = ENFORCEMENT_FILES.some((f) => planText.includes(f));
+  const noFilesSection = fileSections.length === 0;
+  return { unclosed, enfInFence, enforcement: enfInFence || (enfInRawOutside && noFilesSection) || (enfInRawAll && unclosed.length > 0) };
 }
 
 // 纯函数选择：candidates 为按 mtime 新→旧排序的 { f, text } 数组；返回首个入选者，
@@ -628,7 +659,7 @@ if (isMain) {
   if (!planPath) { console.log('用法：node checks/attack-ledger.mjs --plan <plan.md> [--impl <f>] [--test <f>] [--report <f>] 或 --latest'); process.exit(2); }
   const readOpt = (p) => (Array.isArray(p) ? p.map((x) => fs.readFileSync(x, 'utf8')).join('\n') : (p ? fs.readFileSync(p, 'utf8') : null));
   const planTextFull = fs.readFileSync(planPath, 'utf8');
-  const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(planTextFull).includes(f));
+  const isSec = enforcementSignals(planTextFull).enforcement;
   const violations = attackLedger(planTextFull, {
     implText: readOpt(implPath),
     testText: readOpt(testPath),
@@ -637,12 +668,12 @@ if (isMain) {
     prReviewReportText: isSec && prReviewPath ? fs.readFileSync(prReviewPath, 'utf8') : undefined,
   }).concat(chainV);
   if (latestMode && !reportPath && violations.length === 0) {
-    const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(fs.readFileSync(planPath, 'utf8')).includes(f));
+    const isSec = enforcementSignals(planTextFull).enforcement;
     if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无影子报告（报告在场是 GO 前置）' });
   }
   // PR 复审报告与影子报告同口径：执法类计划 --latest 模式下缺盘即红（否则结构闸对 PR 报告整体失明）。
   if (latestMode && !prReviewPath && violations.length === 0) {
-    const isSec = ENFORCEMENT_FILES.some((f) => filesSectionOf(fs.readFileSync(planPath, 'utf8')).includes(f));
+    const isSec = enforcementSignals(planTextFull).enforcement;
     if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无 PR 复审报告（报告在场是 GO 前置）' });
   }
   for (const x of violations) console.log('FAIL ' + x.msg);

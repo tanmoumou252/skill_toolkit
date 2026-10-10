@@ -61,6 +61,9 @@ function resolveOutputPath(platform, output) {
   if (path.posix.isAbsolute(norm) || norm.split('/').includes('..')) {
     throw new Error('build-output-path-locked: 输出路径逃逸平台目录: ' + output);
   }
+  if (norm === '.' || norm.endsWith('/')) {
+    throw new Error('build-output-path-locked: 输出路径须指向平台目录内的文件（不得为目录）: ' + output);
+  }
   return platform + '/' + norm;
 }
 

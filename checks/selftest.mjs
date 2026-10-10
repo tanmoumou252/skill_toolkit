@@ -959,6 +959,19 @@ check('build-duplicate-block-id-positive',
 // 含反斜杠分隔符变异（path.posix 不识别反斜杠段，先归一再判定）。
 check('build-output-path-escape-rejected',
   (() => { const hit = (out) => { try { build(B1_SPEC, { zcode: { files: [{ output: out, blocks: ['no-green-no-start'], slots: {} }] } }); return false; } catch (e) { return e.message.includes('build-output-path-locked'); } }; return hit('../spec/evil.md') && hit('..\\spec\\evil.md'); })());
+// B5b 路径锁目录型残余（build-output-path-locked）：规范化结果为 "." 或以 "/" 结尾的输出
+//   （'.', './', 'agents/' 及其反斜杠变异）指向目录而非文件 ⇒ 抛错拒产（契约 4.1 行 1 扩展：
+//   输出必须是平台目录内的文件路径）。绝对路径与 ".." 既有闸正控不回退。
+//   期望值由契约推导（目录型目标不可作为产物路径），非抄录现状。
+check('build-output-dir-path-rejected',
+  (() => { const hit = (out) => { try { build(B1_SPEC, { zcode: { files: [{ output: out, blocks: ['no-green-no-start'], slots: {} }] } }); return false; } catch (e) { return e.message.includes('build-output-path-locked'); } }; return hit('.') && hit('./') && hit('agents/') && hit('.\\') && hit('agents\\') && hit('a/..'); })());
+// B5c 路径锁非字符串入参（build-output-path-locked 既有 typeof 守卫回归锁，攻击面台账
+//   「参数类型强转」行断言名对账用；期望值由「output 必须为非空字符串」契约推导）。
+check('build-output-nonstring-rejected',
+  (() => { const hit = (out) => { try { build(B1_SPEC, { zcode: { files: [{ output: out, blocks: ['no-green-no-start'], slots: {} }] } }); return false; } catch (e) { return e.message.includes('build-output-path-locked'); } }; return hit(0) && hit(null) && hit(['agents/pw.md']); })());
+// B5d 目录闸正控（防误伤回归锁）：平台内常规相对文件路径必须仍被接受并正确拼平台前缀。
+check('build-output-file-path-still-accepted',
+  build(B1_SPEC, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['no-green-no-start'], slots: {} }] } })[0].path === 'zcode/agents/pw.md');
 // B6 新鲜度三态（契约 4.1 行 3）：不一致报 stale；一致零违规；磁盘缺失（null）计 stale；
 // 行尾 CRLF/LF 漂移两侧归一后比对，语义一致不判 stale（autocrlf checkout 防假红）。
 check('build-freshness-stale-detected',
@@ -1214,6 +1227,34 @@ check('ledger-files-head-cjk-glued-detected',
   && FILES_HEAD_RE.test('## FilesNotes') === false
   && FILES_HEAD_RE.test('## 文件清单') === false
   && attackLedger('# p\n\n## Files清单\n\n| Modify | `checks/attack-ledger.mjs` | 对账器 |\n').some((x) => x.msg.includes('攻击面台账')));
+// L2b 无 Files 节原文命中执法文件 + 诱饵 Files 节遮蔽（fail-closed）：
+//   ① 标题白名单尾缀外变体（## Files列表）列出执法文件——FILES_HEAD_RE 不识别即无可识别 Files 节，
+//      围栏外原文命中执法文件名时按执法类处理，缺台账节判红（修复前 enforcement=false 静默豁免）；
+//   ② 诱饵 ## Files（只列 README）之后出现真实执法 ## Files 节——必须合并扫描全部围栏外
+//      FILES_HEAD_RE 节而非只取第一个（修复前只取首节 → enfInFence=false 漏检）。
+//   负控不回退：执法文件名只在闭合围栏内出现且无 Files 节 → 非执法类（围栏掩蔽示例不触发，
+//   与 assert-latest-enforcement-no-ledger-selected e.md 判定位同源不分叉）。期望值由契约推导。
+check('ledger-unrecognized-files-head-enforcement-detected',
+  attackLedger('# p\n\n## Files列表\n\n| Modify | `checks/attack-ledger.mjs` | 对账器 |\n').some((x) => x.msg.includes('攻击面台账'))
+  && attackLedger('# p\n\n## Files列表\n\n| Modify | `README.md` | x |\n').length === 0
+  && attackLedger('# p\n```md\n| Modify | `checks/build-agents.mjs` |\n```\n').filter((x) => x.msg.includes('攻击面台账')).length === 0);
+check('ledger-decoy-files-section-enforcement-detected',
+  attackLedger('# p\n\n## Files\n\n| Modify | `README.md` | x |\n\n## Files\n\n| Modify | `checks/build-agents.mjs` | 生成器 |\n').some((x) => x.msg.includes('攻击面台账')));
+// L2c 选择-审计同构（视图-执行语义分叉闭合）：上述两变体候选在 --latest 选择域同样入选，
+//   严禁选择视图静默 skip 而漂移到更旧候选（与审计侧 enforcementSignals 同源判据）。
+check('assert-latest-unrecognized-and-decoy-files-selected',
+  attackLedgerNs.pickLatestEligible([
+    { f: 'g.md', text: '# 计划\n\n## Files列表\n\n| Modify | `checks/attack-ledger.mjs` | x |\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'g.md'
+  && attackLedgerNs.pickLatestEligible([
+    { f: 'h.md', text: '# 计划\n\n## Files\n\n| Modify | `README.md` | x |\n\n## Files\n\n| Modify | `mcp/plan-governor.js` | x |\n' },
+    { f: 'a.md', text: '# 计划\n## 攻击面台账\n- 台账行\n' },
+  ]).f === 'h.md');
+// L2d 契约反例（期望值由契约推导）：存在空正文的可识别 Files 节 ≠ 无 Files 节——空节不触发
+//   fail-closed 加严；执法名仅现于闭合围栏内且无 Files 节 → 非执法类（围栏掩蔽示例不触发）。
+check('ledger-empty-recognized-files-is-not-no-files',
+  attackLedger('# p\n## Files\n\n## Notes\nmentions checks/attack-ledger.mjs\n', {}).length === 0);
 // L4 --latest 候选装载归因（readdir/stat/read 分开归因）：happy path 零 fault、目录不可读归因为
 // 「计划目录不可读」且候选空——「计划存在但不可读」不得再误报「无时间戳命名计划文件」。
 check('assert-latest-candidates-collect-tmpdir',
