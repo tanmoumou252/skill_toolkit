@@ -5,6 +5,6 @@
   "type": "module",
   "description": "规程文档常驻不变式检查（零依赖，仅用 Node 内置模块）。",
   "scripts": {
-    "test": "node selftest.mjs && node run.mjs"
+    "test": "node selftest.mjs && node run.mjs && node scoped-edit-mode-selftest.mjs && node bot-labeler-workflow-selftest.mjs"
   }
 }

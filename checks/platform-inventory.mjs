@@ -5,7 +5,7 @@
 //   围栏掩蔽与 frontmatter 解析复用 invariants 既有导出（scanFences/parseFrontmatter），零新依赖。
 import { CLAUSES, DERIVED_CLAUSES, PLATFORMS } from './registry.mjs';
 import { scanFences, parseFrontmatter } from './invariants.mjs';
-import { canonicalizeValue } from './build-agents.mjs';
+import { canonicalizeValue, writeFileAtomicNoFollow } from './build-agents.mjs';
 
 // 规范化：行尾 trim、折叠连续空行——跨端正文块比对前的最小归一。
 function normalizeLines(lines) {
@@ -384,8 +384,8 @@ export function runInventory(root, outDir, base) {
       throw new Error('PLATFORM-INVENTORY FAIL 输出路径为既有符号链接（' + p + '），拒绝写盘');
     }
   }
-  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2));
-  fs.writeFileSync(mdPath, renderMarkdown(result));
+  writeFileAtomicNoFollow(root, jsonPath, JSON.stringify(result, null, 2));
+  writeFileAtomicNoFollow(root, mdPath, renderMarkdown(result));
   const total = result.anchorSet.diffs.length + result.frontmatter.diffs.length + result.sections.diffs.length + result.fences.diffs.length + result.unanchored.diffs.length;
   return { result, jsonPath, mdPath, total };
 }

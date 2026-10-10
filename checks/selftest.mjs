@@ -103,6 +103,15 @@ const m8 = ['---', 'mode: subagent', 'description: d', 'options:', '  id: plan-r
 check('kilocode-reviewer-main-deny-detected', has([{ path: 'kilocode/agents/plan-reviewer-sp.md', text: m8.join('\n') }], 'kilocode-reviewer-main-deny'));
 check('kilocode-reviewer-subagent-allow-detected', has([{ path: 'kilocode/agents/plan-reviewer-sp.md', text: m8.join('\n') }], 'kilocode-reviewer-subagent-allow'));
 
+// 10b) F6 第 8 键钉死（覆盖缺口闭合）：clean reviewer 缺 plan-governor-main_edit_scoped_file deny → 必咬且报文点名该键
+//     （行为契约：常量若被回删为 7 键，本夹具即红；测的是检测集含第 8 键，非数组长度）
+const m8b = ['---', 'mode: subagent', 'description: d', 'options:', '  id: plan-reviewer-sp', 'permission:', '  bash:', '    "*": deny', '  plan-governor-main_exec_guarded_command: deny', '  plan-governor-main_exec_sandboxed_command: deny', '  plan-governor-main_copy_into_sandbox: deny', '  plan-governor-main_write_scoped_file: deny', '  plan-governor-main_write_plan: deny', '  plan-governor-main_write_review_report: deny', '  plan-governor-main_write_pr_review_report: deny', '---', ''];
+const m8bF6 = runAll([{ path: 'kilocode/agents/plan-reviewer-sp.md', text: m8b.join('\n') }]).filter((v) => v.id === 'kilocode-reviewer-main-deny');
+check('kilocode-reviewer-main-deny-8th-key-detected', m8bF6.length === 1 && m8bF6[0].msg.includes('plan-governor-main_edit_scoped_file'));
+// 10c) F6 负控制：8 键全 deny + subagent allow 的干净 reviewer → 不误报（防收紧误伤；常量新增第 9 键时本夹具转红，迫使同步更新）
+const m8c = ['---', 'mode: subagent', 'description: d', 'options:', '  id: plan-reviewer-sp', 'permission:', '  bash:', '    "*": deny', '  plan-governor-main_exec_guarded_command: deny', '  plan-governor-main_exec_sandboxed_command: deny', '  plan-governor-main_copy_into_sandbox: deny', '  plan-governor-main_write_scoped_file: deny', '  plan-governor-main_edit_scoped_file: deny', '  plan-governor-main_write_plan: deny', '  plan-governor-main_write_review_report: deny', '  plan-governor-main_write_pr_review_report: deny', '  plan-governor-subagent_exec_guarded_command: allow', '---', ''];
+check('kilocode-reviewer-main-deny-clean-not-flagged', !has([{ path: 'kilocode/agents/plan-reviewer-sp.md', text: m8c.join('\n') }], 'kilocode-reviewer-main-deny'));
+
 // 11) 必含条款缺失 → 检出
 const zcFm = ['---', 'name: plan-writer-subagent-sp', 'description: d', 'color: orange', 'tools: []', 'permissionMode: dontAsk', 'injectAgentsMd: true', '---', ''];
 check(
@@ -1483,6 +1492,57 @@ check('inventory-cli-normal-missing-dir-not-rejected', (() => {
       if (r2.status !== 0 || !out2.includes('PLATFORM-INVENTORY files=3') || out2.includes('含既有符号链接')) return false;
       return fs.existsSync(path.join(tmp2, '.kilo', 'plans'));
     } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+})());
+// inv-shared-atomic-writer-wired：platform-inventory 最终写盘必须经共享原子写盘器 writeFileAtomicNoFollow
+//   期望值溯源至行为契约（非抄录现实现）：POSIX 分支 openSync 携 O_NOFOLLOW 位；win32 回退分支目标
+//   路径 lstat 计数 ≥2（platform-inventory 预检 1 + 共享写盘器 isSymlinkNow 复核 1）。改造前裸 writeFileSync
+//   → 两分支均不达 → 真红；改造后经共享写盘器 → 达成。本断言锁接线事实，不声称 win32 残窗已消除（诚实声明）。
+check('inv-shared-atomic-writer-wired', (() => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-wired-'));
+  try {
+    for (const q of ['kilocode', 'codebuddy', 'zcode']) {
+      fs.mkdirSync(path.join(tmp, q));
+      fs.writeFileSync(path.join(tmp, q, 'AGENTS.md'), '---\nname: x\n---\n\nbody\n');
+    }
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    const invMod = path.join(SPEC_ROOT, 'checks', 'platform-inventory.mjs');
+    const probeSrc = [
+      "var fs=require('fs'),path=require('path'),{pathToFileURL}=require('url');",
+      "var seq=[];",
+      "var _l=fs.lstatSync;fs.lstatSync=function(p){seq.push(['lstat',String(p)]);return _l.apply(fs,arguments);};",
+      "var _w=fs.writeFileSync;fs.writeFileSync=function(p){seq.push(['write',String(p)]);return _w.apply(fs,arguments);};",
+      "var _o=fs.openSync;fs.openSync=function(p,f){seq.push(['open',String(p),String(f)]);return _o.apply(fs,arguments);};",
+      "import(pathToFileURL(process.env.INV_MOD).href).then(function(m){",
+      "  var out=path.join(process.cwd(),'.kilo','plans');",
+      "  try{ m.runInventory(process.cwd(),out,'inv'); }catch(e){}",
+      "  console.log('SEQ:'+JSON.stringify(seq));",
+      "},function(e){ console.log('ERR:'+String(e)); });"
+    ].join('\n');
+    const probeFile = path.join(tmp, 'probe.cjs');
+    fs.writeFileSync(probeFile, probeSrc);
+    const r = spawnSync(process.execPath, [probeFile], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { INV_MOD: invMod }),
+    });
+    if (r.status !== 0) return false;
+    const out = String(r.stdout || '');
+    if (out.includes('ERR:')) return false;
+    const m = out.match(/^SEQ:(.*)$/m);
+    if (!m) return false;
+    let seq; try { seq = JSON.parse(m[1]); } catch { return false; }
+    if (!Array.isArray(seq)) return false;
+    const jp = path.join(tmp, '.kilo', 'plans', 'inv.json');
+    const mp = path.join(tmp, '.kilo', 'plans', 'inv-report.md');
+    const lstatCnt = (p) => seq.filter((x) => Array.isArray(x) && x[0] === 'lstat' && x[1] === p).length;
+    if (typeof fs.constants.O_NOFOLLOW === 'number') {
+      const openedNoFollow = (p) => seq.some((x) =>
+        Array.isArray(x) && x[0] === 'open' && x[1] === p &&
+        (Number(x[2]) & fs.constants.O_NOFOLLOW) === fs.constants.O_NOFOLLOW);
+      return openedNoFollow(jp) && openedNoFollow(mp);
+    }
+    return lstatCnt(jp) >= 2 && lstatCnt(mp) >= 2;
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 })());
 // anchor-library ↔ registry 漂移棘轮（回归锁）：registry 各条目 id 的归档块

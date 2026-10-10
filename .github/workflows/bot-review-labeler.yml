@@ -1,0 +1,468 @@
+name: Aggregate Bot Reviews on Current Round
+
+on:
+  check_run:
+    types: [completed]
+  # Security invariant: pull_request_target runs in the base repository context with label
+  # write access. This workflow only reads event metadata and calls the GitHub API to manage
+  # labels — it must NEVER check out the PR head, fetch fork refs, or execute any
+  # pull-request-supplied code (see the pull_request_target guard in the script below).
+  # Current permissions contain no contents:write; further narrowing is a separate review
+  # topic, not covered by this comment. Do not replace this trigger with pull_request: fork
+  # PRs would then stop emitting events without maintainer approval, silently breaking
+  # stale-label cleanup for fork contributions.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+# PR 解析完成后由 sync-labels job 以 PR 编号串行；无法归因的 check_run 不进入写标签 job。
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: read
+
+jobs:
+  resolve-pr:
+    runs-on: ubuntu-latest
+    outputs:
+      number: ${{ steps.resolve.outputs.number }}
+    steps:
+      - id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let number = context.payload.pull_request?.number ||
+              context.payload.check_run?.pull_requests?.[0]?.number;
+            if (!number && context.payload.check_run) {
+              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: context.payload.check_run.head_sha
+              });
+              number = prs[0]?.number;
+            }
+            core.setOutput('number', number || '');
+
+  sync-labels:
+    needs: resolve-pr
+    if: >
+      needs.resolve-pr.outputs.number != '' &&
+      (github.event_name == 'pull_request_target' ||
+       contains(github.event.check_run.name, 'CodeRabbit') ||
+       contains(github.event.check_run.app.slug, 'coderabbit') ||
+       contains(github.event.check_run.name, 'Kilo') ||
+       contains(github.event.check_run.app.slug, 'kilo'))
+    concurrency:
+      group: bot-sync-${{ needs.resolve-pr.outputs.number }}
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_BOTS: 'coderabbit,kilocode'
+      PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+    steps:
+      - name: Auto-Provision Labels, Wait for Bots & Apply Verdict
+        uses: actions/github-script@v7
+        env:
+          EXPECTED_BOTS: ${{ env.EXPECTED_BOTS }}
+        with:
+          script: |
+            // ========================================================
+            // 0. 解析关联 PR 编号 (安全兼容 Fork PR 及空数组场景)
+            // ========================================================
+            const checkRun = context.payload.check_run;
+            const prNumber = Number(process.env.PR_NUMBER);
+            const eventHeadSha = context.eventName === 'pull_request_target'
+              ? context.payload.pull_request?.head?.sha
+              : checkRun?.head_sha;
+            if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || !eventHeadSha) {
+              console.log('[PR Check] Missing PR number or event head; skipping label sync.');
+              return;
+            }
+
+            // ========================================================
+            // 1. 规范化标签体系定义 (IaC：带 HEX 颜色和描述说明)
+            // ========================================================
+            const SYSTEM_LABELS = {
+              'ai-reviewed': {
+                color: 'cfd3d7', // 浅灰色
+                description: '当前轮次已通过 AI Code Review 综合审查'
+              },
+              'risk:critical': {
+                color: 'b60205', // 刺眼深红
+                description: '阻塞合并: CodeRabbit [Blocked] 或 Kilo [Critical/Blocker]'
+              },
+              'risk:high': {
+                color: 'd93f0b', // 橙红
+                description: '高风险: CodeRabbit [Risky] 或 Kilo [Major/High]'
+              },
+              'risk:medium': {
+                color: 'fbca04', // 警示黄
+                description: '中度风险: CodeRabbit [Caution] 或 Kilo [Warning/Medium]'
+              },
+              'risk:low': {
+                color: '0e8a16', // 安全绿
+                description: '低风险: CodeRabbit [Ready] 且无严重安全隐患'
+              },
+              'review:needs-work': {
+                color: 'e99695', // 浅粉红
+                description: '审查未通过，存在需修改的问题 (Changes Requested)'
+              },
+              'review:approved': {
+                color: '2cbe4e', // 鲜绿
+                description: '所有审查 Bot 均已核准通过'
+              }
+            };
+
+            // 自动确保标签在仓库中存在且颜色、描述一致 (含分页与 422 容错)
+            async function ensureLabelsProvisioned() {
+              const existingRepoLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100
+              });
+              const map = new Map(existingRepoLabels.map(l => [l.name, l]));
+
+              for (const [name, meta] of Object.entries(SYSTEM_LABELS)) {
+                if (!map.has(name)) {
+                  console.log(`[Provision] Creating label: ${name}`);
+                  try {
+                    await github.rest.issues.createLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      name,
+                      color: meta.color,
+                      description: meta.description
+                    });
+                  } catch (err) {
+                    if (err.status !== 422) throw err; // 忽略并发竞争导致的已存在异常
+                  }
+                }
+              }
+            }
+
+            // ========================================================
+            // 2. 轮次校验 (严格对比 PR head.sha，避免过期提交抢占打标)
+            // ========================================================
+            const { data: prData } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            const currentHeadSha = prData.head.sha;
+
+            if (!eventHeadSha || eventHeadSha !== currentHeadSha) {
+              console.log(`[Round Guard] Triggered by stale or missing commit (${eventHeadSha || 'missing'}). Current Head is ${currentHeadSha}. Skipping.`);
+              return;
+            }
+
+            // ========================================================
+            // 2.1 head 复核原语（const 箭头函数不提升，定义须早于全部调用点）
+            // ========================================================
+            // 每次托管标签写操作（barrier 清理、旧标清洗、追加标签）前复核当前 PR
+            // head 与触发事件 head 一致：旧 head 触发的 job 不得在新 head 生效期间
+            // 删除或写入任何托管标签。
+            const assertCurrentHead = async () => {
+              const { data: latestPr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              if (latestPr.head.sha !== eventHeadSha) {
+                console.log(`[Round Guard] Head changed before label write (${eventHeadSha} -> ${latestPr.head.sha}). Skipping.`);
+                return false;
+              }
+              return true;
+            };
+
+            // ========================================================
+            // 3. 栅栏汇合（按 EXPECTED_BOTS 严格等待，彻底根治死锁与抢跑）
+            // ========================================================
+            // logins = 官方 GitHub App 机器人账号（type 恒为 Bot）的逐字登录名，为 4.2/4.3
+            // 审查/评论文本采集的精确身份闸；pattern 仅用于 check run 维度的名称匹配。
+            // appId = 官方 App 的公开数字标识，故意硬编码为常量：它是防伪闸（同名伪造 Check Run
+            // 按 app.id 不符一律排除）的校验锚。改存仓库变量会引入可被篡改的注入点，反而削弱
+            // 防伪；App ID 本身是公开信息，无保密需求。若某 bot 更换 App 注册，需同步更新此
+            // 字面量并在变更记录中登记。
+            const BOT_DEFINITIONS = {
+              'coderabbit': { pattern: /coderabbit/i, logins: ['coderabbitai[bot]'], appId: 347564 },
+              'kilocode': { pattern: /kilo[-_\s]?code|^kilo$/i, logins: ['kilo-code-bot[bot]'], appId: 2193792 }
+            };
+
+            // 解析当前项目声明等待的 Bot
+            const expectedKeys = (process.env.EXPECTED_BOTS || 'coderabbit')
+              .split(',')
+              .map(s => s.trim().toLowerCase())
+              .filter(s => BOT_DEFINITIONS[s]);
+
+            // 规范拉取当前 Commit 的 Check Runs 列表（分页全量：check_runs 超过一页时首页
+            //   截断会漏掉后续页的 Bot run，导致 allReady 误判为已完成或漏匹配）
+            const checkRuns = await github.paginate(github.rest.checks.listForRef, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: currentHeadSha,
+              per_page: 100
+            });
+
+            let allReady = true;
+            const targetRuns = [];
+
+            for (const key of expectedKeys) {
+              const def = BOT_DEFINITIONS[key];
+              const runs = checkRuns.filter(r => {
+                const slugMatch = def.pattern.test(r.name) || def.pattern.test(r.app?.slug || '');
+                if (!slugMatch) return false;
+                // C2：App ID 防伪——同名伪造 Check Run（非对应官方 App）一律排除；
+                //   r.app?.id 缺失时退回 slug 匹配（个别镜像环境可能无 app 字段）。
+                if (typeof r.app?.id === 'number' && r.app.id !== def.appId) return false;
+                return true;
+              });
+
+              // 如果声明的 Bot 尚未产生 Check Run，保持等待，绝不抢跑
+              if (runs.length === 0) {
+                console.log(`[Waiting] Configured bot '${key}' check run has not appeared yet.`);
+                allReady = false;
+                break;
+              }
+
+              // 如果已产生但处于 in_progress / queued，继续等待
+              const isCompleted = runs.every(r => r.status === 'completed');
+              if (!isCompleted) {
+                console.log(`[Waiting] Configured bot '${key}' is still running...`);
+                allReady = false;
+                break;
+              }
+              targetRuns.push(...runs);
+            }
+
+            if (!allReady) {
+              console.log('Barrier not reached. Waiting for all expected checks to finish.');
+
+              // Remove stale labels from previous round while new checks are pending
+              const currentIssueLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                per_page: 100
+              });
+              const existing = new Set(currentIssueLabels.map(l => l.name));
+
+              for (const l of Object.keys(SYSTEM_LABELS)) {
+                if (existing.has(l)) {
+                  // 逐个删除前复核 head：barrier 清理同样不得在新 head 生效期间删旧轮标签。
+                  if (!(await assertCurrentHead())) return;
+                  console.log(`[Barrier] Removing stale label: ${l}`);
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: prNumber,
+                      name: l
+                    });
+                  } catch (e) {
+                    if (e.status !== 404) throw e;
+                  }
+                }
+              }
+
+              return;
+            }
+
+            console.log(`>>> All configured bots (${expectedKeys.join(', ')}) completed for round ${currentHeadSha.slice(0, 7)}!`);
+
+            // ========================================================
+            // 4. 解析与分值评定（对齐全量数据源与真实评级字段）
+            // ========================================================
+            let codeRabbitText = '';
+            let kiloCodeText = '';
+            let hasCheckFailure = false;
+
+            // 4.1 提取 Checks API 中的 Output 文本
+            for (const run of targetRuns) {
+              const textBlob = `${run.output?.title || ''}\n${run.output?.summary || ''}\n${run.output?.text || ''}`;
+              if (/coderabbit/i.test(run.name) || /coderabbit/i.test(run.app?.slug || '')) {
+                codeRabbitText += `\n${textBlob}`;
+              }
+              if (/kilo/i.test(run.name) || /kilo/i.test(run.app?.slug || '')) {
+                kiloCodeText += `\n${textBlob}`;
+              }
+              if (run.conclusion !== 'success' && run.conclusion !== 'neutral') {
+                hasCheckFailure = true;
+              }
+            }
+
+            // 4.2 提取 Pull Request 官方 Review 意见 (pulls.listReviews)
+            // 身份闸：仅 type=Bot 且登录名逐字命中配置的官方账号（见 BOT_DEFINITIONS.logins）。
+            // 旧口径用 /coderabbit/i、/kilo/i 模糊匹配 login，任何登录名含该子串的人类账号
+            // 都能把伪造文本灌进评分管道（如发布 "severity: critical" 的冒名评论）。
+            const isBotReview = (user, key) =>
+              user?.type === 'Bot' && (BOT_DEFINITIONS[key]?.logins || []).includes(user.login);
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              per_page: 100
+            });
+            for (const rev of reviews.filter(r => r.commit_id === currentHeadSha)) {
+              if (isBotReview(rev.user, 'coderabbit')) codeRabbitText += `\n${rev.body || ''}`;
+              if (isBotReview(rev.user, 'kilocode')) kiloCodeText += `\n${rev.body || ''}`;
+            }
+
+            // 4.3 补充拉取 PR Issue 顶层评论 (捕获 CodeRabbit 默认 Walkthrough 摘要)
+            // 同样走身份闸；CodeRabbit 就地编辑同一条 walkthrough（不换新评论），故每个 bot
+            // 只取 updated_at 最新的一条，避免把历史版本残影与最新正文混算。
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+            const botRoundBoundaries = new Map(); // key -> Date boundary for current round
+            for (const key of expectedKeys) {
+              const def = BOT_DEFINITIONS[key];
+              if (!def) continue;
+              const matchingRun = targetRuns.find(r => def.pattern.test(r.name) || def.pattern.test(r.app?.slug || ''));
+              // 边界只取 started_at：created_at 早于实际启动，会把边界推前而误纳入上一轮残影评论。
+              const timeStr = matchingRun && matchingRun.started_at ? matchingRun.started_at : null;
+              if (timeStr) botRoundBoundaries.set(key, new Date(timeStr));
+            }
+            const latestBotComment = new Map(); // key: bot 配置键 -> 最新一条评论
+            for (const comment of issueComments) {
+              if (!isBotReview(comment.user, 'coderabbit') && !isBotReview(comment.user, 'kilocode')) continue;
+              const key = isBotReview(comment.user, 'coderabbit') ? 'coderabbit' : 'kilocode';
+              const roundBoundary = botRoundBoundaries.get(key);
+              // 无本轮边界（匹配 run 缺 started_at）即无法归因到当前轮，连同早于边界的旧评论一并跳过。
+              if (!roundBoundary || new Date(comment.updated_at) < roundBoundary) continue;
+              const prev = latestBotComment.get(key);
+              if (!prev || new Date(comment.updated_at) > new Date(prev.updated_at)) {
+                latestBotComment.set(key, comment);
+              }
+            }
+            if (latestBotComment.has('coderabbit')) {
+              codeRabbitText += `\n${latestBotComment.get('coderabbit').body || ''}`;
+            }
+            if (latestBotComment.has('kilocode')) {
+              kiloCodeText += `\n${latestBotComment.get('kilocode').body || ''}`;
+            }
+
+            // --- 4.4 CodeRabbit 官方 Merge Readiness 提取 (支持 Emoji 与 Markdown 标记) ---
+            let crScore = null; // null: 本轮未解析出评级；1: Ready, 2: Caution, 3: Risky, 4: Blocked
+            const crBandMatch = codeRabbitText.match(/(?:merge\s*readiness|readiness\s*band)[^a-zA-Z\r\n]{0,20}([a-zA-Z]+)/i);
+            const crBand = crBandMatch ? crBandMatch[1].toLowerCase() : '';
+
+            if (crBand === 'blocked' || /\bseverity:\s*critical\b/i.test(codeRabbitText)) {
+              crScore = 4;
+            } else if (crBand === 'risky' || /\bseverity:\s*major\b/i.test(codeRabbitText)) {
+              crScore = 3;
+            } else if (crBand === 'caution' || /\bseverity:\s*minor\b/i.test(codeRabbitText)) {
+              crScore = 2;
+            } else if (crBand === 'ready') {
+              crScore = 1;
+            }
+
+            // --- 4.5 Kilo Code 真实等级提取 (严格对齐 Blocker / Warning / Suggestion) ---
+            let kiloScore = null; // null: 本轮未解析出评级；1: Suggestion, 2: Warning, 3: High, 4: Critical
+            const bareCriticalOrBlocker = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?(?:CRITICAL|BLOCKER)(?:\*\*)?\s*:/im;
+            const bareWarning = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?WARNING(?:\*\*)?\s*:/im;
+            const bareSuggestion = /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?SUGGESTION(?:\*\*)?\s*:/im;
+            if (/(?:severity|风险|level)[\s:|*#-]*(critical|严重|blocker|致命)/i.test(kiloCodeText) || bareCriticalOrBlocker.test(kiloCodeText)) {
+              kiloScore = 4;
+            } else if (/(?:severity|风险|level)[\s:|*#-]*(high|高危|major|高)/i.test(kiloCodeText)) {
+              kiloScore = 3;
+            } else if (/(?:severity|风险|level)[\s:|*#-]*(warning|中危|medium|中)/i.test(kiloCodeText) || bareWarning.test(kiloCodeText)) {
+              kiloScore = 2;
+            } else if (/(?:severity|风险|level)[\s:|*#-]*(suggestion|low|低危|minor|低|info)/i.test(kiloCodeText) || bareSuggestion.test(kiloCodeText)) {
+              kiloScore = 1;
+            }
+
+            // --- 4.6 裁决汇总（最严原则）---
+            const ratingByBot = { coderabbit: crScore, kilocode: kiloScore };
+            const scores = expectedKeys.map(key => ratingByBot[key]);
+            const hasParseableRating = scores.some(score => score !== null);
+            // C3：仅当 EXPECTED_BOTS 每个 bot 都解析出评级（allBotsRated）才写 ai-reviewed/风险标签；
+            //   仅部分 bot 有评级（hasParseableRating 真而 allBotsRated 假）时只写 review:needs-work，杜绝单 bot 冒充完整汇总。
+            const allBotsRated = scores.length > 0 && scores.every(score => score !== null);
+            const allRiskLabels = ['risk:critical', 'risk:high', 'risk:medium', 'risk:low'];
+            const allStatusLabels = ['review:needs-work', 'review:approved'];
+            const allManagedLabels = ['ai-reviewed', ...allRiskLabels, ...allStatusLabels];
+            const toAdd = new Set();
+
+            if (allBotsRated) {
+              const finalScore = Math.max(...scores.filter(score => score !== null));
+              const scoreLabelMap = {
+                4: 'risk:critical',
+                3: 'risk:high',
+                2: 'risk:medium',
+                1: 'risk:low'
+              };
+              const targetRiskLabel = scoreLabelMap[finalScore];
+
+              // 状态裁决：检查是否有 CHANGES_REQUESTED 状态或 Check 状态失败
+              const hasChangesRequested = reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED');
+              const targetStatusLabel = (hasCheckFailure || hasChangesRequested || finalScore >= 3)
+                ? 'review:needs-work'
+                : 'review:approved';
+
+              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Risk: ${targetRiskLabel}, Status: ${targetStatusLabel} (CR: ${crScore}, Kilo: ${kiloScore})`);
+              toAdd.add('ai-reviewed');
+              toAdd.add(targetRiskLabel);
+              toAdd.add(targetStatusLabel);
+            } else if (hasParseableRating || hasCheckFailure || reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED')) {
+              // 部分 bot 有评级（未全员）或当前 head 有失败 Check 或 CHANGES_REQUESTED 评审 → 标记 needs-work；本分支不引入 ai-reviewed/risk。
+              toAdd.add('review:needs-work');
+              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Partial ratings or failed check / CHANGES_REQUESTED. Marking review:needs-work.`);
+            } else {
+              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Neither bot produced a parseable rating. Clearing review labels.`);
+            }
+
+            // ========================================================
+            // 5. 应用标签与旧标清洗
+            // ========================================================
+            // 写标签前复核当前 PR head 与触发事件 head 一致，防止过期 job 抢占写标。
+            if (!(await assertCurrentHead())) return;
+
+            await ensureLabelsProvisioned();
+
+            const currentIssueLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+            const existing = new Set(currentIssueLabels.map(l => l.name));
+
+            // 移除同组历史标签（若未解析出评级，则清空所有已存在的 ai-reviewed、risk 与 status 标签）
+            // 清理前再次复核 head：初次复核通过后到实际删标签之间 head 可能被 push 更新，
+            // 旧 job 不得在新 head 生效期间删除当轮标签（闭合清洗窗口的 TOCTOU）。
+            if (!(await assertCurrentHead())) return;
+            for (const l of allManagedLabels) {
+              if (!toAdd.has(l) && existing.has(l)) {
+                // 逐个删除前再次复核 head：闭合循环内逐个 removeLabel 之间的 TOCTOU 窗口。
+                if (!(await assertCurrentHead())) return;
+                console.log(`[Cleanup] Removing obsolete label: ${l}`);
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: prNumber,
+                    name: l
+                  });
+                } catch (e) {
+                  if (e.status !== 404) throw e;
+                }
+              }
+            }
+
+            // 写入当前轮次新标签
+            const finalAdd = Array.from(toAdd).filter(l => !existing.has(l));
+            if (finalAdd.length > 0 && !(await assertCurrentHead())) return;
+            if (finalAdd.length > 0) {
+              console.log(`[Apply] Adding labels: ${finalAdd.join(', ')}`);
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                labels: finalAdd
+              });
+            }

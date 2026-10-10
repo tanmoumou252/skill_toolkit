@@ -68,6 +68,7 @@ export const KILOCODE_MAIN_DENY_KEYS = [
   'plan-governor-main_exec_sandboxed_command',
   'plan-governor-main_copy_into_sandbox',
   'plan-governor-main_write_scoped_file',
+  'plan-governor-main_edit_scoped_file',
   'plan-governor-main_write_plan',
   'plan-governor-main_write_review_report',
   'plan-governor-main_write_pr_review_report',

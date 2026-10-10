@@ -25,10 +25,11 @@ permission:
   plan-governor-main_exec_sandboxed_command: deny
   plan-governor-main_copy_into_sandbox: deny
   plan-governor-main_write_scoped_file: deny
+  plan-governor-main_edit_scoped_file: deny
   plan-governor-subagent_exec_guarded_command: allow
 ---
 
-<!-- GENERATED from spec@d45cbe68b8f0; do not edit -->
+<!-- GENERATED from spec@3b0152d66813; do not edit -->
 
 # PR-Reviewer SP（Kilo 代码变更独立审查）· SuperPower 规范内置版
 

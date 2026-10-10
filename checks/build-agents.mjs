@@ -285,7 +285,7 @@ function isSymlinkNow(p) {
   }
 }
 const O_NOFOLLOW_AVAIL = typeof fs.constants.O_NOFOLLOW === 'number';
-function writeFileAtomicNoFollow(root, p, text) {
+export function writeFileAtomicNoFollow(root, p, text) {
   const dir = path.dirname(p);
   if (!O_NOFOLLOW_AVAIL) {
     assertProductDirWithinRoot(root, dir);           // 回退分支同样不得省略父目录收容复核
