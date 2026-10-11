@@ -71,6 +71,7 @@ function mkPlat(r) {
 //   任一既有子段为符号链接即抛 PLATFORM-INVENTORY FAIL，recursive mkdir 不得在盘外产生任何新条目。
 //   本用例在基线已绿（守卫已存在）：证明「子段符号链接可穿越 mkdir」的缺口不成立 → containment SKIP。
 {
+  fs.mkdirSync(path.join(SPEC_ROOT, '.kilo'), { recursive: true });
   const tmp = fs.mkdtempSync(path.join(SPEC_ROOT, '.kilo', '.inv-t4-sym-'));
   try {
     const out = path.join(tmp, 'out');

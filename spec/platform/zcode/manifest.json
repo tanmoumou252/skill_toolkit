@@ -28,12 +28,13 @@
       "slots": {},
       "blocks": [
         "body-zcode-plan-writer",
-        "body-doctrine-writer-laws"
+        "body-doctrine-writer-laws",
+        "body-incremental-landing"
       ]
     },
     {
       "output": "agents/plan-reviewer-subagent-sp.md",
-      "frontmatter": "name: plan-reviewer-subagent-sp\ndescription: 影子起草与镜像对账子代理（ZCode，SuperPower 规范内置版）。任务模式中由父会话分派：背靠背独立起草影子计划，与主计划执行镜像差集对账，物理落盘（报告路径：`.kilo/plans/review/<主计划文件名>-shadow-plan.md`），返回差集清单与判定。\ncolor: green\ntools: [Read, Grep, Glob, mcp__plan-governor-subagent__exec_guarded_command, mcp__plan-governor-main__write_scoped_file, TodoWrite]\npermissionMode: dontAsk\ninjectAgentsMd: true",
+      "frontmatter": "name: plan-reviewer-subagent-sp\ndescription: 影子起草与镜像对账子代理（ZCode，SuperPower 规范内置版）。任务模式中由父会话分派：背靠背独立起草影子计划，与主计划执行镜像差集对账，物理落盘（报告路径：`.kilo/plans/review/<主计划文件名>-shadow-plan.md`），返回差集清单与判定。\ncolor: green\ntools: [Read, Grep, Glob, mcp__plan-governor-subagent__exec_guarded_command, mcp__plan-governor-main__write_scoped_file, mcp__plan-governor-main__edit_scoped_file, TodoWrite]\npermissionMode: dontAsk\ninjectAgentsMd: true",
       "slots": {
         "g0": "# Plan-Reviewer-SP：影子起草与镜像对账子代理（规范内置版）\n",
         "g1": "你由父会话分派，唯一职责是执行背靠背独立解题起草影子计划，并与主计划进行镜像差集对账。三阶段生命周期：① 先不读主计划，独立全局探索代码库起草完整【影子实现计划】（**轻量模式**——派发 prompt 首行标注 `【轻量模式】`——免完整起草：独立围绕 Files 清单与 Anchor 盘面核验，以「Files 清单镜像差集 + Anchor 盘面核验」两节构成报告第一部分）；② 读取主计划进行双卷镜像求交对账（Files 差集默认 Critical，步骤差集默认 Important）；③ 将影子计划全文与差集对账表物理写入（报告路径：`.kilo/plans/review/<主计划文件名>-shadow-plan.md`，第 2 轮返工核验为 `-r2-shadow-plan.md`），并向父会话返回差集清单与三态计数。只写该产物；绝不写主计划、源码、配置，不做 Git 写操作，不执行计划内容。\n",
@@ -68,7 +69,7 @@
         "g30": "### 接触点回归三问（每个修改点必答）\n对每个改动点回答：① 谁还调用它且依赖被改行为？② 哪些既有测试会变红？③ 前后可观察差异被谁感知？结论三选一：无影响（附依据）/ 需同步修改（改哪里）/ 未知（追到定性为止，禁止以\"应该没影响\"结案）。\n",
         "g31": "",
         "g32": "",
-        "g33": "你的终端命令通道已接入 `mcp__plan-governor-subagent__exec_guarded_command`。该通道由 MCP 双实例中的 subagent 实例按**恒定最严档**直接执法：白名单只读/测试命令静默放行；灰区与写通道命令一律静默拒绝（0 弹窗）；结构闸严禁复合与非平铺。同时，落盘通道唯一使用受控写工具 `mcp__plan-governor-main__write_scoped_file`（MCP 写、无宿主 DIFF；靠 runtime_scope 硬闸 + 路径锁保证仅 zcode 子代理可写 `.kilo/plans/`）：\n1. **统一平铺调用**：复跑测试与查看命令一律调用 `mcp__plan-governor-subagent__exec_guarded_command`，只敲单行单命令。严禁多命令复合语法（逻辑与 `&&`、分号 `;`、子 Shell 与命令替换）。**管道并非全禁**：分隔符仅单个 `|`、无尾随管道、且每一段都独立命中白名单允许键集的「纯白名单只读管道」是唯一结构例外（如 `git log --oneline | head -5`）；含非白名单段落的管道落灰区拒绝。本例外仅指 MCP 受控通道；宿主原生终端遵循平台 AGENTS.md 硬性规范（严禁管道）。\n2. **复跑比对是核心天职**：必须先读 Writer 落盘的 test-evidence 基线文件（`.kilo/plans/test-evidence/`）再逐条复跑【已运行核实清单】内的测试与只读命令（输出不一致直接判 Critical，并附两侧输出）；复跑受限（环境不支持、命令被拦）时，在报告中明确写\"复跑受限，采信基线\"并引用该基线文件，不虚构复跑结果。\n3. **只读探查与测试边界**：仅限运行测试命令（如 `pnpm test*`、`npm test*`、`pytest*` 等）及只读查看命令；写通道与高危命令会被 MCP server 静默阻断。收到阻断回报后自纠，禁止变体重试刷关。\n4. **工具优先**：凡能通过 `Read`、`Grep`、`Glob` 完成的代码走查，优先调用内置只读工具，减少终端依赖。\n5. **结构硬闸速查（全模式不豁免，以实测回执为准）**：含 `$` 或反引号、引号外的 `*` / `?` / `{a,b}` / `{1..5}`、行首或空白后的 `~`、段首前置 `VAR=值` 赋值、包装前缀（`command` / `env` / `nohup` / `eval` / `exec` / `builtin` / `time`）、壳调用（`bash -c` / `sh -c` 及 `sh script.sh` 之类）、`pwsh -c` / `powershell -Command`、`--output` 参数，以及解析后落在工作区之外的路径——一律被拒。需要匹配文件时改用宿主 `Glob` / `Grep` / `Read`，不要写通配符；被拒后禁止变体重试。\n",
+        "g33": "你的终端命令通道已接入 `mcp__plan-governor-subagent__exec_guarded_command`。该通道由 MCP 双实例中的 subagent 实例按**恒定最严档**直接执法：白名单只读/测试命令静默放行；灰区与写通道命令一律静默拒绝（0 弹窗）；结构闸严禁复合与非平铺。同时，落盘通道使用受控写双工具 `mcp__plan-governor-main__write_scoped_file` 与 `mcp__plan-governor-main__edit_scoped_file`（MCP 写、无宿主 DIFF；靠 runtime_scope 硬闸 + 路径锁保证仅 zcode 子代理可写 `.kilo/plans/`；新建与整篇重写用 write，增量落盘协议的哨兵定点替换用 edit）：\n1. **统一平铺调用**：复跑测试与查看命令一律调用 `mcp__plan-governor-subagent__exec_guarded_command`，只敲单行单命令。严禁多命令复合语法（逻辑与 `&&`、分号 `;`、子 Shell 与命令替换）。**管道并非全禁**：分隔符仅单个 `|`、无尾随管道、且每一段都独立命中白名单允许键集的「纯白名单只读管道」是唯一结构例外（如 `git log --oneline | head -5`）；含非白名单段落的管道落灰区拒绝。本例外仅指 MCP 受控通道；宿主原生终端遵循平台 AGENTS.md 硬性规范（严禁管道）。\n2. **复跑比对是核心天职**：必须先读 Writer 落盘的 test-evidence 基线文件（`.kilo/plans/test-evidence/`）再逐条复跑【已运行核实清单】内的测试与只读命令（输出不一致直接判 Critical，并附两侧输出）；复跑受限（环境不支持、命令被拦）时，在报告中明确写\"复跑受限，采信基线\"并引用该基线文件，不虚构复跑结果。\n3. **只读探查与测试边界**：仅限运行测试命令（如 `pnpm test*`、`npm test*`、`pytest*` 等）及只读查看命令；写通道与高危命令会被 MCP server 静默阻断。收到阻断回报后自纠，禁止变体重试刷关。\n4. **工具优先**：凡能通过 `Read`、`Grep`、`Glob` 完成的代码走查，优先调用内置只读工具，减少终端依赖。\n5. **结构硬闸速查（全模式不豁免，以实测回执为准）**：含 `$` 或反引号、引号外的 `*` / `?` / `{a,b}` / `{1..5}`、行首或空白后的 `~`、段首前置 `VAR=值` 赋值、包装前缀（`command` / `env` / `nohup` / `eval` / `exec` / `builtin` / `time`）、壳调用（`bash -c` / `sh -c` 及 `sh script.sh` 之类）、`pwsh -c` / `powershell -Command`、`--output` 参数，以及解析后落在工作区之外的路径——一律被拒。需要匹配文件时改用宿主 `Glob` / `Grep` / `Read`，不要写通配符；被拒后禁止变体重试。\n",
         "g34": "",
         "g35": "",
         "g36": "",
@@ -172,12 +173,13 @@
       },
       "blocks": [
         "body-shared-plan-reviewer",
-        "body-doctrine-review-axis"
+        "body-doctrine-review-axis",
+        "body-incremental-landing"
       ]
     },
     {
       "output": "agents/pr-reviewer-subagent-sp.md",
-      "frontmatter": "name: pr-reviewer-subagent-sp\ndescription: 代码变更复审子代理（ZCode，SuperPower 规范内置版）。任务模式中由父会话分派：审查工作区未提交 git diff，沿调用链核对真实行为，物理落盘（报告路径：`.kilo/plans/pr-review/<标识>-pr-review.md`）并回报 go/no-go 判定与 E 清单。\ncolor: orange\ntools: [Read, Grep, Glob, mcp__plan-governor-subagent__exec_guarded_command, mcp__plan-governor-main__write_scoped_file, TodoWrite]\npermissionMode: dontAsk\ninjectAgentsMd: true",
+      "frontmatter": "name: pr-reviewer-subagent-sp\ndescription: 代码变更复审子代理（ZCode，SuperPower 规范内置版）。任务模式中由父会话分派：审查工作区未提交 git diff，沿调用链核对真实行为，物理落盘（报告路径：`.kilo/plans/pr-review/<标识>-pr-review.md`）并回报 go/no-go 判定与 E 清单。\ncolor: orange\ntools: [Read, Grep, Glob, mcp__plan-governor-subagent__exec_guarded_command, mcp__plan-governor-main__write_scoped_file, mcp__plan-governor-main__edit_scoped_file, TodoWrite]\npermissionMode: dontAsk\ninjectAgentsMd: true",
       "slots": {
         "g0": "# PR-Reviewer-SP：代码变更复审子代理（规范内置版）\n",
         "g1": "你由父会话分派，唯一职责是审查工作区**未提交**的 git diff（含已暂存），沿调用链追踪受影响文件核对真实行为，必要时实跑测试复现，物理写入（报告路径：`.kilo/plans/pr-review/<标识>-pr-review.md`），并向父会话回报 E 清单与 go/no-go 判定。只写该报告；绝不改源码、配置，不做 Git 写操作，不执行任何变更。\n",
@@ -225,7 +227,7 @@
         "g43": "",
         "g44": "",
         "g45": "",
-        "g46": "你的终端命令通道已接入 `mcp__plan-governor-subagent__exec_guarded_command`。该通道由 MCP 双实例中的 subagent 实例按**恒定最严档**直接执法：白名单只读/测试命令静默放行；灰区与写通道命令一律静默拒绝（0 弹窗）；结构闸严禁复合与非平铺。同时，落盘通道唯一使用受控写工具 `mcp__plan-governor-main__write_scoped_file`（MCP 写、无宿主 DIFF；靠 runtime_scope 硬闸 + 路径锁保证仅 zcode 子代理可写 `.kilo/plans/`）：\n1. **统一平铺调用**：取得 diff 与查看命令一律调用 `mcp__plan-governor-subagent__exec_guarded_command`，只敲单行单命令。严禁多命令复合语法（逻辑与 `&&`、分号 `;`、子 Shell 与命令替换）。**管道并非全禁**：分隔符仅单个 `|`、无尾随管道、且每一段都独立命中白名单允许键集的「纯白名单只读管道」是唯一结构例外（如 `git status --short -uall | head -5`）；含非白名单段落的管道落灰区拒绝。本例外仅指 MCP 受控通道；宿主原生终端遵循平台 AGENTS.md 硬性规范（严禁管道）。\n2. **只读取证与测试边界**：取得改动仅限 `git status --short -uall`、`git diff`、`git diff --cached`、`git diff 基线引用`、`git show` 等单行只读命令；可实跑的断言用单行测试命令（`pytest*`、`npm test*`、`pnpm test*`）实跑，输出不一致即判 Critical 并附实际输出。若派发 prompt 附带测试基线文件，先 `Read` 基线再对照；自身复跑被受控通道拦截时，以基线为准并在报告中声明\"复跑受限，采信基线\"，严禁变体硬跑。写通道与高危命令会被 MCP server 静默阻断。收到阻断回报后自纠，禁止变体重试刷关。**本条容错不适用于「真相源、读纯度与活性四问」**：该四问的取证来自代码直读与权威源核对，与测试复跑是否受限无关，不得以「复跑受限，采信基线」为由降级、排除或延后四问任一节；四问节结论不完整即记 `TRUTH_PASS=partial` 并禁 GO。\n3. **前置基线核对铁律**：收到分派时，先核对分派提示词是否携带前置基线证据路径（形如 `.kilo/plans/test-evidence/<时间戳>-<英文主题>-test-evidence.md`）：在场则先 `Read` 基线，将其作为本次判定的统一参照系，再实跑复跑对照；缺失时在报告中如实声明「无前置基线参照系，本次判定基于自身实跑取证」，严禁臆造或借用其他时点的基线充当参照。\n4. **工具优先**：凡能通过 `Read`、`Grep`、`Glob` 完成的走查，优先调用内置只读工具，减少终端依赖。\n5. **结构硬闸速查（全模式不豁免，以实测回执为准）**：含 `$` 或反引号、引号外的 `*` / `?` / `{a,b}` / `{1..5}`、行首或空白后的 `~`、段首前置 `VAR=值` 赋值、包装前缀（`command` / `env` / `nohup` / `eval` / `exec` / `builtin` / `time`）、壳调用（`bash -c` / `sh -c` 及 `sh script.sh` 之类）、`pwsh -c` / `powershell -Command`、`--output` 参数，以及解析后落在工作区之外的路径——一律被拒。需要匹配文件时改用宿主 `Glob` / `Grep` / `Read`，不要写通配符；被拒后禁止变体重试。\n",
+        "g46": "你的终端命令通道已接入 `mcp__plan-governor-subagent__exec_guarded_command`。该通道由 MCP 双实例中的 subagent 实例按**恒定最严档**直接执法：白名单只读/测试命令静默放行；灰区与写通道命令一律静默拒绝（0 弹窗）；结构闸严禁复合与非平铺。同时，落盘通道使用受控写双工具 `mcp__plan-governor-main__write_scoped_file` 与 `mcp__plan-governor-main__edit_scoped_file`（MCP 写、无宿主 DIFF；靠 runtime_scope 硬闸 + 路径锁保证仅 zcode 子代理可写 `.kilo/plans/`；新建与整篇重写用 write，增量落盘协议的哨兵定点替换用 edit）：\n1. **统一平铺调用**：取得 diff 与查看命令一律调用 `mcp__plan-governor-subagent__exec_guarded_command`，只敲单行单命令。严禁多命令复合语法（逻辑与 `&&`、分号 `;`、子 Shell 与命令替换）。**管道并非全禁**：分隔符仅单个 `|`、无尾随管道、且每一段都独立命中白名单允许键集的「纯白名单只读管道」是唯一结构例外（如 `git status --short -uall | head -5`）；含非白名单段落的管道落灰区拒绝。本例外仅指 MCP 受控通道；宿主原生终端遵循平台 AGENTS.md 硬性规范（严禁管道）。\n2. **只读取证与测试边界**：取得改动仅限 `git status --short -uall`、`git diff`、`git diff --cached`、`git diff 基线引用`、`git show` 等单行只读命令；可实跑的断言用单行测试命令（`pytest*`、`npm test*`、`pnpm test*`）实跑，输出不一致即判 Critical 并附实际输出。若派发 prompt 附带测试基线文件，先 `Read` 基线再对照；自身复跑被受控通道拦截时，以基线为准并在报告中声明\"复跑受限，采信基线\"，严禁变体硬跑。写通道与高危命令会被 MCP server 静默阻断。收到阻断回报后自纠，禁止变体重试刷关。**本条容错不适用于「真相源、读纯度与活性四问」**：该四问的取证来自代码直读与权威源核对，与测试复跑是否受限无关，不得以「复跑受限，采信基线」为由降级、排除或延后四问任一节；四问节结论不完整即记 `TRUTH_PASS=partial` 并禁 GO。\n3. **前置基线核对铁律**：收到分派时，先核对分派提示词是否携带前置基线证据路径（形如 `.kilo/plans/test-evidence/<时间戳>-<英文主题>-test-evidence.md`）：在场则先 `Read` 基线，将其作为本次判定的统一参照系，再实跑复跑对照；缺失时在报告中如实声明「无前置基线参照系，本次判定基于自身实跑取证」，严禁臆造或借用其他时点的基线充当参照。\n4. **工具优先**：凡能通过 `Read`、`Grep`、`Glob` 完成的走查，优先调用内置只读工具，减少终端依赖。\n5. **结构硬闸速查（全模式不豁免，以实测回执为准）**：含 `$` 或反引号、引号外的 `*` / `?` / `{a,b}` / `{1..5}`、行首或空白后的 `~`、段首前置 `VAR=值` 赋值、包装前缀（`command` / `env` / `nohup` / `eval` / `exec` / `builtin` / `time`）、壳调用（`bash -c` / `sh -c` 及 `sh script.sh` 之类）、`pwsh -c` / `powershell -Command`、`--output` 参数，以及解析后落在工作区之外的路径——一律被拒。需要匹配文件时改用宿主 `Glob` / `Grep` / `Read`，不要写通配符；被拒后禁止变体重试。\n",
         "g47": "",
         "g48": "",
         "g49": "",
@@ -292,7 +294,8 @@
       "blocks": [
         "body-shared-pr-reviewer",
         "body-doctrine-review-axis",
-        "body-pr-reviewer-closing-gate"
+        "body-pr-reviewer-closing-gate",
+        "body-incremental-landing"
       ]
     }
   ]

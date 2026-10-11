@@ -13,6 +13,16 @@ on:
     types: [completed]
   pull_request_review:
     types: [submitted]
+  # Fork PR review events run in the merge-commit context with a read-only GITHUB_TOKEN, so
+  # the review trigger above cannot write labels for fork PRs: its run only wakes the job, the
+  # writes fail closed (403). issue_comment is delivered to the base repository and executes
+  # this default-branch workflow with the base repo's token, so it is the trusted writer path
+  # for fork rounds (the barrier still requires authenticated head-matching reviews, which
+  # this job reads via the API; the comment only wakes evaluation). A bot review whose last
+  # walkthrough edit precedes its review submission and produces no later trusted event is a
+  # declared liveness gap of the single-writer design, not a write gap.
+  issue_comment:
+    types: [created, edited]
   # Security invariant: pull_request_target runs in the base repository context with label
   # write access. This workflow only reads event metadata and calls the GitHub API to manage
   # labels — it must NEVER check out the PR head, fetch fork refs, or execute any
@@ -43,7 +53,8 @@ jobs:
         with:
           script: |
             let number = context.payload.pull_request?.number ||
-              context.payload.check_run?.pull_requests?.[0]?.number;
+              context.payload.check_run?.pull_requests?.[0]?.number ||
+              (context.payload.issue?.pull_request ? context.payload.issue.number : undefined);
             if (!number && context.payload.check_run) {
               const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
                 owner: context.repo.owner,
@@ -60,6 +71,7 @@ jobs:
       needs.resolve-pr.outputs.number != '' &&
       (github.event_name == 'pull_request_target' ||
        github.event_name == 'pull_request_review' ||
+       github.event_name == 'issue_comment' ||
        contains(github.event.check_run.name, 'CodeRabbit') ||
        contains(github.event.check_run.app.slug, 'coderabbit') ||
        contains(github.event.check_run.name, 'Kilo') ||
@@ -84,11 +96,22 @@ jobs:
             // ========================================================
             const checkRun = context.payload.check_run;
             const prNumber = Number(process.env.PR_NUMBER);
-            const eventHeadSha = (context.eventName === 'pull_request_target' ||
+            // Comment-wake 事件（基仓库受信 issue_comment）不携带 PR head sha：其作用仅为
+            //   在受信任的基仓库上下文（写 token 不被 clamp 为只读）里重新求值当前轮次，
+            //   弥补 fork PR 的 pull_request_review 触发器运行于非受信 merge commit、
+            //   GITHUB_TOKEN 被强制只读而无法写标签的缺口。绑定发生在 2. 轮次校验取得
+            //   currentHeadSha 之后；栅栏仍以 head-matching authenticated review 为完成判据，
+            //   评论唤醒无法绕过评审证据。唤醒限官方 Bot 作者，阻断任意人类评论触发写标签。
+            const isCommentWake = context.eventName === 'issue_comment';
+            if (isCommentWake && context.payload.comment?.user?.type !== 'Bot') {
+              console.log('[PR Check] Non-bot comment; skipping trusted-writer wake.');
+              return;
+            }
+            let eventHeadSha = (context.eventName === 'pull_request_target' ||
               context.eventName === 'pull_request_review')
               ? context.payload.pull_request?.head?.sha
               : checkRun?.head_sha;
-            if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || !eventHeadSha) {
+            if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || (!isCommentWake && !eventHeadSha)) {
               console.log('[PR Check] Missing PR number or event head; skipping label sync.');
               return;
             }
@@ -165,9 +188,21 @@ jobs:
             const currentHeadSha = prData.head.sha;
 
             if (!eventHeadSha || eventHeadSha !== currentHeadSha) {
-              console.log(`[Round Guard] Triggered by stale or missing commit (${eventHeadSha || 'missing'}). Current Head is ${currentHeadSha}. Skipping.`);
-              return;
+              // Comment-wake 事件本身不带 head：绑定到刚取得的 currentHeadSha 后按普通事件继续。
+              if (isCommentWake && !eventHeadSha) {
+                eventHeadSha = currentHeadSha;
+              } else {
+                console.log(`[Round Guard] Triggered by stale or missing commit (${eventHeadSha || 'missing'}). Current Head is ${currentHeadSha}. Skipping.`);
+                return;
+              }
             }
+
+            // 轮次下界（4.3 顶层评论消费的可用性判定）：不使用 head commit 的 committer/author
+            //   date——那是 PR 作者完全可控的伪造元数据（git 允许设定任意提交者日期），不足以充当
+            //   "本轮开始"的可信下界。REST 亦无可信替代：issue events/timeline 无 synchronize
+            //   事件，committed 事件只携带提交者元数据、无服务器 created_at。因此不设 per-head
+            //   轮次下界；顶层 issue 评论（无 commit_id 绑定、无法归属 head）一律 fail-closed
+            //   不消费（见 4.3），评级只采信 head 绑定且身份鉴权的 review 正文与 check run output。
 
             // ========================================================
             // 2.1 head 复核原语（const 箭头函数不提升，定义须早于全部调用点）
@@ -225,7 +260,7 @@ jobs:
               repo: context.repo.repo,
               pull_number: prNumber,
               per_page: 100
-            })).filter(r => r.commit_id === currentHeadSha);
+            })).filter(r => r.commit_id === currentHeadSha && r.state !== 'DISMISSED');
 
             let allReady = true;
             const targetRuns = [];
@@ -318,61 +353,17 @@ jobs:
               pull_number: prNumber,
               per_page: 100
             });
-            for (const rev of reviews.filter(r => r.commit_id === currentHeadSha)) {
+            // 正文采集与栅栏同源排除已撤销（DISMISSED）review：撤销的评审不得影响评级。
+            for (const rev of reviews.filter(r => r.commit_id === currentHeadSha && r.state !== 'DISMISSED')) {
               if (isBotReview(rev.user, 'coderabbit')) codeRabbitText += `\n${rev.body || ''}`;
               if (isBotReview(rev.user, 'kilocode')) kiloCodeText += `\n${rev.body || ''}`;
             }
 
-            // 4.3 补充拉取 PR Issue 顶层评论 (捕获 CodeRabbit 默认 Walkthrough 摘要)
-            // 同样走身份闸；CodeRabbit 就地编辑同一条 walkthrough（不换新评论），故每个 bot
-            // 只取 updated_at 最新的一条，避免把历史版本残影与最新正文混算。
-            const issueComments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              per_page: 100
-            });
-            const botRoundBoundaries = new Map(); // key -> Date boundary for current round
-            for (const key of expectedKeys) {
-              const def = BOT_DEFINITIONS[key];
-              if (!def) continue;
-              // 本轮边界主源 = 该 bot 在当前 head 上最新一条 authenticated review 的
-              //   submitted_at：栅栏已改以 head review 为完成判据，CodeRabbit 无 check run
-              //   也必须能归因本轮，否则其 Walkthrough 摘要永远被跳过（评论域契约）。
-              const headReviewForBot = headReviews.filter(r =>
-                r.user?.type === 'Bot' && (def.logins || []).includes(r.user.login));
-              let timeStr = null;
-              if (headReviewForBot.length > 0) {
-                const latestHeadReview = headReviewForBot.reduce((a, b) =>
-                  new Date(b.submitted_at) > new Date(a.submitted_at) ? b : a);
-                timeStr = latestHeadReview.submitted_at || null;
-              }
-              // 兜底仅当该 bot 在当前 head 无 head review 时，退回匹配 run 的 started_at
-              //   （created_at 早于实际启动，会把边界推前而误纳入上一轮残影评论，故不用它）。
-              if (!timeStr) {
-                const matchingRun = targetRuns.find(r => def.pattern.test(r.name) || def.pattern.test(r.app?.slug || ''));
-                timeStr = matchingRun && matchingRun.started_at ? matchingRun.started_at : null;
-              }
-              if (timeStr) botRoundBoundaries.set(key, new Date(timeStr));
-            }
-            const latestBotComment = new Map(); // key: bot 配置键 -> 最新一条评论
-            for (const comment of issueComments) {
-              if (!isBotReview(comment.user, 'coderabbit') && !isBotReview(comment.user, 'kilocode')) continue;
-              const key = isBotReview(comment.user, 'coderabbit') ? 'coderabbit' : 'kilocode';
-              const roundBoundary = botRoundBoundaries.get(key);
-              // 无本轮边界（匹配 run 缺 started_at）即无法归因到当前轮，连同早于边界的旧评论一并跳过。
-              if (!roundBoundary || new Date(comment.updated_at) < roundBoundary) continue;
-              const prev = latestBotComment.get(key);
-              if (!prev || new Date(comment.updated_at) > new Date(prev.updated_at)) {
-                latestBotComment.set(key, comment);
-              }
-            }
-            if (latestBotComment.has('coderabbit')) {
-              codeRabbitText += `\n${latestBotComment.get('coderabbit').body || ''}`;
-            }
-            if (latestBotComment.has('kilocode')) {
-              kiloCodeText += `\n${latestBotComment.get('kilocode').body || ''}`;
-            }
+            // 4.3 顶层 issue 评论不再消费（fail-closed）：顶层评论无 commit_id 绑定、无法归属到
+            //   current head，且唯一可用的归因下界（head commit 的 committer/author date）是
+            //   PR 作者可伪造的元数据，不可信；REST 亦无 synchronize 事件、committed 事件无服务器
+            //   created_at。按审查意见取兜底：取不到可信下界即不消费未绑定 head 的顶层评论。
+            //   评级只采信 head 绑定且身份鉴权的 review 正文（4.2）与 check run output（4.1）。
 
             // --- 4.4 CodeRabbit 官方 Merge Readiness 提取 (支持 Emoji 与 Markdown 标记) ---
             let crScore = null; // null: 本轮未解析出评级；1: Ready, 2: Caution, 3: Risky, 4: Blocked
@@ -427,6 +418,9 @@ jobs:
               const targetRiskLabel = scoreLabelMap[finalScore];
 
               // 状态裁决：检查是否有 CHANGES_REQUESTED 状态或 Check 状态失败
+              // 无需在此重复 DISMISSED 排除：GitHub review state 为互斥枚举
+              // （commented/changes_requested/approved/dismissed），撤销会把 state 改写为
+              // DISMISSED，故 state === 'CHANGES_REQUESTED' 不可能命中已撤销评审。
               const hasChangesRequested = reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED');
               const targetStatusLabel = (hasCheckFailure || hasChangesRequested || finalScore >= 3)
                 ? 'review:needs-work'

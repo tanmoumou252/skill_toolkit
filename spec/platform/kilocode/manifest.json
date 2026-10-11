@@ -129,7 +129,8 @@
       },
       "blocks": [
         "body-shared-plan-writer",
-        "body-doctrine-writer-laws"
+        "body-doctrine-writer-laws",
+        "body-incremental-landing"
       ]
     },
     {
@@ -273,7 +274,8 @@
       },
       "blocks": [
         "body-shared-plan-reviewer",
-        "body-doctrine-review-axis"
+        "body-doctrine-review-axis",
+        "body-incremental-landing"
       ]
     },
     {
@@ -393,7 +395,8 @@
       "blocks": [
         "body-shared-pr-reviewer",
         "body-doctrine-review-axis",
-        "body-pr-reviewer-closing-gate"
+        "body-pr-reviewer-closing-gate",
+        "body-incremental-landing"
       ]
     }
   ]

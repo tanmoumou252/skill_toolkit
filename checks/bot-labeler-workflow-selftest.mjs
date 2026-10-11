@@ -127,16 +127,20 @@ check('workflow-sync-labels-if-admits-review-event',
 check('workflow-step0-resolves-review-head',
   /context\.eventName === 'pull_request_target' \|\|\s*\n\s*context\.eventName === 'pull_request_review'\)\s*\n\s*\? context\.payload\.pull_request\?\.head\?\.sha/.test(text));
 
-// --- 栅栏：存在按 currentHeadSha 过滤的 head 评审集合（R4）---
+// --- 栅栏：存在按 currentHeadSha 过滤并排除 DISMISSED 的 head 评审集合（R4）---
 // 注意：listReviews 分页调用跨多行，用 dotall 旗标让 `.` 跨行匹配。
 check('workflow-barrier-collects-head-reviews',
-  /const headReviews = [\s\S]*?\.filter\(r => r\.commit_id === currentHeadSha\)/.test(text));
+  /const headReviews = [\s\S]*?\.filter\(r => r\.commit_id === currentHeadSha && r\.state !== 'DISMISSED'\)/.test(text));
 
 // --- 栅栏：完成判据基于官方 bot 在当前 head 的 authenticated review 存在性（R4）---
 check('workflow-barrier-requires-head-review-presence',
   text.includes('r.user?.type') &&
   /r\.user\?\.type === 'Bot' \&\& \(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
   /hasHeadReview\s*=\s*headReviews\.some\(/.test(text));
+
+// --- 评分：review 正文采集与栅栏同源排除 DISMISSED，已撤销评审不得灌入评分管道 ---
+check('workflow-scoring-bodies-exclude-dismissed',
+  /for \(const rev of reviews\.filter\(r => r\.commit_id === currentHeadSha && r\.state !== 'DISMISSED'\)\)/.test(text));
 
 // --- 栅栏：旧口径死等不再残留——等待日志不得再以 "check run has not appeared" 兜底 ---
 // 断言：文本中不得再出现旧 "check run has not appeared yet" 死等措辞（已被 review 判据取代）。
@@ -159,12 +163,48 @@ check('workflow-github-script-node24-sha',
 check('workflow-no-stale-github-script-v7',
   !text.includes('actions/github-script@v7'));
 
-// --- 4.3 本轮边界主源（本轮事实纠偏）：官方 bot 在当前 head 的最新 review submitted_at
-// ---   为主边界；CodeRabbit 无 check run 也必须能归因本轮，否则其 Walkthrough 摘要
-// ---   永远被跳过（评论域契约）。旧口径的 started_at 仅作兜底。
-check('workflow-round-boundary-uses-head-review-submitted-at',
-  /headReviewForBot = headReviews\.filter\(/.test(text) &&
-  /latestHeadReview\.submitted_at/.test(text) &&
-  /if \(!timeStr\) \{/.test(text));
+// --- T2 — fork PR review 受信写面契约：fork PR 的 pull_request_review 触发器运行在
+// ---   非受信 merge commit、GITHUB_TOKEN 被 clamp 为只读，无法完成标签写入。受信写面
+// ---   必须由基仓库上下文的事件承担：本工作流声明 issue_comment（投递到基仓库、以基
+// ---   仓库 token 执行默认分支工作流），仅作评论唤醒（Bot 作者闸 + 无 head 绑定 currentHead），
+// ---   评审证据仍由栅栏的 head-matching authenticated review 提供。
+
+// --- 受信写面：issue_comment 触发必须显式声明 created/edited（fork review 的受信唤醒路）---
+check('workflow-declares-issue-comment-trusted-writer-trigger',
+  /issue_comment:\s*\n\s*types:\s*\[created, edited\]/.test(text));
+
+// --- 唤醒闸：评论唤醒必须限官方 Bot 作者（type=Bot），人类评论不得触发写标签求值 ---
+check('workflow-comment-wake-gates-bot-author',
+  /context\.payload\.comment\?\.user\?\.type !== 'Bot'/.test(text) &&
+  /isCommentWake = context\.eventName === 'issue_comment'/.test(text));
+
+// --- step-0：评论唤醒在无 head sha 时放行（不提前 return），head 绑定延后到轮次校验 ---
+check('workflow-comment-wake-defers-head-binding',
+  /\(!isCommentWake && !eventHeadSha\)/.test(text) &&
+  /isCommentWake && !eventHeadSha\)\s*\{\s*\n\s*eventHeadSha = currentHeadSha;/.test(text));
+
+// --- sync-labels.if 必须放行 issue_comment（受信唤醒进入 job 求值）---
+check('workflow-sync-labels-if-admits-issue-comment',
+  /github\.event_name == 'issue_comment'/.test(text));
+
+// --- resolve-pr：issue 顶层评论事件必须可归因 PR 编号（issue.pull_request 存在性闸）---
+check('workflow-resolve-pr-admits-issue-comment-number',
+  /context\.payload\.issue\?\.pull_request \? context\.payload\.issue\.number/.test(text));
+
+// --- 4.3 轮次下界（fail-closed）：不得以 head commit 的 committer/author date 充当轮次下界
+// ---   （该日期是 PR 作者可控伪造的元数据）；且无可信 per-head 下界时不得消费未绑定 head 的
+// ---   顶层 issue 评论。评级只采信 head 绑定且身份鉴权的 review 正文（4.2）与 check run output（4.1）。
+check('workflow-no-untrusted-commit-date-boundary',
+  !/github\.rest\.repos\.getCommit\(/.test(text) &&
+  !/currentHeadCommit\.commit\?\.committer\?\.date/.test(text) &&
+  !/currentHeadStartedAt/.test(text));
+check('workflow-no-unbound-top-level-comment-consumption',
+  !/github\.rest\.issues\.listComments\(/.test(text) &&
+  !/botRoundBoundaries/.test(text) &&
+  !/latestBotComment/.test(text));
+// 反向锚：旧口径（按 bot 最新 head review submitted_at 推边界 / run started_at 兜底）必须消失。
+check('workflow-round-boundary-no-review-submitted-at-inference',
+  !text.includes('latestHeadReview') && !text.includes('headReviewForBot') &&
+  !/matchingRun && matchingRun\.started_at/.test(text));
 
 console.log('BOT-LABELER-SELFTEST ALL OK');

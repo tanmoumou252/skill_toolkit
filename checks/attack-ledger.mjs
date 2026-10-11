@@ -132,9 +132,13 @@ function sectionBody(text, headRe) {
 // 白名单之外的 CJK 续写与 ASCII 近似词仍拒绝（前瞻）。台账侧 LEDGER_HEAD_RE 不做同款放宽：
 // 其过收方向为 fail-closed（误拒仅产生假红与选择域收窄），与 Files 侧的执法逃逸极性相反。
 export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]*)?Files(?:[ \t]*(?:清单|声明))?(?![\w\u4e00-\u9fff-])/;
-// 执法扫描专用宽松 Files 标题判据（以 File/Files 开头，容忍可选编号前缀与任意后缀/大小写）；
-//   仅扩大执法信号采集面，FILES_HEAD_RE 仍为唯一结构识别源（Notes 等非 Files 标题不误纳）。
-export const ENF_FILES_HEAD_LOOSE_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]*)?Files?\b/i;
+// 执法扫描专用宽松 Files 标题判据：任意标题层级（`#`~`######`，7 个及以上不匹配），
+//   容忍可选编号前缀与任意后缀/大小写，词首为 Files/File 或中文"文件"。
+//   终止断言分族处理：Files?/File 后接 `\b`（`Files列表` 这类粘连 CJK 尾缀仍命中，因 s→CJK 存在 \w 边界）；
+//   "文件"后**不加** \b——CJK 非 \w，其后 `\b` 永不成立（`## 文件清单`、`## 文件 (Files)` 均会漏判）。
+//   仅扩大执法信号采集面，FILES_HEAD_RE 仍为唯一结构识别源；`## Notes`/`## 注意事项` 等
+//   非 Files/文件 词首标题不匹配，不产生误报。采集方向为过收（仅扩执法面，fail-closed）。
+export const ENF_FILES_HEAD_LOOSE_RE = /^#{1,6} (?:\d+(?:\.\d+)*\.?[ \t]*)?(?:Files?\b|文件)/i;
 // 合并扫描全部围栏外 FILES_HEAD_RE 节：诱饵节在前不得遮蔽其后的真实执法节（视图-执行语义
 //   分叉闭合）。节边界＝下一个围栏外 `## ` 标题（与 sectionBody 同口径）；相邻两个 Files 标题
 //   视为两节各自入集。sections 数组与正文分离：空正文的可识别节 sections.length≥1，
@@ -535,10 +539,14 @@ export function attackLedger(planText, opts = {}) {
 // 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
 export function isPlanFilename(f) {
   // 伴生排除改为「角色段 + 可选轮次后缀」识别：`-pr-review`/`-shadow-plan`/`-test-evidence`/`.lease`
-  //   之后允许零至多个 `-<字母数字>` 轮次/返工段，闭合 `…-pr-review-r3.md` 等带后缀伴生文件
-  //   冒充计划进入 --latest 候选域（视图-执行语义分叉）。末锚 .md 保留，普通时间戳主题计划不误伤。
+  //   之后允许零至多个仓规登记的轮次/返工段（`-rN`/`-pN` 及 `-roundN`/`-final`/`-microfix`/
+  //   `-acceptance`/`-remediation`/`-premerge`/`-no-go-fixes`/`-fixround`/`-adversarial`，加
+  //   纯数字序号），闭合 `…-pr-review-r3.md`/`…-pr-review-r3-fixround.md` 等带后缀伴生文件冒充
+  //   计划进入 --latest 候选域（视图-执行语义分叉）。**不得收宽为任意 `-<字母数字>`**：那会把
+  //   主题名内自然含 `-pr-review`/`-shadow-plan` 子词的正常计划（如 `…-bot-pr-review-refactor.md`、
+  //   `…-shadow-plan-hardening.md`）误当伴生排除——误伤正常计划（视图漏选 = 选择域收窄）。末锚 .md 保留。
   return /^\d{8}(?:-?\d{4,8})?-.+\.md$/.test(f)
-    && !/(?:-test-evidence|-pr-review|-shadow-plan|\.lease)(?:-[A-Za-z0-9]+)*\.md$/.test(f);
+    && !/(?:-test-evidence|-pr-review|-shadow-plan|\.lease)(?:-(?:[rp]\d+[a-z]?|round\d+|final|microfix|acceptance|remediation|premerge|no-go-fixes|fixround|adversarial|\d+))*\.md$/.test(f);
 }
 
 // latest-unclosed-exclude-gate：--latest 选择域的闭环判据。与审计判定同源——复用 sectionBody 的

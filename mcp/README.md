@@ -23,22 +23,30 @@ node mcp/webui.js
 
 ## 生效方式
 
-在宿主配置中注册双实例，以 `MCP_ROLE` 区分主/子身份。
+在宿主配置中注册双实例，以 `MCP_ROLE` 区分主/子身份；受控写工具 `write_scoped_file`/`edit_scoped_file` 的身份判据另由 `MCP_WRITE_MODE` 决定（`sub` 缺省＝调用方须经 `params._meta.runtime_scope` 自声明；`all`＝实例即身份锚，且服务端按 `MCP_ROLE` 强制写面：主实例＝计划主笔面（`.kilo/plans/` 全目录），子实例＝复审报告面（仅 `review/` 与 `pr-review/` 子目录，写根目录主计划被拒）），该键仅喂这两个写/编辑工具，不参与其他 MCP 工具、不影响 Kilo Code 走原生 `edit`+`kilo.jsonc` map 的落盘面。
 
-**通用配置**（Claude Desktop / Cline / CodeBuddy / ZCode）：
+**通用配置**（Claude Desktop / Cline / ZCode——须显式注入 `runtime_scope` 自声明，用 `sub` 档）：
 ```json
 {
-  "plan-governor-main": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "main" } },
-  "plan-governor-subagent": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "subagent" } }
+  "plan-governor-main": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "main", "MCP_WRITE_MODE": "sub" } },
+  "plan-governor-subagent": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "subagent", "MCP_WRITE_MODE": "sub" } }
 }
 ```
 
-**Kilo Code 专用配置**（写入 `kilo.jsonc`，注意语法差异：顶级键为 `mcp`、须声明 `type: "local"`、命令与参数合并为单个数组、环境变量键名为 `environment`）：
+**CodeBuddy 配置**（宿主工具表把主/子物理路由到不同实例、请求级不带任何身份自称，用 `all` 档——仅改 `MCP_WRITE_MODE` 值，其余同上；未设或非逐字 `all` 一律回落 `sub`，两档共用同一 `.kilo/plans/` 路径锁）：
+```json
+{
+  "plan-governor-main": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "main", "MCP_WRITE_MODE": "all" } },
+  "plan-governor-subagent": { "command": "node", "args": ["<repo>/mcp/plan-governor.js"], "env": { "MCP_ROLE": "subagent", "MCP_WRITE_MODE": "all" } }
+}
+```
+
+**Kilo Code 专用配置**（写入 `kilo.jsonc`，注意语法差异：顶级键为 `mcp`、须声明 `type: "local"`、命令与参数合并为单个数组、环境变量键名为 `environment`；Kilo 三代理走原生 `edit`+map、不经受控写工具，此处钉 `sub` 仅为显式声明缺省语义，行为零变）：
 ```json
 {
   "mcp": {
-    "plan-governor-main": { "type": "local", "command": ["node", "<repo>/mcp/plan-governor.js"], "environment": { "MCP_ROLE": "main" } },
-    "plan-governor-subagent": { "type": "local", "command": ["node", "<repo>/mcp/plan-governor.js"], "environment": { "MCP_ROLE": "subagent" } }
+    "plan-governor-main": { "type": "local", "command": ["node", "<repo>/mcp/plan-governor.js"], "environment": { "MCP_ROLE": "main", "MCP_WRITE_MODE": "sub" } },
+    "plan-governor-subagent": { "type": "local", "command": ["node", "<repo>/mcp/plan-governor.js"], "environment": { "MCP_ROLE": "subagent", "MCP_WRITE_MODE": "sub" } }
   }
 }
 ```

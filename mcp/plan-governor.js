@@ -11,6 +11,8 @@
  * 本 server 默认对文件系统零写入：不备份、不写产物。
  * 显式例外一（落工作区）：受控写工具 write_scoped_file 命中时写 .kilo/plans/ 下 .md，
  *   并按需创建其父目录骨架（仅该工具触发；是唯一落工作区的写面）。
+ *   受控写双模（env MCP_WRITE_MODE，缺省 sub，仅作用 write/edit_scoped_file 两工具）：sub=调用方经 runtime_scope 自声明（ZCode 路）；
+ *   all=实例即身份锚（CodeBuddy 路，宿主工具表物理路由主/子到不同实例）；两模式共用同一 .kilo/plans/ 路径锁，锁域零差异。
  * 显式例外二（工作区之外）：宿主以 MCP_AUDIT_LOG=1 注册时，每次命令裁决与执行结果追加一行 JSON 至
  *   ~/.config/kilo/governor-audit.jsonl（用户级，与工作区 cwd 解耦；供本地 WebUI 监控真实审计流）；
  *   未开启时零副作用。
@@ -45,6 +47,19 @@ const WORKSPACE = process.cwd();
 
 // 身份 = 实例绑定（启动期 env 静态确定；未登记值按最严 subagent fail-closed）
 const ROLE = process.env.MCP_ROLE === 'main' ? 'main' : 'subagent';
+
+// 受控写模式 = 部署期 env 锚（与 MCP_ROLE 同信任级：人手配置于 MCP 注册，代理进程不可伪造）：
+//   仅作用于 write_scoped_file / edit_scoped_file 两工具的裁决分发，不参与任何其他 MCP 工具。
+//   sub : 缺省。调用方须经 params._meta.runtime_scope 自声明（ZCode 注入路）；双锚执法不变，subagent 实例恒拒。
+//   all : 「调用打到哪个实例」即身份锚（CodeBuddy 宿主工具表把主/子物理路由到不同实例，无需自声明）。
+//   未设/非逐字 'all' 一律 fail-closed 到 sub；两模式共用同一 resolveScopedPlanTarget 锁域，锁域零差异。
+const WRITE_MODE = process.env.MCP_WRITE_MODE === 'all' ? 'all' : 'sub';
+
+// 临时身份探针（实验后随 debug_identity_echo 一并移除）：单一事实源谓词，
+//   同时门控 initialize 抓取 / tools/list 注册 / tools/call 分发，杜绝视图-执行分叉。
+//   仅字面量 "1" 判定启用（fail-closed）；探针零副作用（不落盘/不执行/不外发）。
+const PROBE_FLAG_ON = process.env.MCP_IDENTITY_PROBE === '1';
+let _lastInitializeClientInfo = null;
 
 // ============ 统一路径布局（用户级 + 项目级两层）============
 //   布局分两层，与宿主 .kilo 同族：
@@ -1178,6 +1193,7 @@ function startServer() {
 
     // 1. 初始化握手
     if (method === 'initialize') {
+      if (PROBE_FLAG_ON) _lastInitializeClientInfo = params && params.clientInfo ? params.clientInfo : null;
       send({
         jsonrpc: '2.0',
         id,
@@ -1306,7 +1322,9 @@ function startServer() {
             },
             {
               name: 'write_scoped_file',
-              description: ROLE === 'subagent'
+              description: WRITE_MODE === 'all'
+                ? '【受控写·实例身份档】本实例受控写模式=部署期 MCP_WRITE_MODE=all：凡达本实例的调用即按实例角色放行受控写（主实例=计划主笔面，子实例=复审报告面），无需 _meta 自声明；路径锁不放宽——仅 .kilo/plans/ 下 .md（含 review/、test-evidence/、pr-review/ 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB；符号链接检查与 O_EXCL 锁互斥与 sub 档完全同码同锁。'
+                : ROLE === 'subagent'
                 ? '【受控写·不可用】subagent 实例不得经本通道写计划文件，调用即被拒。'
                 : '【受控写·zcode 子代理专用】仅在 .kilo/plans/ 下写 .md 产物（计划/复审报告/取证）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁 `.kilo/plans/`（含 `review/`、`test-evidence/`、`pr-review/` 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB。主代理与未知调用方一律拒绝。新建文件按默认权限创建（新建场景无既有权限可继承）；如需保留既有权限位请改用 edit_scoped_file。写入全程持与 edit_scoped_file 同名的同目录 O_EXCL 锁文件互斥（陈旧崩溃残留锁自愈回收，Atomics.wait 零 CPU 退避，取得超时以 isError 拒绝并审计）。',
               inputSchema: {
@@ -1320,7 +1338,9 @@ function startServer() {
             },
             {
               name: 'edit_scoped_file',
-              description: ROLE === 'subagent'
+              description: WRITE_MODE === 'all'
+                ? '【受控编辑·实例身份档】受控写模式同上（all 档）：达本实例即按实例身份放行对 .kilo/plans/ 下既有 .md 的精确串替换；old_string 逐字命中 expected_count 次才放行的计数闸、路径锁、符号链接校验、O_EXCL 锁互斥与 sub 档完全同码同锁，零放宽。'
+                : ROLE === 'subagent'
                 ? '【受控编辑·不可用】subagent 实例不得经本通道编辑计划文件，调用即被拒。'
                 : '【受控编辑·zcode 子代理专用】对 .kilo/plans/ 下已存在 .md 做精确串替换（old_string 逐字命中 expected_count 次才放行，缺省 1；计数不符即拒并报实际计数）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁与符号链接校验同 write_scoped_file；新建文件请用 write_scoped_file。主代理与未知调用方一律拒绝。编辑既有文件时尽力保留其权限位（不跟随符号链接读取，读取失败回退默认写行为），与 write_scoped_file 新建文件的默认权限为有意差异；读-改-写全程持同目录 O_EXCL 锁文件互斥，取得超时以 isError 拒绝并审计。',
               inputSchema: {
@@ -1333,7 +1353,12 @@ function startServer() {
                 },
                 required: ['filename', 'old_string', 'new_string']
               }
-            }
+            },
+            ...(PROBE_FLAG_ON ? [{
+              name: 'debug_identity_echo',
+              description: '【临时身份探针·实验后移除】仅当启动环境 MCP_IDENTITY_PROBE=1 时注册。零副作用：不落盘/不执行/不外发；回显服务端内存身份上下文（role/envMcpRole/workspace/clientInfo/meta/transport/timestamp），用于探明宿主主/子代理 MCP 调用面可区分信号。',
+              inputSchema: { type: 'object', properties: {} }
+            }] : [])
           ]
         }
       });
@@ -1527,9 +1552,9 @@ function startServer() {
         // 且调用方身份信号 runtime_scope 须为 subagent（宿主注入，位于 params._meta）。
         const _m = params?._meta || {};
         const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
-        if (ROLE !== 'main' || scope !== 'subagent') {
-          process.stderr.write(`[write_scoped_file] REJECTED role=${ROLE} scope=${JSON.stringify(scope)}\n`);
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '主代理/未知调用方不得直接写计划文件，请派 plan-writer 子代理。' }] } });
+        if (WRITE_MODE !== 'all' && (ROLE !== 'main' || scope !== 'subagent')) {
+          process.stderr.write(`[write_scoped_file] REJECTED mode=${WRITE_MODE} role=${ROLE} scope=${JSON.stringify(scope)}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: WRITE_MODE === 'all' ? '实例身份档内部错误：本分支不应在 all 模式命中。' : '主代理/未知调用方不得直接写计划文件，请派 plan-writer 子代理。' }] } });
           return;
         }
         // 信任边界：scope 信号来自 params._meta.runtime_scope，由 ZCode 宿主注入
@@ -1539,6 +1564,14 @@ function startServer() {
         const g = resolveScopedPlanTarget(args.filename);
         if (!g.ok) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
+          return;
+        }
+        // all 档服务端角色写面闸：子实例=复审报告面，仅放行 review/ 与 pr-review/ 子目录；
+        //   主实例（计划主笔面）放行范围不变。角色判定读模块级 ROLE（启动期 env，客户端不可伪造），
+        //   与工具描述"主实例=计划主笔面，子实例=复审报告面"口径一致（事实单源见 README）。
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))) {
+          process.stderr.write(`[write_scoped_file] REJECTED all-mode subagent write outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 实例身份档：子实例仅可写 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
         }
         const target = g.target;
@@ -1687,14 +1720,21 @@ function startServer() {
       if (toolName === 'edit_scoped_file') {
         const _m = params?._meta || {};
         const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
-        if (ROLE !== 'main' || scope !== 'subagent') {
-          process.stderr.write(`[edit_scoped_file] REJECTED role=${ROLE} scope=${JSON.stringify(scope)}\n`);
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
+        if (WRITE_MODE !== 'all' && (ROLE !== 'main' || scope !== 'subagent')) {
+          process.stderr.write(`[edit_scoped_file] REJECTED mode=${WRITE_MODE} role=${ROLE} scope=${JSON.stringify(scope)}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: WRITE_MODE === 'all' ? '[scoped-edit-all-mode] 实例身份档内部错误：本分支不应在 all 模式命中。' : '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
           return;
         }
         const g = resolveScopedPlanTarget(args.filename);
         if (!g.ok) {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: g.text }] } });
+          return;
+        }
+        // all 档服务端角色写面闸（与 write_scoped_file 同型）：子实例=复审报告面，
+        //   仅放行 review/ 与 pr-review/ 子目录；主实例放行范围不变。
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))) {
+          process.stderr.write(`[edit_scoped_file] REJECTED all-mode subagent edit outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-all-mode-surface] 实例身份档：子实例仅可编辑 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
         }
         const oldS = String(args.old_string ?? '');
@@ -1859,6 +1899,22 @@ function startServer() {
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控编辑失败] ' + err.message }] } });
         }
         releaseLock();
+        return;
+      }
+
+      // 临时身份探针（实验后随 debug_identity_echo 一并移除）：注册视图与调用视图同源 PROBE_FLAG_ON。
+      //   flag 关闭 → 条件为假 → 落到下方 -32601；flag 开启 → 回显内存态，零副作用。
+      if (toolName === 'debug_identity_echo' && PROBE_FLAG_ON) {
+        const echo = {
+          role: ROLE,
+          envMcpRole: process.env.MCP_ROLE || null,
+          workspace: WORKSPACE,
+          clientInfo: _lastInitializeClientInfo,
+          meta: params && params._meta ? params._meta : null,
+          transport: 'stdio',
+          timestamp: new Date().toISOString()
+        };
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(echo, null, 2) }] } });
         return;
       }
 
@@ -2113,6 +2169,15 @@ function releaseScopedLock(lockPath, lockFd, meta, wroteMeta) {
 // 受控写/受控编辑共用守卫：filename 归一 → .kilo/plans/ 路径锁 → 符号链接祖先重锚 →
 // 目标自身 lstat。返回 { ok: true, target, expectRoot, withinReal } 或 { ok: false, text }。
 // write 与 edit 必须共用本函数，严禁复制两份（单一事实源）。
+// all 档子实例（ROLE=subagent）写面谓词：仅复审报告面（review/ 或 pr-review/ 直接子路径）。
+// 输入为已归一（反斜杠转正斜杠、resolveScopedPlanTarget 已拒 .. 与绝对路径）的相对路径。
+// 退化输入语义：空串/仅前缀（"review/"）/前缀外（"a/review/x.md"、"reviews/x.md"）均判 false（fail-closed）。
+function isSubagentReviewSurfacePath(rel) {
+  for (const prefix of ['review/', 'pr-review/']) {
+    if (rel.startsWith(prefix) && rel.length > prefix.length) return true;
+  }
+  return false;
+}
 function resolveScopedPlanTarget(filename) {
   const rel = String(filename || '').replace(/\\/g, '/');
   if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {

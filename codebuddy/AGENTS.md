@@ -1,4 +1,4 @@
-<!-- GENERATED from spec@308fbdb85ed4; do not edit -->
+<!-- GENERATED from spec@ae6f7c07116b; do not edit -->
 
 ## 终端命令执行硬性规范（CRITICAL: Shell Execution Policy）
 

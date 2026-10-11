@@ -28,7 +28,22 @@ check('assert-latest-companion-exclude-gate',
   && isPlanFilename('20261011-x.lease-2.md') === false
   && isPlanFilename('20261011-topic.md') === true
   // 非登记伴生角色的普通词尾不得误伤：`-review` 不是伴生角色，`-topic-review` 属正常主题
-  && isPlanFilename('20261011-topic-review.md') === true,
+  && isPlanFilename('20261011-topic-review.md') === true
+  // 主题名内自然含伴生角色子词的正常计划不得误伤（收窄前 `(?:-[A-Za-z0-9]+)*` 会把它们
+  //   当带轮次后缀的伴生文件排除）：-refactor/-hardening/-labeler 均非登记轮次变体。
+  && isPlanFilename('20261011-bot-pr-review-refactor.md') === true
+  && isPlanFilename('20261011-shadow-plan-hardening.md') === true
+  && isPlanFilename('20261011-bot-review-pr-review-labeler.md') === true
+  // 与 ROUND_RE（仓规轮次标记单一事实源）方言一致：-rN 后接任意单字母（r1a/r1b/r3z…）仍折算为
+  //   轮次，故属伴生报告而非计划，必须排除；收窄 isPlanFilename 不得与 foldRoundFromFilename
+  //   分叉（视图-执行语义分叉家族）。
+  && isPlanFilename('20261011-t-pr-review-r3z.md') === false
+  && isPlanFilename('20261011-t-pr-review-p7q.md') === false
+  // 登记轮次变体仍须排除（收窄不得放松伴生排除）：-r3 / -r3-fixround / -round2 / 纯数字序号。
+  && isPlanFilename('20261011-t-pr-review-r3-fixround.md') === false
+  && isPlanFilename('20261011-t-pr-review-round2.md') === false
+  && isPlanFilename('20261011-t-test-evidence-7.md') === false
+  && isPlanFilename('20261011-x.lease-3.md') === false,
 );
 
 // —— 2. structure-fence-mask：闭合围栏内 Files 节路径不构成交付证据 ——
@@ -99,6 +114,39 @@ const numberedPlan = [
 ].join('\n');
 check('assert-numbered-files-prefix-loose-match',
   enforcementSignals(numberedPlan).enforcement === true);
+
+// —— 4b. 中文"文件"词首 + 诱饵 `## Files` 组合（R3 闭合面扩展）——
+// `## 文件清单` 不被 FILES_HEAD_RE 识别（其 清单 仅作 Files 后缀白名单，不作 文件 后缀），
+//   属"结构失明"型标题；若其列出的执法路径不补足，便与诱饵空节组合出逃逸。
+// 围栏掩蔽与本夹具均无围栏：enfInFence 依赖可识别 `## Files` 节正文（此处仅空行），故为 false；
+// 执法判定必须经 enfInLoose 路径（宽松 CJK 标题节命中执法文件）成立，证明放宽判据补足了失明面。
+const cjkLoosePlan = [
+  '## Files',
+  '',
+  '## 文件清单',
+  '- Modify: mcp/plan-governor.js',
+  '',
+].join('\n');
+const cjkSig = enforcementSignals(cjkLoosePlan);
+check('assert-cjk-files-heading-loose-enforcement-detected',
+  cjkSig.enfInFence === false && cjkSig.enforcement === true,
+  `enfInFence=${cjkSig.enfInFence} enforcement=${cjkSig.enforcement}`);
+
+// 非 Files/文件 词首标题（中文亦不匹配）不属宽松执法节——收窄"文件"词首判据的正控制。
+// 必须先有可识别 `## Files` 节（noFilesSection=false）：否则变体①（无 Files 节 + 围栏外命中执法
+// 文件名）会 fail-closed 触发 enforcement，把正则误报与结构失明变体①混为一谈。此处可识别节列
+// 非执法文件，`## 注意事项` 节内的执法路径不得被宽松节纳入 → enforcement 保持 false。
+const cjkNonFilePlan = [
+  '## Files',
+  '- Modify: checks/other.mjs',
+  '## 注意事项',
+  '详见 mcp/plan-governor.js',
+  '',
+].join('\n');
+const cjkNonFileSig = enforcementSignals(cjkNonFilePlan);
+check('assert-cjk-non-files-heading-not-loose-enforcement',
+  cjkNonFileSig.enfInFence === false && cjkNonFileSig.enforcement === false,
+  `enfInFence=${cjkNonFileSig.enfInFence} enforcement=${cjkNonFileSig.enforcement}`);
 
 // —— 5. assert-latest-enforcement-no-ledger-selected ——
 // 选择-审计同构红线：最新执法候选缺台账节必须入选交审计 loud 报缺节，不得漂移至更旧候选。
