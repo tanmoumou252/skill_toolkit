@@ -107,4 +107,64 @@ check('workflow-bare-suggestion-parses', prodBareSuggestion.test('**SUGGESTION:*
 check('workflow-ordinary-warning-text-does-not-parse', !prodBareWarning.test('The WARNING is only mentioned in prose.'));
 check('workflow-ordinary-suggestion-text-does-not-parse', !prodBareSuggestion.test('A SUGGESTION is noted inline.'));
 
+// ================================================================
+// T1 — review-based barrier 契约断言（本轮新增：完成判据从 check run
+// 存在性切换为官方 bot 在 currentHeadSha 上的 authenticated review 存在性）。
+// 这些断言在业务改动前必须红灯（four-dimension 真红：断言与比对失败）。
+// ================================================================
+
+// --- 触发域：pull_request_review submitted 必须显式声明（R1）---
+check('workflow-declares-pull-request-review-submitted-trigger',
+  /pull_request_review:\s*\n\s*types:\s*\[submitted\]/.test(text));
+
+// --- 触发域：sync-labels.if 必须放行 review 事件（R2，E1 闭合）---
+// 断言：if 表达式块内含 pull_request_review 事件名放行；精确锚定 job if 表达式片段，
+// 避免仅匹配到别处的 event_name 字符串。
+check('workflow-sync-labels-if-admits-review-event',
+  /if:\s*>\s*\n\s*needs\.resolve-pr\.outputs\.number != '' \&\&\s*\n\s*\(github\.event_name == 'pull_request_target' \|\|\s*\n\s*github\.event_name == 'pull_request_review' \|\|/.test(text));
+
+// --- step-0 head 解析：review 事件须从 payload.pull_request.head.sha 取 head（R3）---
+check('workflow-step0-resolves-review-head',
+  /context\.eventName === 'pull_request_target' \|\|\s*\n\s*context\.eventName === 'pull_request_review'\)\s*\n\s*\? context\.payload\.pull_request\?\.head\?\.sha/.test(text));
+
+// --- 栅栏：存在按 currentHeadSha 过滤的 head 评审集合（R4）---
+// 注意：listReviews 分页调用跨多行，用 dotall 旗标让 `.` 跨行匹配。
+check('workflow-barrier-collects-head-reviews',
+  /const headReviews = [\s\S]*?\.filter\(r => r\.commit_id === currentHeadSha\)/.test(text));
+
+// --- 栅栏：完成判据基于官方 bot 在当前 head 的 authenticated review 存在性（R4）---
+check('workflow-barrier-requires-head-review-presence',
+  text.includes('r.user?.type') &&
+  /r\.user\?\.type === 'Bot' \&\& \(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
+  /hasHeadReview\s*=\s*headReviews\.some\(/.test(text));
+
+// --- 栅栏：旧口径死等不再残留——等待日志不得再以 "check run has not appeared" 兜底 ---
+// 断言：文本中不得再出现旧 "check run has not appeared yet" 死等措辞（已被 review 判据取代）。
+check('workflow-barrier-no-stale-checkrun-wait',
+  !text.includes("check run has not appeared yet"));
+
+// --- 身份闸 fail-closed：app.id 缺失必须排除（R5，不得退回 slug-only）---
+// 断言：check-run 身份闸使用 "typeof r.app?.id !== 'number'" 的 fail-closed 形态，
+// 而非旧的 "typeof r.app?.id === 'number' && r.app.id !== def.appId" 退回形态。
+check('workflow-checkrun-identity-fail-closed',
+  /if \(typeof r\.app\?\.id !== 'number' \|\| r\.app\.id !== def\.appId\) return false;/.test(text));
+// 反向锚：旧的退回形态必须已从文件中消失。
+check('workflow-no-stale-appid-slug-fallback',
+  !text.includes("if (typeof r.app?.id === 'number' && r.app.id !== def.appId) return false;"));
+
+// --- github-script 固定 Node-24 兼容 SHA（runtime-warning 处理）---
+check('workflow-github-script-node24-sha',
+  /actions\/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3/.test(text));
+// 反向锚：旧的 v7 标签不得残留。
+check('workflow-no-stale-github-script-v7',
+  !text.includes('actions/github-script@v7'));
+
+// --- 4.3 本轮边界主源（本轮事实纠偏）：官方 bot 在当前 head 的最新 review submitted_at
+// ---   为主边界；CodeRabbit 无 check run 也必须能归因本轮，否则其 Walkthrough 摘要
+// ---   永远被跳过（评论域契约）。旧口径的 started_at 仅作兜底。
+check('workflow-round-boundary-uses-head-review-submitted-at',
+  /headReviewForBot = headReviews\.filter\(/.test(text) &&
+  /latestHeadReview\.submitted_at/.test(text) &&
+  /if \(!timeStr\) \{/.test(text));
+
 console.log('BOT-LABELER-SELFTEST ALL OK');
