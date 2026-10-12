@@ -7,10 +7,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workflowPath = path.join(root, '.github', 'workflows', 'bot-review-labeler.yml');
 const text = fs.readFileSync(workflowPath, 'utf8');
 
+// 结构断言用 check（首错即停）；行为 harness 用非抛出 record 以逐格留证。
 function check(name, ok, detail = '') {
   if (!ok) throw new Error(`${name}${detail ? `: ${detail}` : ''}`);
   console.log(`OK   ${name}`);
 }
+let behaviorFailures = 0;
 
 check('bot-labeler-resolve-pr-job',
   text.includes('resolve-pr:') &&
@@ -132,13 +134,17 @@ check('workflow-step0-resolves-review-head',
 check('workflow-barrier-collects-head-reviews',
   /const headReviews = [\s\S]*?\.filter\(r => r\.commit_id === currentHeadSha && r\.state !== 'DISMISSED'\)/.test(text));
 
-// --- 栅栏：完成判据基于官方 bot 在当前 head 的 authenticated review 存在性（R4）---
-check('workflow-barrier-requires-head-review-presence',
-  // R-F4 迁移：hasHeadReview 拆多行并追加终态 state 门，逐行正则 + dotall 消费整段。
-  /r\.user\?\.type === 'Bot'/m.test(text) &&
-  /\(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
-  /\['APPROVED',\s*'CHANGES_REQUESTED'\]\.includes\(r\.state\)/.test(text) &&
-  /hasHeadReview\s*=\s*headReviews\.some\(/.test(text));
+// --- 栅栏：完成判据基于官方 bot 在当前 head 的 authenticated review（任意非 DISMISSED state，含 COMMENTED）
+//     或完成 check run（app.id 防伪）之一；评论顶层无 commit_id 不能满足完成。---
+check('workflow-barrier-requires-bindable-head-carrier',
+  /const hasHeadReview = headReviews\.some\([\s\S]{0,180}?\(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
+  /!hasHeadReview && !runs\.some\(r => r\.status === 'completed'\)/.test(text) &&
+  /r\.commit_id === currentHeadSha && r\.state !== 'DISMISSED'/.test(text) &&
+  !/\['APPROVED',\s*'CHANGES_REQUESTED'\]\.includes\(r\.state\)/.test(text));
+check('workflow-no-bindable-carrier-diagnostic',
+  /No bindable carrier this round for:/.test(text));
+
+// --- F2：pull_request_review 事件 actor 类型门（新形态）——review.user.type 非 Bot 即跳过 ---
 
 // --- 评分：review 正文采集与栅栏同源排除 DISMISSED，已撤销评审不得灌入评分管道 ---
 check('workflow-scoring-bodies-exclude-dismissed',
@@ -231,13 +237,25 @@ check('workflow-round-boundary-no-review-submitted-at-inference',
 // 现各补一条结构式断言（锚新形态关键表达式）与一条反向锚（锁旧形态不得复活）。
 // ================================================================
 
-// --- F1：评论唤醒登录名白名单（新形态）——受信登录名集合 + 双条件 AND 取反门在场 ---
+// --- F1：评论唤醒登录名白名单（新形态）——受信登录名从 BOT_DEFINITIONS 派生 + 双条件 AND 取反门 ---
 check('workflow-comment-wake-trusted-login-whitelist',
-  /const trustedCommentLogins = new Set\(\[[^\]]*coderabbitai\[bot\][^\]]*kilo-code-bot\[bot\][^\]]*\]\)/.test(text) &&
+  /const trustedCommentLogins = new Set\(Object\.values\(BOT_DEFINITIONS\)\.flatMap\(d => d\.logins \|\| \[\]\)\)/.test(text) &&
   /if \(isCommentWake &&\s*\n\s*\(context\.payload\.comment\?\.user\?\.type !== 'Bot' \|\|\s*\n\s*!trustedCommentLogins\.has\(context\.payload\.comment\?\.user\?\.login\)\)\)/.test(text));
+// 反向锚：硬编码登录名集合不得复活（单一事实源 = BOT_DEFINITIONS 派生）。
+check('workflow-no-stale-hardcoded-trusted-login-set',
+  !/const trustedCommentLogins = new Set\(\[/.test(text));
 // 反向锚：仅 type!=='Bot' 无登录名白名单的旧形态不得复活（任意 Bot 登录名即可唤醒）。
 check('workflow-no-stale-comment-wake-type-only-gate',
   !/if \(isCommentWake && context\.payload\.comment\?\.user\?\.type !== 'Bot'\)/.test(text));
+
+// --- F1 附加（bot login 单一事实源）：BOT_DEFINITIONS 唯一定义且早于唤醒门消费（const 不提升/TDZ 约束）---
+check('workflow-bot-definitions-single-source-before-use',
+  (() => {
+    const defs = text.match(/const BOT_DEFINITIONS = \{/g) || [];
+    const defIdx = text.indexOf('const BOT_DEFINITIONS');
+    const useIdx = text.indexOf('trustedCommentLogins = new Set(Object.values(BOT_DEFINITIONS)');
+    return defs.length === 1 && defIdx >= 0 && useIdx >= 0 && defIdx < useIdx;
+  })());
 
 // --- F2：pull_request_review 事件 actor 类型门（新形态）——review.user.type 非 Bot 即跳过 ---
 check('workflow-pull-request-review-actor-type-gate',
@@ -306,4 +324,240 @@ check('workflow-no-stale-skipped-as-failure',
   !/run\.conclusion !== 'success' && run\.conclusion !== 'neutral'\s*\n\s*\{/
     .test(text.slice(text.indexOf('let hasCheckFailure'), text.indexOf('// 4.2 提取 Pull Request'))));
 
-console.log('BOT-LABELER-SELFTEST ALL OK');
+// ================================================================
+// 行为级 harness（F2 + 载体矩阵）：提取 workflow sync-labels 内联脚本并真实执行，
+// mock github/context/core/process，断言标签 API 真实调用（不以文本位置为 Oracle）。
+// 契约（Finding 1/3）：完成信号=已认证 bot 的 head-bound 可绑定载体；顶层 comment 仅唤醒。
+// 期望值由契约推导，不以当前实现为 Oracle；gate-removal 变异必须被捕获（突变验证）。
+// ================================================================
+function extractSyncLabelsScript(y) {
+  const lines = y.split(/\r?\n/);
+  const starts = [];
+  for (let i = 0; i < lines.length; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
+  if (starts.length === 0) throw new Error('未提取到内联 script 块');
+  // YAML block scalar 语义：以最小内容缩进为公共前缀统一剥除（保留相对缩进，行尾空白无意义）。
+  const s = starts[starts.length - 1];
+  const keyIndent = lines[s].match(/^[ \t]*/)[0].length;
+  const body = [];
+  for (let s2 = s + 1; s2 < lines.length; s2++) {
+    const l = lines[s2];
+    if (l.trim() === '') { body.push(''); continue; }
+    const ind = l.match(/^[ \t]*/)[0].length;
+    if (ind <= keyIndent) break;
+    body.push(l);
+  }
+  const nonEmpty = body.filter((l) => l.trim() !== '');
+  if (nonEmpty.length === 0) return '';
+  const common = Math.min(...nonEmpty.map((l) => l.match(/^ */)[0].length));
+  return body.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
+}
+
+// 从 sync-labels 内联脚本真实执行；mock github/context/process，记录标签 API 调用。
+// 不复制谓词：完成/不完成完全由脚本在真实数据上的执行结果决定。
+async function runWorkflow({ eventName, payload, env, headSha, reviews, checkRuns, issueLabels, repoLabels, scriptSrc }) {
+  const labelsAdded = []; const labelsRemoved = []; const provisioned = [];
+  const calls = { add: 0, remove: 0, create: 0, pullsGet: 0 };
+  const logs = [];
+  const repo = { owner: 'o', repo: 'r' };
+  const revs = reviews || [];
+  const runs = checkRuns || [];
+  const github = {
+    paginate: async (fn) => {
+      const result = await fn();
+      if (Array.isArray(result)) return result;
+      const data = result?.data;
+      if (Array.isArray(data)) return data;
+      return data?.reviews || data?.check_runs || [];
+    },
+    rest: {
+      pulls: {
+        get: async () => { calls.pullsGet += 1; return { data: { head: { sha: headSha } } }; },
+        listReviews: async () => ({ data: revs }),
+      },
+      checks: { listForRef: async () => ({ data: { check_runs: runs } }) },
+      issues: {
+        listLabelsForRepo: async () => ({ data: (repoLabels || []).map((n) => ({ name: n })) }),
+        listLabelsOnIssue: async () => ({ data: (issueLabels || []).map((n) => ({ name: n })) }),
+        addLabels: async (p) => { calls.add += 1; labelsAdded.push(p.labels); },
+        removeLabel: async (p) => { calls.remove += 1; labelsRemoved.push(p.name); },
+        createLabel: async (p) => { calls.create += 1; provisioned.push(p.name); },
+      },
+    },
+  };
+  const context = { eventName, payload: payload || {}, repo };
+  const core = { setOutput: () => {} };
+  const process = { env: env || {} };
+  const consoleMock = { log: (...a) => logs.push(a.join(' ')) };
+  const fn = new Function('context', 'github', 'core', 'process', 'console',
+    'return (async () => {\n' + (scriptSrc || extractSyncLabelsScript(text)) + '\n})()');
+  const err = await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
+  return { calls, labelsAdded, labelsRemoved, provisioned, logs, err };
+}
+
+const COMMENTED = { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } };
+const prPayload = (headSha) => ({ pull_request: { head: { sha: headSha } } });
+
+// --- 完成判据矩阵：官方 bot 在当前 head 的 COMMENTED/APPROVED/CHANGES_REQUESTED review 均满足栅栏；
+//     DISMISSED / 非当前 head / login 不匹配 / 作者缺失 / 无载体 一律不满足（顶层 comment 仅唤醒）。
+async function barrierCase(opts) {
+  const r = await runWorkflow({
+    eventName: opts.eventName || 'issue_comment',
+    payload: opts.payload || { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: opts.expectedBots || 'kilocode' },
+    headSha: 'HEAD',
+    reviews: opts.reviews || [],
+    checkRuns: opts.checkRuns || [],
+    issueLabels: opts.issueLabels || [],
+    repoLabels: opts.repoLabels || ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work'],
+  });
+  return r;
+}
+// 行为 harness 用非抛出记录器（区别于上方结构断言的抛出 check），以便逐格输出红/绿。
+function record(name, ok, detail) {
+  if (ok) console.log(`OK   ${name}${detail ? ' ' + detail : ''}`);
+  else { behaviorFailures += 1; console.log(`FAIL ${name}${detail ? ' ' + detail : ''}`); }
+}
+
+// 1. COMMENTED head-bound bot review → 满足栅栏（PR8 实测载体形态）→ 进入 verdict 写标签。
+{
+  const r = await barrierCase({ reviews: [COMMENTED] });
+  record('workflow-completes-on-commented-head-review',
+    r.err === null && r.calls.add > 0,
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'add=' + r.calls.add + ' logs=' + r.logs.join(' | '));
+}
+// 2. APPROVED / CHANGES_REQUESTED 仍满足（回归：旧终态仍合法）。
+{
+  const rA = await barrierCase({ reviews: [{ ...COMMENTED, state: 'APPROVED' }] });
+  const rC = await barrierCase({ reviews: [{ ...COMMENTED, state: 'CHANGES_REQUESTED' }] });
+  record('workflow-completes-on-approved-and-changes-requested',
+    rA.calls.add > 0 && rC.calls.add > 0,
+    'approved add=' + rA.calls.add + ' changes add=' + rC.calls.add);
+}
+// 3. DISMISSED 不满足；不误写。
+{
+  const r = await barrierCase({ reviews: [{ ...COMMENTED, state: 'DISMISSED' }] });
+  record('workflow-dismissed-review-not-complete', r.err === null && r.calls.add === 0,
+    'add=' + r.calls.add);
+}
+// 4. 非当前 head 的 review 不满足。
+{
+  const r = await barrierCase({ reviews: [{ ...COMMENTED, commit_id: 'OLD' }] });
+  record('workflow-stale-head-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+}
+// 5. login 不匹配（type Bot 但非配置官方账号）不满足。
+{
+  const r = await barrierCase({ reviews: [{ ...COMMENTED, user: { type: 'Bot', login: 'evil-bot[bot]' } }] });
+  record('workflow-unauthorized-login-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+}
+// 6. 作者缺失（无 user）不满足。
+{
+  const r = await barrierCase({ reviews: [{ commit_id: 'HEAD', state: 'COMMENTED' }] });
+  record('workflow-missing-author-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+}
+// 7. 顶层 comment 唤醒本身不构成完成信号：仅评论（无 head review、无 check run）→ 不完成。
+{
+  const r = await barrierCase({ eventName: 'issue_comment', payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } }, reviews: [], checkRuns: [] });
+  const hasDiag = r.logs.some((l) => l.includes('No bindable carrier this round for:'));
+  record('workflow-unbound-comment-not-completion-evidence', r.calls.add === 0 && hasDiag,
+    'add=' + r.calls.add + ' diag=' + hasDiag);
+}
+// 8. 无载体 → 等待 + 显式诊断（非静默死等）。
+{
+  const r = await barrierCase({ reviews: [], checkRuns: [] });
+  const hasDiag = r.logs.some((l) => l.includes('No bindable carrier this round for:'));
+  record('workflow-no-carrier-waits-with-diagnostic', r.err === null && r.calls.add === 0 && hasDiag,
+    'add=' + r.calls.add + ' diag=' + hasDiag);
+}
+// 9. F2 actor 门：human actor 的 pull_request_review 触发 → 零标签变更。
+{
+  const r = await runWorkflow({
+    eventName: 'pull_request_review',
+    payload: { review: { user: { type: 'User' } }, pull_request: { head: { sha: 'HEAD' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+  });
+  record('workflow-human-review-actor-no-label-writes',
+    r.err === null && r.calls.add === 0 && r.calls.remove === 0 && r.calls.create === 0 && r.calls.pullsGet === 0,
+    'add=' + r.calls.add + ' remove=' + r.calls.remove + ' create=' + r.calls.create + ' pullsGet=' + r.calls.pullsGet);
+}
+// 10. F2 actor 门：missing actor（review.user 缺失）→ 零标签变更。
+{
+  const r = await runWorkflow({
+    eventName: 'pull_request_review',
+    payload: { review: {}, pull_request: { head: { sha: 'HEAD' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+  });
+  record('workflow-missing-review-actor-no-label-writes',
+    r.err === null && r.calls.add === 0 && r.calls.remove === 0 && r.calls.create === 0 && r.calls.pullsGet === 0,
+    'add=' + r.calls.add + ' remove=' + r.calls.remove + ' create=' + r.calls.create + ' pullsGet=' + r.calls.pullsGet);
+}
+// 11. 受信 bot 顶层评论唤醒（type=Bot + 派生登录名命中）→ 不早退，进入求值。
+{
+  const r = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+  });
+  record('workflow-trusted-bot-comment-wake-proceeds', r.err === null && r.calls.pullsGet > 0 && r.calls.add > 0,
+    'pullsGet=' + r.calls.pullsGet + ' add=' + r.calls.add);
+}
+// 12. 非受信顶层评论（任意 bot 登录名未命中派生集合）→ 唤醒闸 fail-closed 早退，零标签变更。
+{
+  const r = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { comment: { user: { type: 'Bot', login: 'evil-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+  });
+  record('workflow-untrusted-bot-comment-wake-denied',
+    r.err === null && r.calls.add === 0 && r.calls.pullsGet === 0,
+    'add=' + r.calls.add + ' pullsGet=' + r.calls.pullsGet);
+}
+
+// 13. PR8 真实形态（EXPECTED_BOTS='coderabbit,kilocode'，coderabbit 本轮零载体，kilocode COMMENTED）：
+//     合法终态=barrier 等待分支——清理非裁决 stale 标签 + 载体缺失诊断，verdict 标签不落地。
+{
+  const r = await barrierCase({
+    expectedBots: 'coderabbit,kilocode',
+    reviews: [COMMENTED],
+    issueLabels: ['ai-reviewed', 'review:approved'],
+  });
+  const diagNames = r.logs.some((l) => l.includes('No bindable carrier this round for: coderabbit'));
+  record('workflow-pr8-coderabbit-absent-waits-no-verdict',
+    r.err === null && r.calls.add === 0
+      && r.labelsRemoved.includes('ai-reviewed')
+      && !r.labelsRemoved.includes('review:approved')
+      && diagNames,
+    'add=' + r.calls.add + ' removed=' + JSON.stringify(r.labelsRemoved) + ' diag=' + diagNames);
+}
+
+// --- 突变验证：删除 actor 门后 harness 必须捕获（证明夹具对 gate-removal 敏感，非文本断言）---
+{
+  // 从提取文本中移除 pull_request_review actor 门（F2 门）的整块条件（gate-removal 变异）。
+  const actorGate = "if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot')";
+  if (!text.includes(actorGate)) { check('workflow-actor-gate-present-for-mutation', false, 'actor gate 未在场'); }
+  else {
+    // 突变体：actor 门条件恒假（等价于删除门）。human actor 事件将不再早退，深入求值并写标签。
+    const src = extractSyncLabelsScript(text).replace(
+      "if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot')",
+      "if (false)");
+    const r = await runWorkflow({
+      eventName: 'pull_request_review',
+      payload: { review: { user: { type: 'User' } }, pull_request: { head: { sha: 'HEAD' } } },
+      env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+      headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+      scriptSrc: src,
+    });
+    // 契约（突变验证）：human actor 在 actor 门被移除后，脚本不再早退——它会把 human 当作合法
+    //   actor 继续求值并在有载体时写标签；这正是该门必须存在的反证。若夹具对 mutation 不敏感
+    //   （add 仍为 0），则 harness 失效（假绿风险）。
+    record('workflow-harness-catches-actor-gate-removal',
+      r.err === null && r.calls.add > 0,
+      'add=' + r.calls.add + ' err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+  }
+}
+
+console.log(behaviorFailures === 0 ? 'BOT-LABELER-SELFTEST ALL OK' : 'BOT-LABELER-SELFTEST FAILURES=' + behaviorFailures);
+process.exit(behaviorFailures === 0 ? 0 : 1);

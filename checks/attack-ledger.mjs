@@ -563,6 +563,40 @@ export function isPlanFilename(f) {
   return !companion.test(rest);
 }
 
+export function testPathOutsideRoot(root, candidate) {
+  const rel = path.relative(root, candidate);
+  if (path.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + path.sep)) return true;
+  let realRoot;
+  try { realRoot = fs.realpathSync(root); }
+  catch { return true; } // root 自身不可解析 → fail-closed 判越界
+  // 物理收容判定统一走 path.relative：realRoot 为文件系统根（'/' 或 'C:\'）时
+  //   startsWith(realRoot + sep) 会漏判，relative 语义在根上仍正确。
+  const contained = (real) => {
+    const r = path.relative(realRoot, real);
+    return r === '' || (!path.isAbsolute(r) && r !== '..' && !r.startsWith('..' + path.sep));
+  };
+  let realCandidate;
+  try { realCandidate = fs.realpathSync(candidate); }
+  catch (e) {
+    if (!(e && e.code === 'ENOENT')) throw e;
+    // candidate 缺失（ENOENT）：逐级上溯最近已存在祖先，按其实路径判定收容。
+    //   缺失后代可能位于「词法在根内、物理在根外」的 symlink 之下——直接 return false 会 fail-open。
+    let cur = path.resolve(candidate);
+    for (;;) {
+      const parent = path.dirname(cur);
+      if (parent === cur) return true; // 上溯至文件系统根仍无已存在祖先 → fail-closed
+      let realAncestor;
+      try { realAncestor = fs.realpathSync(parent); }
+      catch (e2) {
+        if (e2 && e2.code === 'ENOENT') { cur = parent; continue; }
+        throw e2;
+      }
+      return !contained(realAncestor);
+    }
+  }
+  return !contained(realCandidate);
+}
+
 // latest-unclosed-exclude-gate：--latest 选择域的闭环判据。与审计判定同源——复用 sectionBody 的
 //   围栏外台账节判定，选择视图与审计视图不得分叉。缺「## 攻击面台账」节（围栏外）的计划视为
 //   未闭环工作内存产物，不进入 --latest 审计选择域；显式 --plan 模式不受影响。
@@ -731,10 +765,17 @@ if (isMain) {
   }
   if (!planPath) { console.log('用法：node checks/attack-ledger.mjs --plan <plan.md> [--impl <f>] [--test <f>] [--report <f>] 或 --latest'); process.exit(2); }
   const missingDeclared = [];
+  const outsideRoot = [];
   const seenMissing = new Set();
+  const seenOutside = new Set();
   const readOpt = (p) => {
     const one = (x) => {
       if (!x) return null;
+      if (testPathOutsideRoot(root, x)) {
+        const rel = path.relative(root, x);
+        if (!seenOutside.has(rel)) { seenOutside.add(rel); outsideRoot.push(rel); }
+        return null;
+      }
       try { return fs.readFileSync(x, 'utf8'); }
       catch (e) {
         if (e && e.code === 'ENOENT') {
@@ -760,6 +801,10 @@ if (isMain) {
   // r1 E11：声明但未落盘的执法/测试文件（--latest 选取时 Files 节声明 Create 路径尚未写入）
   //   以结构化违规 loud 报缺，不再以裸 ENOENT 崩溃审计链（报告在场是 GO 前置闸行为不变）。
   for (const rel of missingDeclared) violations.push({ msg: (latestMode ? '--latest' : '--plan') + ' 声明的执法/测试/报告文件缺失，fail-closed 不静默跳过：' + rel });
+  // testpath-root-containment：声明测试路径词法/物理越出仓库根时，读前拦截并独立上报（与缺失通道
+  //   区分：越界条目不产生 ENOENT 读尝试，不产生 missingDeclared）。物理层以 realpath 覆盖 symlink
+  //   逃逸（词法在根内、物理在根外）；realpath ENOENT 视为「路径合法但不存在」，回落缺失通道。
+  for (const rel of outsideRoot) violations.push({ msg: 'testpath-root-containment 越界声明测试路径，读前拦截（outside-root，fail-closed）：' + rel });
   if (latestMode && !reportPath && violations.length === 0) {
     const isSec = enforcementSignals(planTextFull).enforcement;
     if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无影子报告（报告在场是 GO 前置）' });

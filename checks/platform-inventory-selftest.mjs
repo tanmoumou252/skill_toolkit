@@ -139,5 +139,19 @@ function mkPlat(r) {
     } finally { fs.rmSync(tmpEq, { recursive: true, force: true }); }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+// —— 测试 e：cliOutDirSymlinkFree 仅 ENOENT 放行，其余 lstat 错误 fail-closed ——
+// monkeypatch 注入矩阵，finally 保证恢复真实 fs.lstatSync。
+{
+  const original = fs.lstatSync;
+  try {
+    fs.lstatSync = (p, ...args) => {
+      if (p === path.join(SPEC_ROOT, '.kilo')) throw Object.assign(new Error('EACCES injected'), { code: 'EACCES' });
+      return original(p, ...args);
+    };
+    let threw = false;
+    try { inv.cliOutDirSymlinkFree(SPEC_ROOT); } catch (e) { threw = e.code === 'EACCES'; }
+    check('inv-cli-outdir-lstat-errors-fail-closed', threw);
+  } finally { fs.lstatSync = original; }
+}
 
 process.exit(failures === 0 ? 0 : 1);

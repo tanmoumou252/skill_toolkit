@@ -102,8 +102,21 @@ jobs:
             //   GITHUB_TOKEN 被强制只读而无法写标签的缺口。绑定发生在 2. 轮次校验取得
             //   currentHeadSha 之后；栅栏仍以 head-matching authenticated review 为完成判据，
             //   评论唤醒无法绕过评审证据。唤醒限官方 Bot 作者，阻断任意人类评论触发写标签。
+            // 官方 Bot 登录名单一事实源：从 BOT_DEFINITIONS 派生（唯一登记处，不再硬编码）。
+            // 定义须在评论唤醒门之前（const 不提升，重复定义/ TDZ 约束）。
+            // logins = 官方 GitHub App 机器人账号（type 恒为 Bot）的逐字登录名，为 4.2/4.3
+            // 审查/评论文本采集的精确身份闸；pattern 仅用于 check run 维度的名称匹配。
+            // appId = 官方 App 的公开数字标识，故意硬编码为常量：它是防伪闸（同名伪造 Check Run
+            // 按 app.id 不符一律排除）的校验锚。改存仓库变量会引入可被篡改的注入点，反而削弱
+            // 防伪；App ID 本身是公开信息，无保密需求。若某 bot 更换 App 注册，需同步更新此
+            // 字面量并在变更记录中登记。
+            const BOT_DEFINITIONS = {
+              'coderabbit': { pattern: /coderabbit/i, logins: ['coderabbitai[bot]'], appId: 347564 },
+              'kilocode': { pattern: /kilo[-_\s]?code|^kilo$/i, logins: ['kilo-code-bot[bot]'], appId: 2193792 }
+            };
             const isCommentWake = context.eventName === 'issue_comment';
-            const trustedCommentLogins = new Set(['coderabbitai[bot]', 'kilo-code-bot[bot]']);
+            const trustedCommentLogins = new Set(Object.values(BOT_DEFINITIONS).flatMap(d => d.logins || []));
+            // 空/缺 logins 定义 fail-closed：派生集合不含该 login（不放行未知 actor）。
             if (isCommentWake &&
                 (context.payload.comment?.user?.type !== 'Bot' ||
                  !trustedCommentLogins.has(context.payload.comment?.user?.login))) {
@@ -233,17 +246,6 @@ jobs:
             // ========================================================
             // 3. 栅栏汇合（按 EXPECTED_BOTS 严格等待，彻底根治死锁与抢跑）
             // ========================================================
-            // logins = 官方 GitHub App 机器人账号（type 恒为 Bot）的逐字登录名，为 4.2/4.3
-            // 审查/评论文本采集的精确身份闸；pattern 仅用于 check run 维度的名称匹配。
-            // appId = 官方 App 的公开数字标识，故意硬编码为常量：它是防伪闸（同名伪造 Check Run
-            // 按 app.id 不符一律排除）的校验锚。改存仓库变量会引入可被篡改的注入点，反而削弱
-            // 防伪；App ID 本身是公开信息，无保密需求。若某 bot 更换 App 注册，需同步更新此
-            // 字面量并在变更记录中登记。
-            const BOT_DEFINITIONS = {
-              'coderabbit': { pattern: /coderabbit/i, logins: ['coderabbitai[bot]'], appId: 347564 },
-              'kilocode': { pattern: /kilo[-_\s]?code|^kilo$/i, logins: ['kilo-code-bot[bot]'], appId: 2193792 }
-            };
-
             // 解析当前项目声明等待的 Bot
             const expectedKeys = (process.env.EXPECTED_BOTS || 'coderabbit')
               .split(',')
@@ -259,9 +261,12 @@ jobs:
               per_page: 100
             });
 
-            // 栅栏口径（本轮重设计）：完成判据 = 官方 bot 在 currentHeadSha 上的
-            // authenticated Review 存在（login 逐字 + type=Bot），check run 仅作补充
-            // 文本/状态源，不再作为完成前置（CodeRabbit 无 check run，旧口径死等）。
+            // 栅栏口径（本轮重设计 + PR8 载体实测修订）：完成信号 =「已认证配置 bot + 当前 head
+            // 可绑定载体」，二者取一——① head 绑定的 authenticated review（login 逐字 + type=Bot，
+            // 任意非 DISMISSED state，含 COMMENTED；PR8 实测两 bot 的 review 形态为 COMMENTED，
+            // 旧终态门 APPROVED/CHANGES_REQUESTED 使合法载体被拒、barrier 恒假）；② head 绑定且
+            // app.id 防伪通过的 completed check run。无 commit_id 绑定的顶层 comment 仅可唤醒求值，
+            // 永不作完成/评分证据（见 4.3 fail-closed 立场）。
             const headReviews = (await github.paginate(github.rest.pulls.listReviews, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -274,15 +279,6 @@ jobs:
 
             for (const key of expectedKeys) {
               const def = BOT_DEFINITIONS[key];
-              const hasHeadReview = headReviews.some(r =>
-                r.user?.type === 'Bot' &&
-                (def.logins || []).includes(r.user.login) &&
-                ['APPROVED', 'CHANGES_REQUESTED'].includes(r.state));
-              if (!hasHeadReview) {
-                console.log(`[Waiting] Configured bot '${key}' has no review on head ${currentHeadSha.slice(0, 7)} yet.`);
-                allReady = false;
-                break;
-              }
               const runs = checkRuns.filter(r => {
                 const slugMatch = def.pattern.test(r.name) || def.pattern.test(r.app?.slug || '');
                 if (!slugMatch) return false;
@@ -294,11 +290,30 @@ jobs:
                 }
                 return true;
               });
+              const hasHeadReview = headReviews.some(r =>
+                r.user?.type === 'Bot' &&
+                (def.logins || []).includes(r.user.login));
+              // 双载体取一：head 绑定非 DISMISSED review，或 app.id 防伪通过的 completed check run。
+              if (!hasHeadReview && !runs.some(r => r.status === 'completed')) {
+                console.log(`[Waiting] Configured bot '${key}' has no bindable carrier (head-bound review or completed check run) on head ${currentHeadSha.slice(0, 7)} yet.`);
+                allReady = false;
+                break;
+              }
               targetRuns.push(...runs);
             }
 
             if (!allReady) {
               console.log('Barrier not reached. Waiting for all expected checks to finish.');
+              // 系统性载体缺失必须可观测而非静默死等（完成判据契约 4）：逐 expected bot 复核双载体，
+              //   任一 bot 本轮无任何可绑定载体即显式记录；等待分支保留裁决标签的既有行为零变化。
+              const missingCarrierKeys = expectedKeys.filter(key => {
+                const def = BOT_DEFINITIONS[key];
+                return !headReviews.some(r => r.user?.type === 'Bot' && (def.logins || []).includes(r.user.login))
+                  && !checkRuns.some(r => (def.pattern.test(r.name) || def.pattern.test(r.app?.slug || '')) && r.status === 'completed' && typeof r.app?.id === 'number' && r.app.id === def.appId);
+              });
+              if (missingCarrierKeys.length > 0) {
+                console.log(`[Barrier] No bindable carrier this round for: ${missingCarrierKeys.join(', ')} (no commit-bound review or authenticated completed check run).`);
+              }
 
               // Remove stale labels from previous round while new checks are pending
               const currentIssueLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {

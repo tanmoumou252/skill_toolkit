@@ -432,7 +432,10 @@ export function cliOutDirSymlinkFree(root) {
   for (const seg of ['.kilo', 'plans']) {
     cur = path.join(cur, seg);
     let st = null;
-    try { st = fs.lstatSync(cur); } catch { return true; }
+    try { st = fs.lstatSync(cur); } catch (e) {
+      if (e && e.code === 'ENOENT') return true;
+      throw e;
+    }
     if (st.isSymbolicLink()) return false;
   }
   return true;

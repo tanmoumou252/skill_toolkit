@@ -3,8 +3,11 @@
 //   未识别 Files 标题的执法检测（loose Files heading，与 ledger「信任根入口 / 视图-执行语义分叉」咬合）、
 //   --latest 最新执法候选选择（latest-unclosed-exclude-gate 互补面）、装载故障退出码。
 // 断言名与主计划 attack-ledger-selftest 台账登记同源；红灯阶段（未落 R1/R3）即真红，不得静默通过。
-import { isPlanFilename, hasLedgerSection, enforcementSignals, pickLatestEligible, latestFaultGate } from './attack-ledger.mjs';
+import { isPlanFilename, hasLedgerSection, enforcementSignals, pickLatestEligible, latestFaultGate, testPathOutsideRoot } from './attack-ledger.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 let failures = 0;
@@ -241,6 +244,91 @@ check('assert-latest-fault-gate-exit2',
     hasMatchAll && hasDirAnchor && hasNoSpaceClass && hasSetDedup,
     `matchAll=${hasMatchAll} dirAnchor=${hasDirAnchor} noSpaceClass=${hasNoSpaceClass} setDedup=${hasSetDedup}`);
 }
+
+// —— 10. testpath-root-containment：真实 CLI 读前拒绝仓库外声明测试路径 ——
+// 期望值由契约推导（Finding 2：越界条目在任何 readFileSync 之前拦截并 loud 上报，且不产 ENOENT 读尝试）。
+// 走真实 CLI 入口（--plan --test <越界>），不复制谓词做伪测试。
+// 夹具根外文件被投毒为含 check( 断言：若被读取，testText 即命中该断言名使台账对账误绿；
+// 契约要求该文件永不到达 readFileSync，故越界路径必被拦截、绝不消费其内容。
+{
+  const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  // 与 attack-ledger CLI 的 root 同源：CLI 用 path.resolve(here,'..')（checks 的上级）。
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
+  const tmpPlan = path.join(cliRoot, '.kilo', 'plans', '.containment-selftest-plan.md');
+  // 真实落在仓库根之外（cliRoot 的兄弟目录），词法 rel 为 ..\... 触发 containment。
+  const outsideDir = path.resolve(cliRoot, '..', '.containment-outside');
+  const outside = path.join(outsideDir, 'evil-selftest.mjs');
+  fs.mkdirSync(outsideDir, { recursive: true });
+  fs.writeFileSync(outside, "check('poisoned-not-read', false);\n", 'utf8');
+  fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
+  try {
+    const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--test', outside], { encoding: 'utf8' });
+    const out = String(r.stdout || '') + String(r.stderr || '');
+    // 真红判据：CLI 必须 (a) 非零退出（fail-closed）、(b) loud 上报 outside-root containment、
+    // (c) 不产生 ENOENT/missingDeclared 读尝试（两条失败通道可区分）。
+    const reported = /outside-root|root-containment|越界/.test(out);
+    const exitRed = r.status !== 0;
+    const noEnoentForOutside = !new RegExp('missingDeclared.*' + 'evil-selftest', 's').test(out)
+      && !/声明的执法\/测试\/报告文件缺失.*evil-selftest/.test(out);
+    check('ledger-testpath-outside-root-rejected', reported && exitRed && noEnoentForOutside,
+      'status=' + r.status + ' reported=' + reported + ' noEnoent=' + noEnoentForOutside);
+  } finally {
+    fs.rmSync(tmpPlan, { force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+}
+
+// —— 10c. dangling/missing descendant under symlink to outside must remain outside-root ——
+// realpath(candidate) is ENOENT, but nearest existing ancestor resolves outside the repository.
+// This is the gap: returning false on ENOENT currently allows the path into readOpt's file-read attempt.
+{
+  const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-dangling-link-'));
+  const outside = path.join(tmp, 'outside');
+  const outsideLink = path.join(cliRoot, '.kilo', 'plans', '.containment-outside-link');
+  fs.mkdirSync(outside);
+  let linked = false;
+  try {
+    fs.symlinkSync(outside, outsideLink, 'junction');
+    linked = true;
+  } catch {
+    check('ledger-testpath-missing-under-outside-symlink-rejected', true, 'SKIP symlink/junction unavailable');
+  }
+  if (linked) {
+    const missingOutside = path.join(outsideLink, 'missing', 'evil-selftest.mjs');
+    const isOutside = testPathOutsideRoot(cliRoot, missingOutside);
+    check('ledger-testpath-missing-under-outside-symlink-rejected', isOutside,
+      'expected outside=true for dangling descendant, got ' + isOutside);
+  }
+  try {
+    if (linked) fs.rmSync(outsideLink, { force: true });
+  } finally {
+    fs.rmSync(tmp, { force: true, recursive: true });
+  }
+}
+
+// —— 10b. 合法 `..valid` 段名不得被过拦（误拒修复契约）——
+// rel='..valid\selftest.mjs' 非上跳（.. 后紧跟非 sep 字符），须放行进入既有缺失/读取通道，
+// 不得被判 outside-root。走真实 CLI：--plan --test <根内 ..valid 缺失路径>。
+{
+  const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
+  const tmpPlan = path.join(cliRoot, '.kilo', 'plans', '.containment-selftest-plan2.md');
+  const legalMissing = path.join(cliRoot, '.kilo', 'plans', '..valid', 'selftest.mjs');
+  fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
+  try {
+    const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--test', legalMissing], { encoding: 'utf8' });
+    const out = String(r.stdout || '') + String(r.stderr || '');
+    // 该路径在根内但缺失 → 走 missingDeclared（合法缺失通道），绝不被判 outside-root。
+    const misJudged = /outside-root|root-containment|越界/.test(out);
+    check('ledger-testpath-dotdot-valid-name-not-overrejected', !misJudged,
+      '被误判越界=' + misJudged);
+  } finally {
+    fs.rmSync(tmpPlan, { force: true });
+  }
+}
+
 
 console.log(failures === 0 ? 'ATTACK-LEDGER-SELFTEST OK' : 'ATTACK-LEDGER-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
