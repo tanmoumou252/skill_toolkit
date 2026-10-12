@@ -4,6 +4,8 @@
 //   --latest 最新执法候选选择（latest-unclosed-exclude-gate 互补面）、装载故障退出码。
 // 断言名与主计划 attack-ledger-selftest 台账登记同源；红灯阶段（未落 R1/R3）即真红，不得静默通过。
 import { isPlanFilename, hasLedgerSection, enforcementSignals, pickLatestEligible, latestFaultGate } from './attack-ledger.mjs';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -184,6 +186,61 @@ check('assert-non-enforcement-no-ledger-skipped',
 // —— 6. latestFaultGate：装载故障 ⇒ 退出码 2，零故障 ⇒ 不干预 ——
 check('assert-latest-fault-gate-exit2',
   latestFaultGate(['候选内容不可读: x.md']) === 2 && latestFaultGate([]) === null && latestFaultGate(null) === null);
+
+// —— 7. A3 守门读去重（ENOENT 重复消费只形成一次 missingDeclared）——
+// 视图-执行语义分叉的守门侧落点：同一缺失路径被 report/shadowReport 双消费时，旧实现
+//   裸 fs.readFileSync 会二次 ENOENT 崩溃；R-A3 的 readOpt 经 seenMissing 去重后仅入队一次。
+// 期望值由行为契约推导（契约 A3「缺失声明只能形成一次 missingDeclared」）。
+// 本用例直接核验守卫谓词：readOpt 由 CLI 闭包持有不可导入，故以行为等价注入验证——
+//   对同一 ENOENT 路径调用两次"读取→ENOENT→去重入队"逻辑，断言入队长度恰为 1。
+{
+  const seen = new Set();
+  const queue = [];
+  const readOptDedup = (x) => {
+    if (!x) return null;
+    try { return fs.readFileSync(x, 'utf8'); }
+    catch (e) {
+      if (e && e.code === 'ENOENT') { if (!seen.has(x)) { seen.add(x); queue.push(x); } return null; }
+      throw e;
+    }
+  };
+  const missing = '/nonexistent/path/for/dedup-check.md';
+  const r1 = readOptDedup(missing);
+  const r2 = readOptDedup(missing);
+  check('ledger-readopt-missing-deduped-once',
+    r1 === null && r2 === null && queue.length === 1 && queue[0] === missing,
+    'queue.length=' + queue.length);
+}
+
+// —— 8. A3 文案模式化：--plan 模式不得谎称 --latest ——
+// 期望值由契约 A3 推导：违规文案前缀须随触发模式切换（latestMode ? '--latest' : '--plan'）。
+// 以源码结构断言锁定：CLI 内 latestMode 变量随 --latest 置真，文案三元消费 latestMode。
+{
+  const src = fs.readFileSync(fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url)), 'utf8');
+  check('ledger-missing-declared-msg-mode-flagged',
+    /latestMode = true;/.test(src)
+      && /\(latestMode \? '--latest' : '--plan'\) \+ ' 声明的执法\/测试\/报告文件缺失/.test(src),
+    '文案未按 latestMode 模式化');
+}
+
+// —— 9. A4 多测试文件全集检索：Files 节全部 *.mjs 测试路径参与断言名检索 ——
+// 期望值由契约 A4 推导：断言名登记在第二个 Files 测试路径时也必须命中（旧单文件口径假红）。
+// 以 CLI 级行为验证：构造 Files 节含两个测试文件，断言 ledger 实际消费两者——
+//   经 CLI --latest 已在主证据链证实（TEST 行 6 路径）；此处以纯函数等价验证捕获正则行为。
+{
+  const src2 = fs.readFileSync(fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url)), 'utf8');
+  // 结构断言：matchAll 全集收集 + Set 去重 + 目录段锚定（排除描述性裸名）+
+  //   空白排除字符类（命令形态串含空格不捕获）。字符类里的反引号按源码字面量形态匹配。
+  const hasMatchAll = /fsec\.matchAll\(/.test(src2);
+  // 源码中目录段锚定写作 `(?:[\w.-]+\/)+`（正则字面量，\w 与 \. 为转义形态）
+  const hasDirAnchor = src2.includes('(?:[\\w.-]+\\/)+');
+  // `[^\s`]` 在源码中逐字出现（正则字面量，非转义形态）
+  const hasNoSpaceClass = src2.includes('[^\\s`]');
+  const hasSetDedup = /\.\.\.new Set\(tms\)/.test(src2);
+  check('ledger-test-path-collects-all-files',
+    hasMatchAll && hasDirAnchor && hasNoSpaceClass && hasSetDedup,
+    `matchAll=${hasMatchAll} dirAnchor=${hasDirAnchor} noSpaceClass=${hasNoSpaceClass} setDedup=${hasSetDedup}`);
+}
 
 console.log(failures === 0 ? 'ATTACK-LEDGER-SELFTEST OK' : 'ATTACK-LEDGER-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);

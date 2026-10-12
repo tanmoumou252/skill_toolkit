@@ -440,17 +440,21 @@ export function cliOutDirSymlinkFree(root) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const root = process.cwd();
-  const argIdx = (name) => { const i = process.argv.indexOf(name); return i > -1 ? i + 1 : -1; };
-  const outIdx = argIdx('--out');
-  const outArg = outIdx > -1 ? process.argv[outIdx] : null;
+  const outTokens = process.argv
+    .map((token, i) => ({ token, i }))
+    .filter(({ token }) => token === '--out' || token.startsWith('--out='));
   let outBase = new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-tri-platform-inventory';
-  if (outIdx > -1) {
-    // 闸门标识 out-undefined-guard（视图-执行语义分叉收容）：旧口径 `arg('--out')` 对「末位 token」
-    //   返回 undefined，`undefined !== null` 为真、`outBaseRejected(undefined)` 因 String(undefined)
-    //   ="undefined" 判假，遂 outBase 静默落为 "undefined" 并写出 undefined.json；本闸区分「旗标在场
-    //   但缺值（下一 token 缺失或为另一选项 --*）」与「合法值」，前者一律 exit 2 fail-loud，杜绝 undefined.*。
-    if (outArg === undefined || outArg.startsWith('--')) {
-      console.log('PLATFORM-INVENTORY FAIL --out 缺少值（下一 token 缺失或为另一选项）: ' + String(outArg));
+  if (outTokens.length > 1) {
+    console.log('PLATFORM-INVENTORY FAIL 重复 --out 参数：拒绝多义输入，不采用“最后一个优先”隐式策略');
+    process.exit(2);
+  }
+  if (outTokens.length === 1) {
+    const { token, i } = outTokens[0];
+    const outArg = token === '--out' ? process.argv[i + 1] : token.slice('--out='.length);
+    // D1：旗标缺值、下一 token 为另一选项、显式空串与等号空值均 fail-loud；避免 undefined.json、.json
+    //   或静默回退默认 basename。`--out=foo` 与 `--out foo` 进入同一 outBase 收容契约。
+    if (outArg === undefined || outArg.startsWith('--') || String(outArg).trim() === '') {
+      console.log('PLATFORM-INVENTORY FAIL --out 缺少值或为空（支持 --out value / --out=value）: ' + String(outArg));
       process.exit(2);
     }
     if (outBaseRejected(outArg)) {

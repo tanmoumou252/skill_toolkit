@@ -103,8 +103,15 @@ jobs:
             //   currentHeadSha 之后；栅栏仍以 head-matching authenticated review 为完成判据，
             //   评论唤醒无法绕过评审证据。唤醒限官方 Bot 作者，阻断任意人类评论触发写标签。
             const isCommentWake = context.eventName === 'issue_comment';
-            if (isCommentWake && context.payload.comment?.user?.type !== 'Bot') {
-              console.log('[PR Check] Non-bot comment; skipping trusted-writer wake.');
+            const trustedCommentLogins = new Set(['coderabbitai[bot]', 'kilo-code-bot[bot]']);
+            if (isCommentWake &&
+                (context.payload.comment?.user?.type !== 'Bot' ||
+                 !trustedCommentLogins.has(context.payload.comment?.user?.login))) {
+              console.log('[PR Check] Untrusted comment author; skipping trusted-writer wake.');
+              return;
+            }
+            if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot') {
+              console.log('[PR Check] Non-bot review actor; skipping label sync.');
               return;
             }
             let eventHeadSha = (context.eventName === 'pull_request_target' ||
@@ -268,7 +275,9 @@ jobs:
             for (const key of expectedKeys) {
               const def = BOT_DEFINITIONS[key];
               const hasHeadReview = headReviews.some(r =>
-                r.user?.type === 'Bot' && (def.logins || []).includes(r.user.login));
+                r.user?.type === 'Bot' &&
+                (def.logins || []).includes(r.user.login) &&
+                ['APPROVED', 'CHANGES_REQUESTED'].includes(r.state));
               if (!hasHeadReview) {
                 console.log(`[Waiting] Configured bot '${key}' has no review on head ${currentHeadSha.slice(0, 7)} yet.`);
                 allReady = false;
@@ -279,7 +288,10 @@ jobs:
                 if (!slugMatch) return false;
                 // C2：App ID 防伪——同名伪造 Check Run（非对应官方 App）一律排除；
                 //   app.id 缺失/非数字时按不可信处理（fail-closed，不再退回 slug 匹配）。
-                if (typeof r.app?.id !== 'number' || r.app.id !== def.appId) return false;
+                if (typeof r.app?.id !== 'number' || r.app.id !== def.appId) {
+                  console.log(`[Barrier] Ignoring untrusted check run name=${r.name} app=${r.app?.name || 'unknown'} slug=${r.app?.slug || 'unknown'} status=${r.status || 'unknown'} app.id=${String(r.app?.id)}`);
+                  return false;
+                }
                 return true;
               });
               targetRuns.push(...runs);
@@ -298,6 +310,8 @@ jobs:
               const existing = new Set(currentIssueLabels.map(l => l.name));
 
               for (const l of Object.keys(SYSTEM_LABELS)) {
+                // F1：barrier 未完成不得删除当前裁决组（review:/risk:），仅清非裁决 stale 标签。
+                if ((l.startsWith('review:') || l.startsWith('risk:'))) continue;
                 if (existing.has(l)) {
                   // 逐个删除前复核 head：barrier 清理同样不得在新 head 生效期间删旧轮标签。
                   if (!(await assertCurrentHead())) return;
@@ -320,6 +334,11 @@ jobs:
 
             console.log(`>>> All configured bots (${expectedKeys.join(', ')}) completed for round ${currentHeadSha.slice(0, 7)}!`);
 
+            if (targetRuns.some(run => run.status !== 'completed')) {
+              console.log('Barrier not reached. Some configured check runs are not completed; waiting for the check_run: completed event to re-evaluate.');
+              return;
+            }
+
             // ========================================================
             // 4. 解析与分值评定（对齐全量数据源与真实评级字段）
             // ========================================================
@@ -336,7 +355,7 @@ jobs:
               if (/kilo/i.test(run.name) || /kilo/i.test(run.app?.slug || '')) {
                 kiloCodeText += `\n${textBlob}`;
               }
-              if (run.conclusion !== 'success' && run.conclusion !== 'neutral') {
+              if (run.conclusion !== 'success' && run.conclusion !== 'neutral' && run.conclusion !== 'skipped') {
                 hasCheckFailure = true;
               }
             }
@@ -435,7 +454,9 @@ jobs:
               toAdd.add('review:needs-work');
               console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Partial ratings or failed check / CHANGES_REQUESTED. Marking review:needs-work.`);
             } else {
-              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Neither bot produced a parseable rating. Clearing review labels.`);
+              // 无可解析评级不是“无 verdict”：保留/新增显式 needs-work，禁止静默清空旧裁决。
+              toAdd.add('review:needs-work');
+              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => No parseable rating; preserving an explicit review:needs-work verdict.`);
             }
 
             // ========================================================
@@ -454,7 +475,8 @@ jobs:
             });
             const existing = new Set(currentIssueLabels.map(l => l.name));
 
-            // 移除同组历史标签（若未解析出评级，则清空所有已存在的 ai-reviewed、risk 与 status 标签）
+            // 仅在 toAdd 有明确 verdict 时移除未被保留的同组历史标签；无评级分支已加入 review:needs-work，
+            //   barrier 未完成分支则在前面跳过 review:/risk: 组，避免单条评论造成裁决标签 DoS。
             // 清理前再次复核 head：初次复核通过后到实际删标签之间 head 可能被 push 更新，
             // 旧 job 不得在新 head 生效期间删除当轮标签（闭合清洗窗口的 TOCTOU）。
             if (!(await assertCurrentHead())) return;

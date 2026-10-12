@@ -95,4 +95,49 @@ function mkPlat(r) {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
+// —— 测试 c：D1 新增三形态（空串 / 等号空值 / 重复旗标）——
+// 期望值溯源（行为契约 D1）：显式空串 `--out ''`、等号空值 `--out=`、重复 `--out` 均 exit 2
+//   且无 `.json` 空 basename 产物；`--out=foo` 与 `--out foo` 等价接受（等号式解析补全）。
+//   旧实现仅判 `outArg === undefined || outArg.startsWith('--')`，空串与等号空值会静默落默认
+//   basename 或写出 `.json` ⇒ 本组用例在旧实现上 Red。
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-out-d1-'));
+  try {
+    mkPlat(tmp);
+    fs.mkdirSync(path.join(tmp, '.kilo'));
+    const plansDir = path.join(tmp, '.kilo', 'plans');
+    const noEmptyBase = () => !fs.existsSync(path.join(plansDir, '.json'));
+    // 攻击样本 D1-a：显式空串 --out '' → exit 2，无 .json
+    const rEmpty = spawnSync(process.execPath, [cli, '--out', ''], { cwd: tmp, encoding: 'utf8' });
+    const outEmpty = String(rEmpty.stdout || '') + String(rEmpty.stderr || '');
+    check('inv-out-empty-string-rejected',
+      rEmpty.status === 2 && noEmptyBase() && /--out 缺少值或为空/.test(outEmpty),
+      'status=' + rEmpty.status + ' .json=' + !noEmptyBase());
+    // 攻击样本 D1-b：等号空值 --out= → exit 2，无 .json
+    const rEq = spawnSync(process.execPath, [cli, '--out='], { cwd: tmp, encoding: 'utf8' });
+    const outEq = String(rEq.stdout || '') + String(rEq.stderr || '');
+    check('inv-out-equals-empty-rejected',
+      rEq.status === 2 && noEmptyBase() && /--out 缺少值或为空/.test(outEq),
+      'status=' + rEq.status + ' .json=' + !noEmptyBase());
+    // 攻击样本 D1-c：重复 --out → exit 2（拒绝多义输入，不采用"最后一个优先"）
+    const rDup = spawnSync(process.execPath, [cli, '--out', 'a', '--out', 'b'], { cwd: tmp, encoding: 'utf8' });
+    const outDup = String(rDup.stdout || '') + String(rDup.stderr || '');
+    check('inv-out-duplicate-rejected',
+      rDup.status === 2 && /重复 --out 参数/.test(outDup),
+      'status=' + rDup.status);
+    // 对照样本 D1-d：等号式合法值 --out=foo → exit 0，与 --out foo 等价（等号式解析补全）
+    const tmpEq = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-out-eq-'));
+    try {
+      mkPlat(tmpEq);
+      fs.mkdirSync(path.join(tmpEq, '.kilo'));
+      const rEqOk = spawnSync(process.execPath, [cli, '--out=20261011-eq'], { cwd: tmpEq, encoding: 'utf8' });
+      const outEqOk = String(rEqOk.stdout || '');
+      check('inv-out-equals-valid-accepted',
+        rEqOk.status === 0 && outEqOk.includes('PLATFORM-INVENTORY files=3')
+          && fs.existsSync(path.join(tmpEq, '.kilo', 'plans', '20261011-eq.json')),
+        'status=' + rEqOk.status);
+    } finally { fs.rmSync(tmpEq, { recursive: true, force: true }); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
 process.exit(failures === 0 ? 0 : 1);

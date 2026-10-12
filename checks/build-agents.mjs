@@ -15,7 +15,7 @@
 // 严禁 import child_process 等执行面；spec/manifest 内容仅作文本渲染。
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CLAUSES, PLATFORMS } from './registry.mjs';
 import { parseFrontmatter } from './invariants.mjs';
@@ -282,19 +282,42 @@ function isSymlinkNow(p) {
     throw e;
   }
 }
+// 保留同目录 temp+rename 事务；mode 从原目标 lstat 的 0o7777 位复制，临时文件完成写入后 best-effort chmod。
+// POSIX O_NOFOLLOW 复核：仅在目标已存在时以 O_RDONLY|O_NOFOLLOW 打开/关闭（无 O_TRUNC，不改旧内容）；
+//   ENOENT 表示创建新产物，继续；ELOOP/其它错误 fail-closed。win32 缺 O_NOFOLLOW 时跳过该额外打开，
+//   仍依赖换名前 lstat+rename；这个 lstat→rename 残窗无法由缺失的平台旗标消除。rename 本身替换末组件，
+//   不跟随被换入的最终软链，不触碰其 victim；注释不得再声称该平台有内核级拒跟随。
 export function writeFileAtomicNoFollow(root, p, text) {
   const dir = path.dirname(p);
-  const tmp = path.join(dir, '.' + path.basename(p) + '.' + process.pid + '.' + Date.now().toString(36) + '.tmp');
+  const tmp = path.join(dir, '.' + path.basename(p) + '.' + process.pid + '.' + Date.now().toString(36) + '.' + randomUUID() + '.tmp');
   let tmpFd = null;
   let moved = false;
+  let inheritedMode = null;
   try {
     assertProductDirWithinRoot(root, dir);
+    try {
+      const st = fs.lstatSync(p);
+      if (st.isSymbolicLink()) {
+        throw new Error('BUILD output-atomic-open-nofollow 拒绝：目标为既有符号链接（' + p + '），拒绝经链接换名');
+      }
+      inheritedMode = st.mode & 0o7777;
+    } catch (e) {
+      if (e && e.code !== 'ENOENT') throw e;
+    }
     if (isSymlinkNow(p)) {
       throw new Error('BUILD output-atomic-open-nofollow 拒绝：目标为既有符号链接（' + p + '），拒绝经链接换名');
     }
-    // 同目录临时件独占创建：O_EXCL 保证不覆盖既有件；平台带 O_NOFOLLOW 时一并拒符号链接跟随（纵深加固，
-    //   与 rename 前 isSymlinkNow 双闸），win32 端 O_NOFOLLOW 为 undefined → 位值 0，行为与 R3 恒等。
     const NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+    if (NOFOLLOW && fs.existsSync(p)) {
+      // 非截断只读探测：无 O_CREAT/O_TRUNC，仅取内核 ELOOP 拒跟随语义；ENOENT（探测窗口内目标消失）
+      //   回退创建路径，其它码一律 fail-closed。
+      try {
+        const targetFd = fs.openSync(p, fs.constants.O_RDONLY | NOFOLLOW);
+        fs.closeSync(targetFd);
+      } catch (e) {
+        if (e && e.code === 'ENOENT') { inheritedMode = null; /* 目标消失，走创建：不得继承已消失旧目标的 mode */ } else throw e;
+      }
+    }
     tmpFd = fs.openSync(tmp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | NOFOLLOW, 0o666);
     const buf = Buffer.from(text, 'utf8');
     let off = 0;
@@ -303,10 +326,12 @@ export function writeFileAtomicNoFollow(root, p, text) {
       if (n <= 0) throw new Error('BUILD output-atomic-open-nofollow 写入零进展（writeSync 返回 ' + n + '），拒绝死循环并以失败退出');
       off += n;
     }
+    if (inheritedMode !== null) {
+      try { fs.fchmodSync(tmpFd, inheritedMode); } catch { /* mode 继承尽力而为，不阻断安全换名 */ }
+    }
     fs.fsyncSync(tmpFd);
     fs.closeSync(tmpFd);
     tmpFd = null;
-    // 换名前复核：目标此刻仍不得为符号链接（rename 覆盖符号链接会替换链接本身而非其目标）。
     if (isSymlinkNow(p)) {
       throw new Error('BUILD output-atomic-open-nofollow 拒绝：换名前路径为符号链接（' + p + '），拒绝替换');
     }

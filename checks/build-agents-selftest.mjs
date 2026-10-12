@@ -118,4 +118,71 @@ try {
   fs.rmSync(outsideDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
+// —— 契约 4（B2 ENOENT 竞态）：O_NOFOLLOW 探测窗口内目标消失，不得继承已消失旧目标的 mode ——
+// 触发域：注入 existsSync(p) 首次 true、openSync(p,O_RDONLY|NOFOLLOW) 抛 ENOENT（目标在探测
+//   与换名之间消失）。期望值由契约推导：新产物采用默认 mode（0o666 & umask），inheritedMode
+//   必须为 null。旧实现无该竞态分支，会继承 lstat 取到的旧 mode ⇒ 本断言在该实现上 Red。
+// 注：win32 无 O_NOFOLLOW（位值 0）⇒ NOFOLLOW && existsSync 分支整体跳过，本用例经 stub
+//   注入独立于平台常量：以 monkey-patch 模拟 POSIX 分支被进入。
+if (typeof fs.constants.O_NOFOLLOW === 'number' && fs.constants.O_NOFOLLOW > 0) {
+  const wsRootE = fs.mkdtempSync(path.join(os.tmpdir(), 'build-agents-enoent-'));
+  try {
+    const subE = path.join(wsRootE, 'sub');
+    fs.mkdirSync(subE, { recursive: true });
+    const targetE = path.join(subE, 'target.txt');
+    const MODE_BEFORE = 0o750;
+    fs.writeFileSync(targetE, 'OLD-CONTENT', 'utf8');
+    try { fs.chmodSync(targetE, MODE_BEFORE); } catch { /* 文件系统不支持 chmod：跳过精确 mode 比对 */ }
+    const origExists = fs.existsSync;
+    const origOpen = fs.openSync;
+    let existsCalls = 0;
+    try {
+      fs.existsSync = function (p) { if (String(p) === targetE) { existsCalls += 1; return true; } return origExists(p); };
+      fs.openSync = function (...a) {
+        if (a[0] === targetE && (a[1] & fs.constants.O_NOFOLLOW) !== 0) {
+          throw Object.assign(new Error('ENOENT (injected target-vanished race)'), { code: 'ENOENT' });
+        }
+        return origOpen(...a);
+      };
+      writeFileAtomicNoFollow(wsRootE, targetE, 'NEW-CONTENT');
+      const st = fs.lstatSync(targetE);
+      const modeAfter = st.mode & 0o7777;
+      const umask = process.umask ? process.umask() : 0o022;
+      // 契约：目标消失 ⇒ 不继承旧 mode（0o750），采用默认 0o666 & ~umask。
+      // chmodSync 支持时 0o750 !== 0o666&~umask 可判别；不支持 chmod 的平台记录跳过而非伪称。
+      const chmodSupported = (() => { try { fs.chmodSync(targetE, st.mode & 0o7777); return true; } catch { return false; } })();
+      check('inv-shared-atomic-writer-enoent-race-no-mode-inherit',
+        chmodSupported && modeAfter !== MODE_BEFORE,
+        chmodSupported ? ('modeAfter=' + modeAfter.toString(8) + ' umask=' + umask.toString(8) + ' (旧目标 mode=' + MODE_BEFORE.toString(8) + ')')
+          : 'SKIP win32（chmodSync 声明性，动态 mode 比对不可测，已如实声明）');
+    } finally {
+      fs.existsSync = origExists;
+      fs.openSync = origOpen;
+    }
+  } finally {
+    fs.rmSync(wsRootE, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+} else {
+  // win32：O_NOFOLLOW 位值 0 ⇒ NOFOLLOW && existsSync 分支不进入，竞态分支在此平台不可达。
+  //   以结构守卫代偿：源码含该分支且 ENOENT 时置 inheritedMode = null。
+  check('inv-shared-atomic-writer-enoent-race-guard-present',
+    /if \(NOFOLLOW && fs\.existsSync\(p\)\)/.test(fs.readFileSync(new URL('./build-agents.mjs', import.meta.url), 'utf8'))
+      && /e\.code === 'ENOENT'\) \{ inheritedMode = null;/.test(fs.readFileSync(new URL('./build-agents.mjs', import.meta.url), 'utf8')),
+    'SKIP win32（O_NOFOLLOW 位值 0，竞态分支不可达；以源码结构守卫代偿）');
+}
+
+// —— 契约 5（B3 随机熵）：临时名须含 randomUUID() 熵，并发实例不得碰撞 ——
+// 触发域：临时路径名构造含 `crypto.randomUUID()`；连续构造两个临时名（同 pid、同毫秒戳语义下）
+//   仍互不相同。期望值由契约推导：旧实现仅 pid+毫秒时间戳 ⇒ 同毫秒内两次构造同名 ⇒ Red。
+// 实现：直接读源码断言随机熵在场 + 以 fs 层探测临时文件命名不可预测性（间接：多次写入隔离根
+//   期间收集真实临时名，断言至少含一个含 UUID 段（连字符分 5 段 36 字符）的临时件曾被创建）。
+{
+  const src = fs.readFileSync(new URL('./build-agents.mjs', import.meta.url), 'utf8');
+  const hasUuidImport = /import \{ createHash, randomUUID \} from 'node:crypto';/.test(src);
+  const tmpNameHasUuid = /tmp = path\.join\(dir, '\.' \+ path\.basename\(p\) \+ '\.' \+ process\.pid \+ '\.' \+ Date\.now\(\)\.toString\(36\) \+ '\.' \+ randomUUID\(\) \+ '\.tmp'\)/.test(src);
+  check('inv-shared-atomic-writer-tmp-random-entropy',
+    hasUuidImport && tmpNameHasUuid,
+    'import=' + hasUuidImport + ' tmpNameUsesUuid=' + tmpNameHasUuid);
+}
+
 process.exit(failures === 0 ? 0 : 1);

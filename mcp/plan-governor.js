@@ -1569,7 +1569,12 @@ function startServer() {
         // all 档服务端角色写面闸：子实例=复审报告面，仅放行 review/ 与 pr-review/ 子目录；
         //   主实例（计划主笔面）放行范围不变。角色判定读模块级 ROLE（启动期 env，客户端不可伪造），
         //   与工具描述"主实例=计划主笔面，子实例=复审报告面"口径一致（事实单源见 README）。
-        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))) {
+        // E2：写面闸必须消费与目标解析同一段归一化相对路径。resolveScopedPlanTarget 已对
+        //   filename 做 `\` → `/` 归一并剥离冗余 `./` 前缀，拒绝绝对/盘符/`..`；此处改用 `g.rel`，
+        //   杜绝 `./review/x.md` 与 `review\x.md` 在视图与执行两侧各走一套归一化口径的旧式分叉。
+        //   main 实例双锚分支（WRITE_MODE!=='all'）行为零变化；`isSubagentReviewSurfacePath`
+        //   仍 fail-closed（空串/仅前缀/前缀外均 false）。
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(g.rel)) {
           process.stderr.write(`[write_scoped_file] REJECTED all-mode subagent write outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 实例身份档：子实例仅可写 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
@@ -1732,7 +1737,9 @@ function startServer() {
         }
         // all 档服务端角色写面闸（与 write_scoped_file 同型）：子实例=复审报告面，
         //   仅放行 review/ 与 pr-review/ 子目录；主实例放行范围不变。
-        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))) {
+        // E2：同 write 路——消费 resolveScopedPlanTarget 归一后的 `g.rel`，禁止在调用点再做第二套
+        //   字符串归一化（视图-执行分叉）。`g.ok === false` 已在上方早退，此处 `g.rel` 必为已归一串。
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(g.rel)) {
           process.stderr.write(`[edit_scoped_file] REJECTED all-mode subagent edit outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-all-mode-surface] 实例身份档：子实例仅可编辑 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
@@ -2179,9 +2186,13 @@ function isSubagentReviewSurfacePath(rel) {
   return false;
 }
 function resolveScopedPlanTarget(filename) {
-  const rel = String(filename || '').replace(/\\/g, '/');
+  // E2：归一口径为单一 canonical rel——反斜杠转正斜杠后剥离冗余 `./` 前缀（可重复），
+  //   使 `./review/x.md`、`review\x.md`、`review/x.md` 三形态收敛到同一 rel 串；
+  //   后续校验与成功返回统一消费该 canonical rel（view/execution 同源）。
+  let rel = String(filename || '').replace(/\\/g, '/');
+  while (rel.startsWith('./')) rel = rel.slice(2);
   if (!rel || rel.startsWith('/') || /^[a-zA-Z]:/.test(rel) || rel.split('/').includes('..') || !rel.endsWith('.md')) {
-    return { ok: false, text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。' };
+    return { ok: false, text: '[受控写拦截] filename 必须为 .kilo/plans/ 下相对 .md 路径。', rel: null };
   }
   const root = path.resolve(WORKSPACE, '.kilo', 'plans');
   const target = path.resolve(root, rel);
@@ -2216,7 +2227,8 @@ function resolveScopedPlanTarget(filename) {
       return { ok: false, text: '[受控写拦截] 目标文件为符号链接，禁止写入。' };
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  return { ok: true, target, expectRoot, withinReal };
+  // E2：成功返回携带归一化 rel，供 write/edit 两路写面闸共用（面闸与目标解析同源事实）。
+  return { ok: true, target, expectRoot, withinReal, rel };
 }
 
 if (require.main === module) {

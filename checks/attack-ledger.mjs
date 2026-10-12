@@ -132,13 +132,15 @@ function sectionBody(text, headRe) {
 // 白名单之外的 CJK 续写与 ASCII 近似词仍拒绝（前瞻）。台账侧 LEDGER_HEAD_RE 不做同款放宽：
 // 其过收方向为 fail-closed（误拒仅产生假红与选择域收窄），与 Files 侧的执法逃逸极性相反。
 export const FILES_HEAD_RE = /^## (?:\d+(?:\.\d+)*\.?[ \t]*)?Files(?:[ \t]*(?:清单|声明))?(?![\w\u4e00-\u9fff-])/;
-// 执法扫描专用宽松 Files 标题判据：任意标题层级（`#`~`######`，7 个及以上不匹配），
-//   容忍可选编号前缀与任意后缀/大小写，词首为 Files/File 或中文"文件"。
-//   终止断言分族处理：Files?/File 后接 `\b`（`Files列表` 这类粘连 CJK 尾缀仍命中，因 s→CJK 存在 \w 边界）；
-//   "文件"后**不加** \b——CJK 非 \w，其后 `\b` 永不成立（`## 文件清单`、`## 文件 (Files)` 均会漏判）。
-//   仅扩大执法信号采集面，FILES_HEAD_RE 仍为唯一结构识别源；`## Notes`/`## 注意事项` 等
-//   非 Files/文件 词首标题不匹配，不产生误报。采集方向为过收（仅扩执法面，fail-closed）。
-export const ENF_FILES_HEAD_LOOSE_RE = /^#{1,6} (?:\d+(?:\.\d+)*\.?[ \t]*)?(?:Files?\b|文件)/i;
+// 执法扫描专用宽松 Files 标题判据（A1 修正）：层级严格二级 `^## (?!#)`，与 enfFileSectionsOf 收段同源，
+//   杜绝 h1/`###` 开段吞正文。判据落在标题体「含」独立词形（与 A1 触发域契约一致，非仅起始锚定）：
+//   `## Changed Files`/`## 变更文件`/`## Notes on files usage` 均命中。词界用负向后顾而不消费字符：
+//   `(?<![A-Za-z0-9_-])` 排除 ASCII 字母数字/下划线/连字符（`## file-level`、`## XFiles`、`## -file`、
+//   `## 20261011-…-file-scoped-edit` 均拒绝），点号不排除（`## 3.File Changes` 编号前缀容忍）；
+//   `Files?` 后缀负向先行 `(?![A-Za-z0-9_-])` 拒绝连词复合；中文"文件"不加后缀断言——CJK 非 \w，
+//   `## 文件清单`、`## 文件 (Files)`、`## 变更文件` 均命中（过收方向，与既有 CJK 口径一致）。
+//   `## Notes`/`## 注意事项` 无关键词词首，不命中。`#######` 七级伪标题被 `(?!#)` 拒绝。
+export const ENF_FILES_HEAD_LOOSE_RE = /^## (?!#).*(?<![A-Za-z0-9_-])(?:Files?(?![A-Za-z0-9_-])|文件)/i;
 // 合并扫描全部围栏外 FILES_HEAD_RE 节：诱饵节在前不得遮蔽其后的真实执法节（视图-执行语义
 //   分叉闭合）。节边界＝下一个围栏外 `## ` 标题（与 sectionBody 同口径）；相邻两个 Files 标题
 //   视为两节各自入集。sections 数组与正文分离：空正文的可识别节 sections.length≥1，
@@ -537,16 +539,28 @@ export function attackLedger(planText, opts = {}) {
 // 纯数字主题计划名（如 20261005-1234.md）修正后由不命中变命中，属预期放宽面而非误伤（主题段无形态约束）。
 // 且必须排除同前缀伴生产物（-test-evidence / -pr-review / -shadow-plan / .lease），否则按 mtime 取最新会把
 // 证据日志/复审报告误当选中的计划（视图把伴生当计划 = 执行语义分叉）。
+// 方言段 alternation（伴生排除面的单一事实源 A2）：isPlanFilename 的伴生尾缀判定仅此一处定义。
+//   注意与 ROUND_RE（:55，链序折叠用）是两个不同语义的集合——ROUND_RE 仅抽序数 r/p，本集合是
+//   「可作伴生尾缀的方言」超集（含 final/microfix 等非序数词）。二者不互为事实源；本常量只服务
+//   伴生排除，ROUND_RE 只服务链序折算。E-2 修正：不得声称二者共用同集合（原注释过claim已删除）。
+export const COMPANION_TAIL_ALT = '(?:[rp]\\d+[a-z]?|round\\d+|final|microfix|acceptance|remediation|premerge|no-go-fixes|fixround|adversarial|fixes?|fixup|v\\d+|x\\d+|t\\d+|r[A-F]|\\d+)';
 export function isPlanFilename(f) {
-  // 伴生排除改为「角色段 + 可选轮次后缀」识别：`-pr-review`/`-shadow-plan`/`-test-evidence`/`.lease`
-  //   之后允许零至多个仓规登记的轮次/返工段（`-rN`/`-pN` 及 `-roundN`/`-final`/`-microfix`/
-  //   `-acceptance`/`-remediation`/`-premerge`/`-no-go-fixes`/`-fixround`/`-adversarial`，加
-  //   纯数字序号），闭合 `…-pr-review-r3.md`/`…-pr-review-r3-fixround.md` 等带后缀伴生文件冒充
-  //   计划进入 --latest 候选域（视图-执行语义分叉）。**不得收宽为任意 `-<字母数字>`**：那会把
-  //   主题名内自然含 `-pr-review`/`-shadow-plan` 子词的正常计划（如 `…-bot-pr-review-refactor.md`、
-  //   `…-shadow-plan-hardening.md`）误当伴生排除——误伤正常计划（视图漏选 = 选择域收窄）。末锚 .md 保留。
-  return /^\d{8}(?:-?\d{4,8})?-.+\.md$/.test(f)
-    && !/(?:-test-evidence|-pr-review|-shadow-plan|\.lease)(?:-(?:[rp]\d+[a-z]?|round\d+|final|microfix|acceptance|remediation|premerge|no-go-fixes|fixround|adversarial|\d+))*\.md$/.test(f);
+  // 先剥离日期/可选时分秒头，再在剩余基名上判定伴生；否则 `20260731-153000-...` 的时分秒会被
+  //   误当主题。伴生语法必须是「非空主题段 + 角色段 + 零至多方言段」；角色词恰为主题的计划（如
+  //   `20261012-pr-review.md`）保持可选。主题段允许数字开头（如 `2fa-pr-review`），方言段允许 `-` 或
+  //   `.` 分隔（闭合 `.lease.v2.md`），但不放宽为任意后缀，避免把 `…-bot-pr-review-refactor.md`
+  //   与 `…-shadow-plan-hardening.md` 误排。
+  const m = /^\d{8}(?:-?\d{4,8})?-(.+)\.md$/.exec(f);
+  if (!m) return false;
+  const rest = m[1];
+  // 注意串内 `\\.lease` 双重转义：`new RegExp` 消费的是字符串，单反斜杠 `\\.` 在字符串字面量中
+  //   退化为正则 `.` 通配（`authxlease.md` 类名字会被误排）；证伪脚本与实现必须逐字一致。
+  const companion = new RegExp(
+    '^[A-Za-z0-9][A-Za-z0-9._-]*?' +
+    '(?:-test-evidence|-pr-review|-shadow-plan|\\.lease)' +
+    '(?:[-.]' + COMPANION_TAIL_ALT + ')*$'
+  );
+  return !companion.test(rest);
 }
 
 // latest-unclosed-exclude-gate：--latest 选择域的闭环判据。与审计判定同源——复用 sectionBody 的
@@ -685,8 +699,22 @@ if (isMain) {
     const fsec = filesSectionOf(planTextPre);
     const impls = ENFORCEMENT_FILES.filter((f) => fsec.includes(f)).map((f) => path.join(root, f));
     implPath = impls.length > 0 ? impls : null;
-    const tm = fsec.match(/`([^`]*(?:tests|selftest)[^`]*\.mjs)`/);
-    testPath = tm ? path.join(root, tm[1]) : null;
+    // 台账测试文件全量收集（ledger-test-path-all-selftests）：旧口径按首个匹配路径取单文件，断言名若登记在
+    //   另一 selftest 套件（如 build-agents-selftest.mjs / attack-ledger-selftest.mjs）即机械检索失配，
+    //   产出假红/假绿。改为收全 Files 节内所有 backtick 包裹的 *.mjs 测试路径；readOpt 的数组形态
+    //   天然 join 多文件内容，断言名 `check(` 检索覆盖全部套件。去重保持声明序，空集仍为 null。
+    //   E3b 修正：字符类用 [^\s`] 排除空白——`node checks/selftest.mjs` 等命令形态反引号串因含空格
+    //   不被捕获（命令不是路径，捕获会产生带空格的假路径 → 假 missingDeclared → 终验闸不可达）；
+    //   Files 节测试条目契约：一律裸路径（`checks/xxx-selftest.mjs`），命令形态不得写入 Files 节。
+    //   A4 收锚事实源修正（坑位证伪记录）：字符类无下界时，同一行内描述性引用的裸名反引号串
+    //   （如「仅改 `selftest.mjs` 侧四个重名」）会被捕获成无目录路径 → 假 missingDeclared → 台账
+    //   终验闸永远 Exit 1。本仓 Files 节行首声明形态一律是带目录前缀（`checks/xxx.mjs`、
+    //   `mcp/xxx.js`、`.github/...`），故新增前置 `(?:[\w.-]+\/)+` 要求「目录段 + `/`」结构：
+    //   命令形态串含空格仍被 [^\s`] 排除（E3b 语义保留），行首裸路径条目全部命中，描述性裸名引用
+    //   一律不再捕获。三项约束互不冲突，均为本判据的正向收窄。
+    const tms = [...fsec.matchAll(/`((?:[\w.-]+\/)+[^\s`]*(?:tests|selftest)[^\s`]*\.mjs)`/g)]
+      .map((m) => path.join(root, m[1]));
+    testPath = tms.length > 0 ? [...new Set(tms)] : null;
     const base = path.basename(planPath, '.md');
     // chain-report-base-boundary 闸：报告选取与 checkChainOrder 前缀锁定同口径（base + '-' 边界），
     // 防 base 为他链前缀时跨链误选（如 base=a 误认 ab-…-pr-review.md 为当前计划报告，跳过缺盘红灯）。
@@ -698,30 +726,40 @@ if (isMain) {
       base,
     );
     console.log('LATEST-PLAN: ' + path.relative(root, planPath));
-    console.log('IMPL: ' + (implPath ? implPath.map((p) => path.relative(root, p)).join(',') : 'none') + ' TEST: ' + (testPath ? path.relative(root, testPath) : 'none') + ' REPORT: ' + (reportPath ? path.basename(reportPath) : 'none') + ' PR-REPORT: ' + (prReviewPath ? path.basename(prReviewPath) : 'none'));
+    const relOf = (p) => (Array.isArray(p) ? p.map((x) => path.relative(root, x)).join(',') : path.relative(root, p));
+    console.log('IMPL: ' + (implPath ? relOf(implPath) : 'none') + ' TEST: ' + (testPath ? relOf(testPath) : 'none') + ' REPORT: ' + (reportPath ? path.basename(reportPath) : 'none') + ' PR-REPORT: ' + (prReviewPath ? path.basename(prReviewPath) : 'none'));
   }
   if (!planPath) { console.log('用法：node checks/attack-ledger.mjs --plan <plan.md> [--impl <f>] [--test <f>] [--report <f>] 或 --latest'); process.exit(2); }
   const missingDeclared = [];
+  const seenMissing = new Set();
   const readOpt = (p) => {
     const one = (x) => {
       if (!x) return null;
       try { return fs.readFileSync(x, 'utf8'); }
-      catch (e) { if (e && e.code === 'ENOENT') { missingDeclared.push(path.relative(root, x)); return null; } throw e; }
+      catch (e) {
+        if (e && e.code === 'ENOENT') {
+          const rel = path.relative(root, x);
+          if (!seenMissing.has(rel)) { seenMissing.add(rel); missingDeclared.push(rel); }
+          return null;
+        }
+        throw e;
+      }
     };
     return Array.isArray(p) ? p.map(one).filter((s) => s !== null).join('\n') : one(p);
   };
   const planTextFull = fs.readFileSync(planPath, 'utf8');
   const isSec = enforcementSignals(planTextFull).enforcement;
+  const reportTextGuarded = readOpt(reportPath);
   const violations = attackLedger(planTextFull, {
     implText: readOpt(implPath),
     testText: readOpt(testPath),
-    reportText: readOpt(reportPath),
-    shadowReportText: isSec && reportPath ? fs.readFileSync(reportPath, 'utf8') : undefined,
-    prReviewReportText: isSec && prReviewPath ? fs.readFileSync(prReviewPath, 'utf8') : undefined,
+    reportText: reportTextGuarded,
+    shadowReportText: isSec && reportPath ? reportTextGuarded : undefined,
+    prReviewReportText: isSec && prReviewPath ? readOpt(prReviewPath) : undefined,
   }).concat(chainV);
   // r1 E11：声明但未落盘的执法/测试文件（--latest 选取时 Files 节声明 Create 路径尚未写入）
   //   以结构化违规 loud 报缺，不再以裸 ENOENT 崩溃审计链（报告在场是 GO 前置闸行为不变）。
-  for (const rel of missingDeclared) violations.push({ msg: '--latest 声明的执法/测试文件缺失，fail-closed 不静默跳过：' + rel });
+  for (const rel of missingDeclared) violations.push({ msg: (latestMode ? '--latest' : '--plan') + ' 声明的执法/测试/报告文件缺失，fail-closed 不静默跳过：' + rel });
   if (latestMode && !reportPath && violations.length === 0) {
     const isSec = enforcementSignals(planTextFull).enforcement;
     if (isSec) violations.push({ msg: '--latest 模式下安全执法类计划尚无影子报告（报告在场是 GO 前置）' });

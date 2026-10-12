@@ -134,8 +134,10 @@ check('workflow-barrier-collects-head-reviews',
 
 // --- 栅栏：完成判据基于官方 bot 在当前 head 的 authenticated review 存在性（R4）---
 check('workflow-barrier-requires-head-review-presence',
-  text.includes('r.user?.type') &&
-  /r\.user\?\.type === 'Bot' \&\& \(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
+  // R-F4 迁移：hasHeadReview 拆多行并追加终态 state 门，逐行正则 + dotall 消费整段。
+  /r\.user\?\.type === 'Bot'/m.test(text) &&
+  /\(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
+  /\['APPROVED',\s*'CHANGES_REQUESTED'\]\.includes\(r\.state\)/.test(text) &&
   /hasHeadReview\s*=\s*headReviews\.some\(/.test(text));
 
 // --- 评分：review 正文采集与栅栏同源排除 DISMISSED，已撤销评审不得灌入评分管道 ---
@@ -145,19 +147,33 @@ check('workflow-scoring-bodies-exclude-dismissed',
 // --- 栅栏：旧口径死等不再残留——等待日志不得再以 "check run has not appeared" 兜底 ---
 // 断言：文本中不得再出现旧 "check run has not appeared yet" 死等措辞（已被 review 判据取代）。
 check('workflow-barrier-no-stale-checkrun-wait',
-  !text.includes("check run has not appeared yet"));
+  // 结构式（非散文缺失式）：BARRIER 未完成分支不得出现旧「check run has not appeared yet」死等措辞，
+  //   且 barrier 判据必须包含 head-review 存在性（hasHeadReview）与终态 state 词（APPROVED/
+  //   CHANGES_REQUESTED）——死等已被 review 终态门取代。
+  !text.includes('check run has not appeared yet') &&
+  /hasHeadReview\s*=\s*headReviews\.some\(/.test(text) &&
+  text.includes('APPROVED') && text.includes('CHANGES_REQUESTED'));
 
 // --- 身份闸 fail-closed：app.id 缺失必须排除（R5，不得退回 slug-only）---
 // 断言：check-run 身份闸使用 "typeof r.app?.id !== 'number'" 的 fail-closed 形态，
 // 而非旧的 "typeof r.app?.id === 'number' && r.app.id !== def.appId" 退回形态。
 check('workflow-checkrun-identity-fail-closed',
-  /if \(typeof r\.app\?\.id !== 'number' \|\| r\.app\.id !== def\.appId\) return false;/.test(text));
+  // R-F3 迁移：app.id 闸多行化（if (…) { console.log(…); return false; }），以 dotall 锚整块；
+  //   反向夹具 workflow-no-stale-appid-slug-fallback 仍锁旧单行退回形态不得复活，二者不冲突。
+  /if \(typeof r\.app\?\.id !== 'number' \|\| r\.app\.id !== def\.appId\) \{[\s\S]{0,400}?return false;/.test(text));
 // 反向锚：旧的退回形态必须已从文件中消失。
 check('workflow-no-stale-appid-slug-fallback',
   !text.includes("if (typeof r.app?.id === 'number' && r.app.id !== def.appId) return false;"));
 
 // --- github-script 固定 Node-24 兼容 SHA（runtime-warning 处理）---
 check('workflow-github-script-node24-sha',
+  // 出处声明（本断言 SHA 的可核验事实源，非凭空捏造）：
+  //   1) `.kilo/plans/20261011-t1-bot-labeler.md:193` 登记该 SHA 为 actions/github-script v9.0.0 的
+  //      不可变 Node-24 提交（Node.js 20 deprecation / runtime-warning 处理）；
+  //   2) `.kilo/plans/test-evidence/20261011-four-task-baseline.md:62` 记录两处 `@v7` → 该 SHA 的实改；
+  //   3) runner 版本前置由 `.kilo/logs_103132623553/0_sync-labels.txt:1` 实测（2.337.0 ≥ 2.327.1）。
+  //   断言仍逐字锁定该 pin，v7 标签由反向锚 workflow-no-stale-github-script-v7 锁死不得回归；
+  //   SHA 变更须走代码变更审查链并同步以上三处登记。
   /actions\/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3/.test(text));
 // 反向锚：旧的 v7 标签不得残留。
 check('workflow-no-stale-github-script-v7',
@@ -206,5 +222,88 @@ check('workflow-no-unbound-top-level-comment-consumption',
 check('workflow-round-boundary-no-review-submitted-at-inference',
   !text.includes('latestHeadReview') && !text.includes('headReviewForBot') &&
   !/matchingRun && matchingRun\.started_at/.test(text));
+
+// ================================================================
+// F1/F2/F5 护栏回归夹具（结构式双锚：新形态在场 + 旧形态零残留）
+// 补 E-1 缺口：本轮新落地的登录白名单、review actor 门、barrier 裁决组跳过、
+//   无评级 needs-work 保留四护栏此前无任何专属断言；旧断言用宽松子串匹配，
+//   对新旧实现同绿（如 login 白名单判定里的 type!=='Bot' 子串在旧形态同样存在）。
+// 现各补一条结构式断言（锚新形态关键表达式）与一条反向锚（锁旧形态不得复活）。
+// ================================================================
+
+// --- F1：评论唤醒登录名白名单（新形态）——受信登录名集合 + 双条件 AND 取反门在场 ---
+check('workflow-comment-wake-trusted-login-whitelist',
+  /const trustedCommentLogins = new Set\(\[[^\]]*coderabbitai\[bot\][^\]]*kilo-code-bot\[bot\][^\]]*\]\)/.test(text) &&
+  /if \(isCommentWake &&\s*\n\s*\(context\.payload\.comment\?\.user\?\.type !== 'Bot' \|\|\s*\n\s*!trustedCommentLogins\.has\(context\.payload\.comment\?\.user\?\.login\)\)\)/.test(text));
+// 反向锚：仅 type!=='Bot' 无登录名白名单的旧形态不得复活（任意 Bot 登录名即可唤醒）。
+check('workflow-no-stale-comment-wake-type-only-gate',
+  !/if \(isCommentWake && context\.payload\.comment\?\.user\?\.type !== 'Bot'\)/.test(text));
+
+// --- F2：pull_request_review 事件 actor 类型门（新形态）——review.user.type 非 Bot 即跳过 ---
+check('workflow-pull-request-review-actor-type-gate',
+  /if \(context\.eventName === 'pull_request_review' && context\.payload\.review\?\.user\?\.type !== 'Bot'\)/.test(text) &&
+  text.includes('[PR Check] Non-bot review actor; skipping label sync.'));
+// 反向锚：无 actor 门的旧形态（review 事件直接进入标签同步，step-0 无 review user 判定）不得复活。
+//   新形态在 eventHeadSha 解析与 prNumber 校验之间插入 pull_request_review actor 门；旧形态无该门，
+//   故断言「review actor 门文本在场」即等价锁定旧形态缺席（与正向断言 workflow-pull-request-review-actor-type-gate 互补）。
+check('workflow-no-stale-review-event-without-actor-gate',
+  text.includes("context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot'"));
+
+// --- F1：barrier 未完成清理循环必须跳过 review:/risk: 裁决组（新形态）---
+check('workflow-barrier-cleanup-skips-verdict-labels',
+  (() => {
+    const barrierIdx = text.indexOf('if (!allReady)');
+    const loopStart = text.indexOf('for (const l of Object.keys(SYSTEM_LABELS))', barrierIdx);
+    const loopEnd = text.indexOf('return;', text.indexOf('removeLabel', loopStart));
+    if (barrierIdx === -1 || loopStart === -1 || loopEnd === -1) return false;
+    const loop = text.slice(loopStart, loopEnd);
+    return /if \(\(l\.startsWith\('review:'\) \|\| l\.startsWith\('risk:'\)\)\) continue;/.test(loop);
+  })());
+// 反向锚：无裁决组跳过的旧循环（直接 `if (existing.has(l))` 起删）不得复活。
+check('workflow-no-stale-barrier-cleanup-deletes-verdict',
+  !/for \(const l of Object\.keys\(SYSTEM_LABELS\)\) \{\s*\n\s*if \(existing\.has\(l\)\) \{/.test(text));
+
+// --- F5：无评级分支必须显式保留 needs-work（新形态）---
+check('workflow-no-rating-preserves-needs-work-verdict',
+  /No parseable rating; preserving an explicit review:needs-work verdict\./.test(text) &&
+  (() => {
+    const elseIdx = text.lastIndexOf('Neither bot produced a parseable rating');
+    if (elseIdx !== -1) return false; // 旧"清空裁决"文案零残留
+    const partialIdx = text.indexOf('Partial ratings or failed check');
+    const noRateIdx = text.indexOf('No parseable rating; preserving');
+    return partialIdx !== -1 && noRateIdx !== -1 && noRateIdx > partialIdx;
+  })());
+// 反向锚：旧"无评级即清空全部裁决"语义不得复活。
+check('workflow-no-stale-no-rating-clears-verdict',
+  !/Neither bot produced a parseable rating\. Clearing review labels\./.test(text));
+
+// ================================================================
+// 在途改动双锚（F1/F2/F5 之外的两处执行前已存在的加固，与本计划叠加）
+// 这两处不在本计划 Replacement 集内，故此前无断言保护——补入防止被无红灯回退。
+// ================================================================
+
+// --- 在途 1：barrier 通过后、评级解析前，check run 状态门（新形态）——
+// 正向：`targetRuns.some(run => run.status !== 'completed')` 在场，未完成的 run 阻塞评级段。
+check('workflow-barrier-passed-check-run-status-gate',
+  /if \(targetRuns\.some\(run => run\.status !== 'completed'\)\)/.test(text) &&
+  text.includes('Some configured check runs are not completed'));
+// 反向锚（区域切片式，非长正则）："barrier 通过"日志与"4. 解析与分值评定"节头之间必须存在
+//   状态门；旧形态两段直接相邻（barrier 通过即解析）⇒ 区间内无状态门 ⇒ 红。
+check('workflow-no-stale-barrier-passed-without-status-gate',
+  (() => {
+    const logIdx = text.indexOf('All configured bots');
+    const sec4Idx = text.indexOf('4. 解析与分值评定');
+    if (logIdx === -1 || sec4Idx === -1 || sec4Idx <= logIdx) return false;
+    return /targetRuns\.some\(run => run\.status !== 'completed'\)/.test(text.slice(logIdx, sec4Idx));
+  })());
+
+// --- 在途 2：`skipped` check run 结论不算失败检查（新形态）——
+// 正向：conclusion 条件显式排除 `skipped`；`skipped` 是"未跑"而非"跑挂"。
+check('workflow-skipped-conclusion-not-failure',
+  /run\.conclusion !== 'success' && run\.conclusion !== 'neutral' && run\.conclusion !== 'skipped'/.test(text));
+// 反向锚：把 `skipped` 当失败的旧形态（三条件无排除）不得复活。
+check('workflow-no-stale-skipped-as-failure',
+  !/run\.conclusion !== 'success' && run\.conclusion !== 'neutral'\s*\n\s*\{/
+    .test(text.slice(text.indexOf('let hasCheckFailure'), text.indexOf('// 4.2 提取 Pull Request'))));
 
 console.log('BOT-LABELER-SELFTEST ALL OK');

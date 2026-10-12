@@ -946,9 +946,9 @@ check('build-slot-anchor-substring-preserved-positive',
 //   期望值溯源装配契约（不得交付未替换插槽），非抄录当前静默出货行为；词法域并集——空白容忍形态
 //   {{ g16 }} 与数字首键 {{123}}/{{1x}} 同判；同键多形态/多次出现经 Set 归一（消息中 {{g16}} 恰一次）。
 //   正控：全 slot 命中不抛。
-check('build-unrendered-slot-rejected',
+check('selftest-build-unrendered-slot-rejected',
   (() => { try { build({ blocks: [{ id: 'b', text: 'A {{g16}} B {{ g16 }} C {{123}} D {{1x}}' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: {} }] } }); return false; } catch (e) { return /^build:/.test(e.message) && e.message.includes('build-unrendered-slot') && e.message.includes('agents/pw.md') && e.message.includes('{{g16}}') && e.message.includes('{{123}}') && e.message.includes('{{1x}}') && (e.message.match(/\{\{g16\}\}/g) || []).length === 1; } })());
-check('build-unrendered-slot-positive',
+check('selftest-build-unrendered-slot-positive',
   (() => { const ps = build({ blocks: [{ id: 'b', text: 'A {{g16}} B' }] }, { zcode: { files: [{ output: 'agents/pw.md', blocks: ['b'], slots: { g16: 'X' } }] } }); return ps.length === 1 && ps[0].text.includes('A X B') && !ps[0].text.includes('{{'); })());
 // B4c 重复块 id 闸（build-duplicate-block-id）：同 id 两块 ⇒ 映射后写覆盖前写且枚举序非契约，必须抛错拒产。
 check('build-duplicate-block-id-rejected',
@@ -1378,7 +1378,7 @@ check('build-symlink-segment-reject', (() => {
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 })());
 // 期望值溯源：契约「realpath 越出 rootReal 即拒」→ 攻击父目录 realpath 落在 root 外必抛；正常嵌套放行。
-check('build-realpath-root-containment', (() => {
+check('selftest-build-realpath-root-containment', (() => {
   const g = buildNs.assertProductDirWithinRoot;
   if (typeof g !== 'function') return false;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bao-contain-'));
@@ -1540,7 +1540,7 @@ check('inventory-cli-normal-missing-dir-not-rejected', (() => {
 //   临时件被独占创建（O_EXCL 位）且残留为零；换名事件（rename）目标锚定在目标路径上。POSIX 与 win32 同断言、无平台分支。
 //   R1/R2 前旧断言以 O_NOFOLLOW 标志位代理契约，R3 后不再满足 → 失败；R2 改为端到端外部观察（内容等值 + rename 在场 +
 //   tmp 独占创建 + 无 tmp 残留），使 CI(POSIX) 与 win32 对同一事实给出同一结论，消除分支分叉。
-check('inv-shared-atomic-writer-wired', (() => {
+check('selftest-inv-shared-atomic-writer-wired', (() => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inv-wired-'));
   try {
     for (const q of ['kilocode', 'codebuddy', 'zcode']) {
@@ -1615,6 +1615,22 @@ check('anchor-library-registry-no-drift',
     for (const c of DERIVED_CLAUSES) checkOne(c.id, [c.text]);
     for (const g of GATES) checkOne(g.id, g.parts);
     return missing.length === 0;
+  })());
+
+// E2 结构式源码接线对账（视图-执行语义分叉行的单一 --test 文件对账）：
+//   mcp/plan-governor.js 的 write/edit 两路写面闸必须消费 resolveScopedPlanTarget 归一后的
+//   canonical rel（g.rel），不得在调用点再做第二套字符串归一化。旧形态
+//   `isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))` 在
+//   `./review/x.md` 与 `review\x.md` 下与目标解析分叉（视图放行/执行拒绝或反之）。
+//   本断言读 mcp/plan-governor.js 文本：`isSubagentReviewSurfacePath(g.rel)` 在 write/edit
+//   两路各恰一次、且旧形态零残留。
+check('assert-scoped-write-surface-rel-single-source',
+  (() => {
+    const pg = fs.readFileSync(path.join(SPEC_ROOT, 'mcp', 'plan-governor.js'), 'utf8');
+    const gRelCalls = (pg.match(/isSubagentReviewSurfacePath\(g\.rel\)/g) || []).length;
+    const oldForm = pg.includes("isSubagentReviewSurfacePath(String(args.filename");
+    const writeGate = /WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath\(g\.rel\)/.test(pg);
+    return gRelCalls === 2 && !oldForm && writeGate;
   })());
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
