@@ -252,27 +252,37 @@ check('assert-latest-fault-gate-exit2',
 // 契约要求该文件永不到达 readFileSync，故越界路径必被拦截、绝不消费其内容。
 {
   const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
   // 夹具全部自持有于 os.tmpdir() 唯一临时目录：不依赖 gitignore 的 .kilo（clean checkout 不存在，写 .kilo/plans 会 ENOENT 崩溃），
   //   亦不写/删仓库外固定路径（避免破坏父目录既有数据、跨运行竞争）。
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-outside-'));
   const tmpPlan = path.join(tmp, 'containment-plan.md');
-  // outside 真实落在仓库根之外（os.tmpdir 与 repo 不同根），词法 rel 为 ..\... 触发 containment。
+  // outside 应真实落在仓库根之外（os.tmpdir 与 repo 不同根），词法 rel 为 ..\... 触发 containment。
   const outside = path.join(tmp, 'evil-selftest.mjs');
   fs.writeFileSync(outside, "check('poisoned-not-read', false);\n", 'utf8');
   fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
-  try {
-    const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--test', outside], { encoding: 'utf8' });
-    const out = String(r.stdout || '') + String(r.stderr || '');
-    // 真红判据：CLI 必须 (a) 非零退出（fail-closed）、(b) loud 上报 outside-root containment、
-    // (c) 不产生 ENOENT/missingDeclared 读尝试（两条失败通道可区分）。
-    const reported = /outside-root|root-containment|越界/.test(out);
-    const exitRed = r.status !== 0;
-    const noEnoentForOutside = !new RegExp('missingDeclared.*' + 'evil-selftest', 's').test(out)
-      && !/声明的执法\/测试\/报告文件缺失.*evil-selftest/.test(out);
-    check('ledger-testpath-outside-root-rejected', reported && exitRed && noEnoentForOutside,
-      'status=' + r.status + ' reported=' + reported + ' noEnoent=' + noEnoentForOutside);
-  } finally {
+  // 前置不变量校验（评审 257）：整个断言的前提是 os.tmpdir() 在工作树之外。若 TMPDIR 指向仓库内目录，
+  //   outside 会词法落入 root 内、投毒夹具被 readOpt 真实消费，测试退化为缺失通道并以与真实原因无关的
+  //   不透明红灯失败。故先校验该环境前提：不成立时报告自解释失败（指明 TMPDIR-in-repo），绝不伪装成栅栏缺陷。
+  if (testPathOutsideRoot(cliRoot, outside) !== true) {
+    check('ledger-testpath-outside-root-rejected', false,
+      'premise violated: os.tmpdir()=' + os.tmpdir() + ' resolves inside repo root; containment fixture cannot exercise outside-root path');
     fs.rmSync(tmp, { recursive: true, force: true });
+  } else {
+    try {
+      const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--test', outside], { encoding: 'utf8' });
+      const out = String(r.stdout || '') + String(r.stderr || '');
+      // 真红判据：CLI 必须 (a) 非零退出（fail-closed）、(b) loud 上报 outside-root containment、
+      // (c) 不产生 ENOENT/missingDeclared 读尝试（两条失败通道可区分）。
+      const reported = /outside-root|root-containment|越界/.test(out);
+      const exitRed = r.status !== 0;
+      const noEnoentForOutside = !new RegExp('missingDeclared.*' + 'evil-selftest', 's').test(out)
+        && !/声明的执法\/测试\/报告文件缺失.*evil-selftest/.test(out);
+      check('ledger-testpath-outside-root-rejected', reported && exitRed && noEnoentForOutside,
+        'status=' + r.status + ' reported=' + reported + ' noEnoent=' + noEnoentForOutside);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   }
 }
 
@@ -285,19 +295,23 @@ check('assert-latest-fault-gate-exit2',
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-dangling-link-'));
   const outside = path.join(tmp, 'outside');
   // outsideLink 必须词法落在 root 内（否则词法层就判越界，测不到 realpath 祖先回退），
-  //   故仍在 .kilo/plans 下——但先保证父目录存在（避免 clean checkout 的 ENOENT 被误当平台限制假绿）。
-  const linkParent = path.join(cliRoot, '.kilo', 'plans');
-  const outsideLink = path.join(linkParent, '.containment-outside-link');
+  //   故在 .kilo/plans 下取唯一 mkdtemp 子目录（评审 290：固定名残留会让下次 symlinkSync 得 EEXIST 并永久红灯、
+  //   且链接被静默跳过；唯一目录天然避免碰撞）。plans 父目录先递归建好（clean checkout 下 mkdtemp 需父目录存在，否则 ENOENT）。
+  const plansDir = path.join(cliRoot, '.kilo', 'plans');
+  fs.mkdirSync(plansDir, { recursive: true });
+  const linkParent = fs.mkdtempSync(path.join(plansDir, 'containment-'));
+  const outsideLink = path.join(linkParent, 'outside-link');
   fs.mkdirSync(outside);
-  fs.mkdirSync(linkParent, { recursive: true });
   let linked = false;
   try {
     fs.symlinkSync(outside, outsideLink, 'junction');
     linked = true;
   } catch (e) {
-    // 仅对真实平台限制记 SKIP；ENOENT（父目录缺失）等一律 fail-loud，杜绝假绿。
+    // 仅对环境性失败记 SKIP（评审 300：只读/不可写 .kilo 产生 EACCES/EROFS，陈旧残留产生 EEXIST——
+    //   与 EPERM 同属无法运行该夹具的环境条件，绝不得记为永久测试缺陷）；其余一律 fail-loud，杜绝假绿。
     const code = e && e.code;
-    if (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOSYS') {
+    if (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOSYS'
+      || code === 'EACCES' || code === 'EROFS' || code === 'EEXIST') {
       check('ledger-testpath-missing-under-outside-symlink-rejected', true, 'SKIP symlink/junction unavailable: ' + code);
     } else {
       check('ledger-testpath-missing-under-outside-symlink-rejected', false, 'symlinkSync 意外失败 code=' + String(code));
@@ -309,8 +323,11 @@ check('assert-latest-fault-gate-exit2',
     check('ledger-testpath-missing-under-outside-symlink-rejected', isOutside,
       'expected outside=true for dangling descendant, got ' + isOutside);
   }
+  // 先解链接（避免 rmSync 递归跟随 junction 删除 tmp 目标内容），再删唯一子目录：
+  //   中断/崩溃也不在真实 .kilo/plans 留下悬挂链接（评审 290）。
   try {
     if (linked) fs.rmSync(outsideLink, { force: true });
+    fs.rmSync(linkParent, { recursive: true, force: true });
   } finally {
     fs.rmSync(tmp, { force: true, recursive: true });
   }
@@ -323,7 +340,7 @@ check('assert-latest-fault-gate-exit2',
   const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
   const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
   // tmpPlan 自持有于 os.tmpdir()（--plan 文件路径与 containment 根无关，放 tmp 即可，避免 clean checkout 写 .kilo/plans ENOENT 崩溃）；
-  //   legalMissing 仅作 --test 传入、本夹具从不写它：.kilo/plans 缺失时 testPathOutsideRoot 上溯至 root 仍判「根内缺失」→ 走 missingDeclared，不崩不越界。
+  //   legalMissing 仅作 --test 传入、本夹具从不写它：`..valid` 为字面段名（非 `..` 上跳），path.relative 词法判定已在根内，必走 missingDeclared。
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-dotvalid-'));
   const tmpPlan = path.join(tmp, 'containment-plan2.md');
   const legalMissing = path.join(cliRoot, '.kilo', 'plans', '..valid', 'selftest.mjs');

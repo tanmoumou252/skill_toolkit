@@ -338,13 +338,22 @@ function extractSyncLabelsScript(y) {
   let jobIdx = -1;
   for (let i = 0; i < lines.length; i++) if (/^\s{0,4}sync-labels:\s*$/.test(lines[i])) { jobIdx = i; break; }
   if (jobIdx === -1) throw new Error('未定位 sync-labels job');
+  // job 边界：从 job 键之后第一个缩进 ≤ job 键缩进的非空行终止，使 script 收集与唯一性判定锁在本 job 内。
+  const jobKeyIndent = lines[jobIdx].match(/^[ \t]*/)[0].length;
+  let jobEnd = lines.length;
+  for (let i = jobIdx + 1; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    if (lines[i].match(/^[ \t]*/)[0].length <= jobKeyIndent) { jobEnd = i; break; }
+  }
   const starts = [];
-  for (let i = jobIdx + 1; i < lines.length; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
-  if (starts.length === 0) throw new Error('sync-labels job 内未提取到内联 script 块');
+  for (let i = jobIdx + 1; i < jobEnd; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
+  // 结构锚（评审 359）：sync-labels job 必须恰含 1 个 script 块——缺失/歧义一律拒绝执行，
+  //   而非靠内部符号名把守（符号名是实现对细节非契约，重命名常量不应使 harness 崩溃）。
+  if (starts.length !== 1) throw new Error('sync-labels job 内 script 块数非 1（实际 ' + starts.length + '，疑似结构变动）；拒绝在歧义块上执行');
   const s = starts[0];
   const keyIndent = lines[s].match(/^[ \t]*/)[0].length;
   const body = [];
-  for (let s2 = s + 1; s2 < lines.length; s2++) {
+  for (let s2 = s + 1; s2 < jobEnd; s2++) {
     const l = lines[s2];
     if (l.trim() === '') { body.push(''); continue; }
     const ind = l.match(/^[ \t]*/)[0].length;
@@ -355,8 +364,10 @@ function extractSyncLabelsScript(y) {
   if (nonEmpty.length === 0) throw new Error('sync-labels script 块为空');
   const common = Math.min(...nonEmpty.map((l) => l.match(/^ */)[0].length));
   const script = body.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
-  // 错提取防呆：脚本体必含 sync-labels 专属锚（提取错作业时 fail-loud，绝不静默跑错脚本）。
-  if (!script.includes('SYSTEM_LABELS')) throw new Error('提取到的 script 不含 sync-labels 锚 SYSTEM_LABELS（疑似提取错脚本块）');
+  // 错提取防呆：脚本体必引用标签写调用 addLabels/removeLabel（行为契约级结构锚，
+  //   区别于绑定单一实现符号名的 SYSTEM_LABELS），提取错块时 fail-loud，绝不静默执行他脚本。
+  if (!/\baddLabels\s*\(/.test(script) || !/\bremoveLabel\s*\(/.test(script))
+    throw new Error('提取到的 script 未引用标签写调用 addLabels/removeLabel（疑似提取错脚本块）');
   return script;
 }
 
@@ -396,9 +407,16 @@ async function runWorkflow({ eventName, payload, env, headSha, reviews, checkRun
   const core = { setOutput: () => {} };
   const process = { env: env || {} };
   const consoleMock = { log: (...a) => logs.push(a.join(' ')) };
+  // 提取失败不再穿出顶层 await 终止进程（评审 359）：捕获进 err，使载体矩阵与后续用例仍逐例上报真实原因。
+  let scriptBody = scriptSrc;
+  let extractErr = null;
+  if (!scriptBody) {
+    try { scriptBody = extractSyncLabelsScript(text); }
+    catch (e) { extractErr = e; scriptBody = ''; }
+  }
   const fn = new Function('context', 'github', 'core', 'process', 'console',
-    'return (async () => {\n' + (scriptSrc || extractSyncLabelsScript(text)) + '\n})()');
-  const err = await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
+    'return (async () => {\n' + scriptBody + '\n})()');
+  const err = extractErr || await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
   return { calls, labelsAdded, labelsRemoved, provisioned, logs, err };
 }
 
@@ -548,22 +566,28 @@ function record(name, ok, detail) {
   if (!text.includes(actorGate)) { check('workflow-actor-gate-present-for-mutation', false, 'actor gate 未在场'); }
   else {
     // 突变体：actor 门条件恒假（等价于删除门）。human actor 事件将不再早退，深入求值并写标签。
-    const src = extractSyncLabelsScript(text).replace(
-      "if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot')",
-      "if (false)");
-    const r = await runWorkflow({
-      eventName: 'pull_request_review',
-      payload: { review: { user: { type: 'User' } }, pull_request: { head: { sha: 'HEAD' } } },
-      env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
-      headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
-      scriptSrc: src,
-    });
-    // 契约（突变验证）：human actor 在 actor 门被移除后，脚本不再早退——它会把 human 当作合法
-    //   actor 继续求值并在有载体时写标签；这正是该门必须存在的反证。若夹具对 mutation 不敏感
-    //   （add 仍为 0），则 harness 失效（假绿风险）。
-    record('workflow-harness-catches-actor-gate-removal',
-      r.err === null && r.calls.add > 0,
-      'add=' + r.calls.add + ' err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+    //   提取失败不再使进程崩溃（评审 359）：捕获为 loud FAIL 证据，突变用例仍产出逐例上报。
+    try {
+      const src = extractSyncLabelsScript(text).replace(
+        "if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot')",
+        "if (false)");
+      const r = await runWorkflow({
+        eventName: 'pull_request_review',
+        payload: { review: { user: { type: 'User' } }, pull_request: { head: { sha: 'HEAD' } } },
+        env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+        headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+        scriptSrc: src,
+      });
+      // 契约（突变验证）：human actor 在 actor 门被移除后，脚本不再早退——它会把 human 当作合法
+      //   actor 继续求值并在有载体时写标签；这正是该门必须存在的反证。若夹具对 mutation 不敏感
+      //   （add 仍为 0），则 harness 失效（假绿风险）。
+      record('workflow-harness-catches-actor-gate-removal',
+        r.err === null && r.calls.add > 0,
+        'add=' + r.calls.add + ' err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+    } catch (e) {
+      record('workflow-harness-catches-actor-gate-removal', false,
+        'extract/mutation failed: ' + String(e && e.message).split('\n')[0]);
+    }
   }
 }
 
