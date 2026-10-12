@@ -252,13 +252,12 @@ check('assert-latest-fault-gate-exit2',
 // 契约要求该文件永不到达 readFileSync，故越界路径必被拦截、绝不消费其内容。
 {
   const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
-  // 与 attack-ledger CLI 的 root 同源：CLI 用 path.resolve(here,'..')（checks 的上级）。
-  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
-  const tmpPlan = path.join(cliRoot, '.kilo', 'plans', '.containment-selftest-plan.md');
-  // 真实落在仓库根之外（cliRoot 的兄弟目录），词法 rel 为 ..\... 触发 containment。
-  const outsideDir = path.resolve(cliRoot, '..', '.containment-outside');
-  const outside = path.join(outsideDir, 'evil-selftest.mjs');
-  fs.mkdirSync(outsideDir, { recursive: true });
+  // 夹具全部自持有于 os.tmpdir() 唯一临时目录：不依赖 gitignore 的 .kilo（clean checkout 不存在，写 .kilo/plans 会 ENOENT 崩溃），
+  //   亦不写/删仓库外固定路径（避免破坏父目录既有数据、跨运行竞争）。
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-outside-'));
+  const tmpPlan = path.join(tmp, 'containment-plan.md');
+  // outside 真实落在仓库根之外（os.tmpdir 与 repo 不同根），词法 rel 为 ..\... 触发 containment。
+  const outside = path.join(tmp, 'evil-selftest.mjs');
   fs.writeFileSync(outside, "check('poisoned-not-read', false);\n", 'utf8');
   fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
   try {
@@ -273,8 +272,7 @@ check('assert-latest-fault-gate-exit2',
     check('ledger-testpath-outside-root-rejected', reported && exitRed && noEnoentForOutside,
       'status=' + r.status + ' reported=' + reported + ' noEnoent=' + noEnoentForOutside);
   } finally {
-    fs.rmSync(tmpPlan, { force: true });
-    fs.rmSync(outsideDir, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -286,14 +284,24 @@ check('assert-latest-fault-gate-exit2',
   const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-dangling-link-'));
   const outside = path.join(tmp, 'outside');
-  const outsideLink = path.join(cliRoot, '.kilo', 'plans', '.containment-outside-link');
+  // outsideLink 必须词法落在 root 内（否则词法层就判越界，测不到 realpath 祖先回退），
+  //   故仍在 .kilo/plans 下——但先保证父目录存在（避免 clean checkout 的 ENOENT 被误当平台限制假绿）。
+  const linkParent = path.join(cliRoot, '.kilo', 'plans');
+  const outsideLink = path.join(linkParent, '.containment-outside-link');
   fs.mkdirSync(outside);
+  fs.mkdirSync(linkParent, { recursive: true });
   let linked = false;
   try {
     fs.symlinkSync(outside, outsideLink, 'junction');
     linked = true;
-  } catch {
-    check('ledger-testpath-missing-under-outside-symlink-rejected', true, 'SKIP symlink/junction unavailable');
+  } catch (e) {
+    // 仅对真实平台限制记 SKIP；ENOENT（父目录缺失）等一律 fail-loud，杜绝假绿。
+    const code = e && e.code;
+    if (code === 'EPERM' || code === 'ENOTSUP' || code === 'ENOSYS') {
+      check('ledger-testpath-missing-under-outside-symlink-rejected', true, 'SKIP symlink/junction unavailable: ' + code);
+    } else {
+      check('ledger-testpath-missing-under-outside-symlink-rejected', false, 'symlinkSync 意外失败 code=' + String(code));
+    }
   }
   if (linked) {
     const missingOutside = path.join(outsideLink, 'missing', 'evil-selftest.mjs');
@@ -314,7 +322,10 @@ check('assert-latest-fault-gate-exit2',
 {
   const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
   const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
-  const tmpPlan = path.join(cliRoot, '.kilo', 'plans', '.containment-selftest-plan2.md');
+  // tmpPlan 自持有于 os.tmpdir()（--plan 文件路径与 containment 根无关，放 tmp 即可，避免 clean checkout 写 .kilo/plans ENOENT 崩溃）；
+  //   legalMissing 仅作 --test 传入、本夹具从不写它：.kilo/plans 缺失时 testPathOutsideRoot 上溯至 root 仍判「根内缺失」→ 走 missingDeclared，不崩不越界。
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-dotvalid-'));
+  const tmpPlan = path.join(tmp, 'containment-plan2.md');
   const legalMissing = path.join(cliRoot, '.kilo', 'plans', '..valid', 'selftest.mjs');
   fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
   try {
@@ -325,7 +336,7 @@ check('assert-latest-fault-gate-exit2',
     check('ledger-testpath-dotdot-valid-name-not-overrejected', !misJudged,
       '被误判越界=' + misJudged);
   } finally {
-    fs.rmSync(tmpPlan, { force: true });
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

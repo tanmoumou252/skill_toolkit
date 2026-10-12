@@ -332,11 +332,16 @@ check('workflow-no-stale-skipped-as-failure',
 // ================================================================
 function extractSyncLabelsScript(y) {
   const lines = y.split(/\r?\n/);
+  // 锚定 sync-labels job：先定位 `sync-labels:` 作业键，再取其之后的第一个 script 块。
+  //   不假设「最后一个 script 块就是 sync-labels」——后续追加/重排含 script 的 step 会让
+  //   提取器静默执行错脚本而文本断言仍绿（行为套件假绿）。取首个而非末个，同步保序安全。
+  let jobIdx = -1;
+  for (let i = 0; i < lines.length; i++) if (/^\s{0,4}sync-labels:\s*$/.test(lines[i])) { jobIdx = i; break; }
+  if (jobIdx === -1) throw new Error('未定位 sync-labels job');
   const starts = [];
-  for (let i = 0; i < lines.length; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
-  if (starts.length === 0) throw new Error('未提取到内联 script 块');
-  // YAML block scalar 语义：以最小内容缩进为公共前缀统一剥除（保留相对缩进，行尾空白无意义）。
-  const s = starts[starts.length - 1];
+  for (let i = jobIdx + 1; i < lines.length; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
+  if (starts.length === 0) throw new Error('sync-labels job 内未提取到内联 script 块');
+  const s = starts[0];
   const keyIndent = lines[s].match(/^[ \t]*/)[0].length;
   const body = [];
   for (let s2 = s + 1; s2 < lines.length; s2++) {
@@ -347,9 +352,12 @@ function extractSyncLabelsScript(y) {
     body.push(l);
   }
   const nonEmpty = body.filter((l) => l.trim() !== '');
-  if (nonEmpty.length === 0) return '';
+  if (nonEmpty.length === 0) throw new Error('sync-labels script 块为空');
   const common = Math.min(...nonEmpty.map((l) => l.match(/^ */)[0].length));
-  return body.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
+  const script = body.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
+  // 错提取防呆：脚本体必含 sync-labels 专属锚（提取错作业时 fail-loud，绝不静默跑错脚本）。
+  if (!script.includes('SYSTEM_LABELS')) throw new Error('提取到的 script 不含 sync-labels 锚 SYSTEM_LABELS（疑似提取错脚本块）');
+  return script;
 }
 
 // 从 sync-labels 内联脚本真实执行；mock github/context/process，记录标签 API 调用。
