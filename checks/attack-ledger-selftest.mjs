@@ -298,6 +298,12 @@ check('assert-latest-fault-gate-exit2',
   //   故在 .kilo/plans 下取唯一 mkdtemp 子目录（评审 290：固定名残留会让下次 symlinkSync 得 EEXIST 并永久红灯、
   //   且链接被静默跳过；唯一目录天然避免碰撞）。plans 父目录先递归建好（clean checkout 下 mkdtemp 需父目录存在，否则 ENOENT）。
   const plansDir = path.join(cliRoot, '.kilo', 'plans');
+  // F2 幂等清理：只有"本夹具创建且清理时仍为空"的 plansDir/.kilo 才回收（rmdirSync 非递归天然拒删
+  //   非空目录，既有 155 份计划的工作区零风险；竞态新建/非空吞 ENOENT/ENOTEMPTY）。E3 补：recursive
+  //   mkdir 会连带建 .kilo，clean-checkout 下仅回收 plansDir 会残留空 .kilo，故同法回收 .kilo。
+  const kiloDir = path.join(cliRoot, '.kilo');
+  const kiloDirPreExisted = fs.existsSync(kiloDir);
+  const plansDirPreExisted = fs.existsSync(plansDir);
   fs.mkdirSync(plansDir, { recursive: true });
   const linkParent = fs.mkdtempSync(path.join(plansDir, 'containment-'));
   const outsideLink = path.join(linkParent, 'outside-link');
@@ -330,6 +336,19 @@ check('assert-latest-fault-gate-exit2',
     fs.rmSync(linkParent, { recursive: true, force: true });
   } finally {
     fs.rmSync(tmp, { force: true, recursive: true });
+    if (!plansDirPreExisted) {
+      try { fs.rmdirSync(plansDir); }
+      catch (e) { if (e.code !== 'ENOENT' && e.code !== 'ENOTEMPTY') throw e; }
+    }
+    if (!kiloDirPreExisted) {
+      try { fs.rmdirSync(kiloDir); }
+      catch (e) { if (e.code !== 'ENOENT' && e.code !== 'ENOTEMPTY') throw e; }
+    }
+    const plansDirCleaned = plansDirPreExisted || !fs.existsSync(plansDir);
+    check('ledger-fixture-cleans-created-plans-dir', plansDirCleaned,
+      plansDirCleaned
+        ? 'plansDir 收支平衡（preExisted=' + plansDirPreExisted + '，现存=' + fs.existsSync(plansDir) + '）: ' + plansDir
+        : 'plansDir 残留（本夹具创建且未回收）: ' + plansDir);
   }
 }
 

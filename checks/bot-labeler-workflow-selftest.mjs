@@ -37,13 +37,15 @@ const preCleanupRecheck = cleanupSectionIdx !== -1 && cleanupLoopIdx !== -1 &&
   text.slice(cleanupSectionIdx, cleanupLoopIdx).includes('await assertCurrentHead()');
 check('bot-labeler-head-recheck-before-cleanup',
   cleanupRemoveIdx !== -1 && preCleanupRecheck);
+// 正向标签（ai-reviewed/risk）语义改为「全部必需 bot 通过」：正向门以 requiredKeys 为准，
+// 可选 bot 缺席不再阻塞（计划决策 1）。
 check('bot-labeler-all-bots-rated-gate',
   text.includes('const ratingByBot') &&
-  text.includes('scores.length > 0 && scores.every(score => score !== null)') &&
+  text.includes("requiredKeys.length > 0 && requiredKeys.every(key => ratingByBot[key] !== null)") &&
   text.includes('if (hasParseableRating)') === false &&
   text.includes('if (allBotsRated)'));
 check('bot-labeler-incomplete-rating-needs-work',
-  text.includes('hasParseableRating || hasCheckFailure') &&
+  text.includes('partialRating || hasCheckFailure') &&
   text.includes("toAdd.add('review:needs-work')"));
 // 完整评级分支状态表达式不得残留恒假的 !allBotsRated 子条件。
 check('bot-labeler-status-verdict-no-dead-allbotsrated',
@@ -138,7 +140,8 @@ check('workflow-barrier-collects-head-reviews',
 //     或完成 check run（app.id 防伪）之一；评论顶层无 commit_id 不能满足完成。---
 check('workflow-barrier-requires-bindable-head-carrier',
   /const hasHeadReview = headReviews\.some\([\s\S]{0,180}?\(def\.logins \|\| \[\]\)\.includes\(r\.user\.login\)/.test(text) &&
-  /!hasHeadReview && !runs\.some\(r => r\.status === 'completed'\)/.test(text) &&
+  /hasHeadReview \|\| hasCompletedRun/.test(text) &&
+  /const hasCompletedRun = runs\.some\(r => r\.status === 'completed'\)/.test(text) &&
   /r\.commit_id === currentHeadSha && r\.state !== 'DISMISSED'/.test(text) &&
   !/\['APPROVED',\s*'CHANGES_REQUESTED'\]\.includes\(r\.state\)/.test(text));
 check('workflow-no-bindable-carrier-diagnostic',
@@ -221,7 +224,19 @@ check('workflow-no-untrusted-commit-date-boundary',
   !/currentHeadCommit\.commit\?\.committer\?\.date/.test(text) &&
   !/currentHeadStartedAt/.test(text));
 check('workflow-no-unbound-top-level-comment-consumption',
-  !/github\.rest\.issues\.listComments\(/.test(text) &&
+  text.includes('github.rest.issues.listComments') &&
+  text.includes('comment.body?.includes(STATUS_COMMENT_MARKER)') &&
+  (() => {
+    // 反向夹具（区域切片式）：4.1/4.2 评分管道区间内不得出现来自 issues.listComments/
+    //   comment 变量的文本拼接。取 4.1 节头到 4.4 节头之间的切片，锚定真实消费点。
+    const start = text.indexOf('4.1 提取 Checks API');
+    const end = text.indexOf('4.4 CodeRabbit');
+    if (start === -1 || end === -1 || end <= start) return false;
+    const scoring = text.slice(start, end);
+    return !/github\.rest\.issues\.listComments\(/.test(scoring) &&
+      !/codeRabbitText\s*\+=\s*[^\n]*comment/.test(scoring) &&
+      !/kiloCodeText\s*\+=\s*[^\n]*comment/.test(scoring);
+  })() &&
   !/botRoundBoundaries/.test(text) &&
   !/latestBotComment/.test(text));
 // 反向锚：旧口径（按 bot 最新 head review submitted_at 推边界 / run started_at 兜底）必须消失。
@@ -267,15 +282,32 @@ check('workflow-pull-request-review-actor-type-gate',
 check('workflow-no-stale-review-event-without-actor-gate',
   text.includes("context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot'"));
 
-// --- F1：barrier 未完成清理循环必须跳过 review:/risk: 裁决组（新形态）---
-check('workflow-barrier-cleanup-skips-verdict-labels',
+// --- F7：barrier 未完成清理循环只保留本轮状态标签（pending 或 unavailable），删除陈旧 approved/risk。
+check('workflow-barrier-cleanup-retains-waiting-status-label',
   (() => {
     const barrierIdx = text.indexOf('if (!allReady)');
     const loopStart = text.indexOf('for (const l of Object.keys(SYSTEM_LABELS))', barrierIdx);
-    const loopEnd = text.indexOf('return;', text.indexOf('removeLabel', loopStart));
-    if (barrierIdx === -1 || loopStart === -1 || loopEnd === -1) return false;
-    const loop = text.slice(loopStart, loopEnd);
-    return /if \(\(l\.startsWith\('review:'\) \|\| l\.startsWith\('risk:'\)\)\) continue;/.test(loop);
+    if (barrierIdx === -1 || loopStart === -1) return false;
+    const skipIdx = text.indexOf("if (l === waitingStatusLabel) continue;", loopStart);
+    const existingIdx = text.indexOf('if (existing.has(l))', loopStart);
+    return skipIdx !== -1 && existingIdx !== -1 && skipIdx < existingIdx;
+  })());
+// 反向锚：旧的「跳过整个 review:/risk: 裁决组」通用前缀 skip 不得复活（它与 F7 白名单保留语义相反）。
+check('workflow-no-stale-barrier-cleanup-skips-all-verdict',
+  !/if \(\(l\.startsWith\('review:'\) \|\| l\.startsWith\('risk:'\)\)\) continue;/.test(text));
+// --- 等待分支循环后必须按 waitingStatusLabel 添加 pending/unavailable，且为 ensure-before-add ---
+check('workflow-barrier-waiting-ensures-waiting-status-label',
+  (() => {
+    const barrierIdx = text.indexOf('if (!allReady)');
+    if (barrierIdx === -1) return false;
+    const ensureIdx = text.indexOf('if (!existing.has(waitingStatusLabel))', barrierIdx);
+    const addIdx = text.indexOf('labels: [waitingStatusLabel]', ensureIdx);
+    if (ensureIdx === -1 || addIdx === -1) return false;
+    const block = text.slice(ensureIdx, addIdx);
+    const guardIdx = block.indexOf('await assertCurrentHead()');
+    const provIdx = block.indexOf('ensureLabelsProvisioned()');
+    return guardIdx !== -1 && provIdx !== -1 && guardIdx < provIdx &&
+      text.includes("'review:pending'") && text.includes("'review:unavailable'");
   })());
 // 反向锚：无裁决组跳过的旧循环（直接 `if (existing.has(l))` 起删）不得复活。
 check('workflow-no-stale-barrier-cleanup-deletes-verdict',
@@ -300,20 +332,31 @@ check('workflow-no-stale-no-rating-clears-verdict',
 // 这两处不在本计划 Replacement 集内，故此前无断言保护——补入防止被无红灯回退。
 // ================================================================
 
-// --- 在途 1：barrier 通过后、评级解析前，check run 状态门（新形态）——
-// 正向：`targetRuns.some(run => run.status !== 'completed')` 在场，未完成的 run 阻塞评级段。
+// --- 在途 1：按 bot 分类的状态门（新形态）：匹配 run 仍 in_progress → barrier 的 pending 分支。
 check('workflow-barrier-passed-check-run-status-gate',
-  /if \(targetRuns\.some\(run => run\.status !== 'completed'\)\)/.test(text) &&
-  text.includes('Some configured check runs are not completed'));
-// 反向锚（区域切片式，非长正则）："barrier 通过"日志与"4. 解析与分值评定"节头之间必须存在
-//   状态门；旧形态两段直接相邻（barrier 通过即解析）⇒ 区间内无状态门 ⇒ 红。
+  /const activeRuns = runs\.filter\(r => r\.status !== 'completed'\)/.test(text) &&
+  /def\.required && activeRuns\.length > 0/.test(text) &&
+  /def\.required && !\(state === 'completed' \|\| state === 'failed'\)/.test(text) &&
+  text.includes("'review:pending'"));
+// 反向锚：活跃 run 阻塞不受 required 门控的旧形态不得复活（可选 bot in_progress 误阻塞 barrier）。
+check('workflow-no-stale-unconditional-active-run-block',
+  !/if \(activeRuns\.length > 0 \|\| \(def\.required/.test(text));
+// 结构断言（E-1 护栏显式化，E-2 r2 收紧）：targetRuns 聚合必须以「最新已 completed attempt」为
+//   源——barrier 为可选 bot 放行后，此门是 4.1 不误纳在途 run 的唯一保证，且重试窗口不得
+//   丢弃旧失败证据；恒 push 与「latestRun 门控」旧形态均不得复活。
+check('workflow-aggregation-gates-on-completed-run',
+  /const latestCompletedRun = runs\.filter\(r => r\.status === 'completed'\)\.sort\(/.test(text) &&
+  /if \(latestCompletedRun\) targetRuns\.push\(latestCompletedRun\)/.test(text) &&
+  !/if \(latestRun\) targetRuns\.push\(latestRun\)/.test(text) &&
+  !/if \(latestRun && latestRun\.status === 'completed'\) targetRuns\.push\(latestRun\)/.test(text));
+// 反向锚：旧形态把 required bot 的 failed 也当作非完成阻塞 barrier，导致必需 bot 永久 pending；
+//   该表达式不得复活。
+check('workflow-no-stale-block-on-failed-required-state',
+  !/def\.required && state !== 'completed'/.test(text));
+// 反向锚：不再保留 barrier 之后的旧静默状态门；活跃 run 必须在写 status label/comment 的 barrier 路径表达。
 check('workflow-no-stale-barrier-passed-without-status-gate',
-  (() => {
-    const logIdx = text.indexOf('All configured bots');
-    const sec4Idx = text.indexOf('4. 解析与分值评定');
-    if (logIdx === -1 || sec4Idx === -1 || sec4Idx <= logIdx) return false;
-    return /targetRuns\.some\(run => run\.status !== 'completed'\)/.test(text.slice(logIdx, sec4Idx));
-  })());
+  !/if \(targetRuns\.some\(run => run\.status !== 'completed'\)\)/.test(text) &&
+  /activeRuns\.length > 0/.test(text));
 
 // --- 在途 2：`skipped` check run 结论不算失败检查（新形态）——
 // 正向：conclusion 条件显式排除 `skipped`；`skipped` 是"未跑"而非"跑挂"。
@@ -323,6 +366,26 @@ check('workflow-skipped-conclusion-not-failure',
 check('workflow-no-stale-skipped-as-failure',
   !/run\.conclusion !== 'success' && run\.conclusion !== 'neutral'\s*\n\s*\{/
     .test(text.slice(text.indexOf('let hasCheckFailure'), text.indexOf('// 4.2 提取 Pull Request'))));
+
+check('workflow-status-labels-declared',
+  /'review:pending':\s*\{/.test(text) && /'review:unavailable':\s*\{/.test(text));
+check('workflow-required-bot-field-and-thresholds',
+  /'coderabbit': \{[^}]*required: false/.test(text) &&
+  /'kilocode': \{[^}]*required: true/.test(text) &&
+  /^ {6}CODERABBIT_MAX_FILES: '100'$/m.test(text) &&
+  /^ {6}CODERABBIT_MIN_STARS: '10'$/m.test(text) &&
+  /const CODERABBIT_MAX_FILES = Number\(process\.env\.CODERABBIT_MAX_FILES/.test(text) &&
+  /const CODERABBIT_MIN_STARS = Number\(process\.env\.CODERABBIT_MIN_STARS/.test(text));
+check('workflow-file-limit-and-manual-required-signals',
+  /prData\.changed_files\s*>\s*CODERABBIT_MAX_FILES/.test(text) &&
+  /repositoryData\.stargazers_count\s*<\s*CODERABBIT_MIN_STARS/.test(text));
+check('workflow-status-comment-marker-and-bot-owner-lookup',
+  text.includes("const STATUS_COMMENT_MARKER = '<!-- bot-review-labeler:status -->'") &&
+  text.includes("comment.body?.includes(STATUS_COMMENT_MARKER)") &&
+  text.includes("comment.user?.type === 'Bot'") &&
+  text.includes("comment.user?.login === 'github-actions[bot]'") &&
+  /github\.rest\.issues\.updateComment\(/.test(text) &&
+  /github\.rest\.issues\.createComment\(/.test(text));
 
 // ================================================================
 // 行为级 harness（F2 + 载体矩阵）：提取 workflow sync-labels 内联脚本并真实执行，
@@ -343,6 +406,7 @@ function extractSyncLabelsScript(y) {
   let jobEnd = lines.length;
   for (let i = jobIdx + 1; i < lines.length; i++) {
     if (lines[i].trim() === '') continue;
+    if (lines[i].trim().startsWith('#')) continue;
     if (lines[i].match(/^[ \t]*/)[0].length <= jobKeyIndent) { jobEnd = i; break; }
   }
   const starts = [];
@@ -373,33 +437,75 @@ function extractSyncLabelsScript(y) {
 
 // 从 sync-labels 内联脚本真实执行；mock github/context/process，记录标签 API 调用。
 // 不复制谓词：完成/不完成完全由脚本在真实数据上的执行结果决定。
-async function runWorkflow({ eventName, payload, env, headSha, reviews, checkRuns, issueLabels, repoLabels, scriptSrc }) {
+// 可用性模型扩展：pulls.get 携 changed_files（file_limit 信号，与 head.sha 同一响应，
+//   零额外调用）；repos.get 携 stargazers_count（manual_required 信号，一次读取）；
+//   issues.listComments/createComment/updateComment 承载 D 契约 Action 自持状态评论——
+//   mock 内维护 comments 数组，使定位(create/update)与断言(update 而非 create)可观测。
+async function runWorkflow({ eventName, payload, env, headSha, reviews, checkRuns, issueLabels, repoLabels, changedFiles, stars, comments, headShaAfter, switchAfterCall, scriptSrc }) {
   const labelsAdded = []; const labelsRemoved = []; const provisioned = [];
-  const calls = { add: 0, remove: 0, create: 0, pullsGet: 0 };
+  const calls = { add: 0, remove: 0, create: 0, pullsGet: 0, reposGet: 0, listComments: 0, createComment: 0, updateComment: 0 };
   const logs = [];
   const repo = { owner: 'o', repo: 'r' };
   const revs = reviews || [];
   const runs = checkRuns || [];
+  // 可变评论集（引用传入数组，使 updateComment 就地生效、断言可查最终正文）。
+  const commentList = comments || [];
+  // F-8 桩保真（GitHub REST checks/listForRef 官方默认 filter=latest——每个 name 只回最新
+  //   attempt）：调用方未显式传 filter:'all' 时按 name 折叠到最大 run_attempt，旧 attempt 不可见。
+  //   期望值取官方文档口径（两次核对，见计划 F-8），非抄录当前实现（现实现未传 filter）。
+  const latestAttemptOnly = (rs) => {
+    const best = new Map();
+    for (const r of rs) {
+      const prev = best.get(r.name);
+      if (!prev || Number(r.run_attempt || 0) > Number(prev.run_attempt || 0)) best.set(r.name, r);
+    }
+    return [...best.values()];
+  };
   const github = {
-    paginate: async (fn) => {
-      const result = await fn();
+    paginate: async (fn, params) => {
+      const result = await fn(params);
       if (Array.isArray(result)) return result;
       const data = result?.data;
       if (Array.isArray(data)) return data;
-      return data?.reviews || data?.check_runs || [];
+      return data?.reviews || data?.check_runs || data?.comments || [];
     },
     rest: {
       pulls: {
-        get: async () => { calls.pullsGet += 1; return { data: { head: { sha: headSha } } }; },
+        // head drift simulation: pulls.get returns headSha for the first switchAfterCall reads,
+        // then headShaAfter (E1 TOCTOU/self-heal fixture). Defaults keep every existing case stable.
+        get: async () => {
+          calls.pullsGet += 1;
+          const sha = (typeof switchAfterCall === 'number' && calls.pullsGet > switchAfterCall)
+            ? (headShaAfter || headSha)
+            : headSha;
+          return { data: { head: { sha }, changed_files: changedFiles } };
+        },
         listReviews: async () => ({ data: revs }),
       },
-      checks: { listForRef: async () => ({ data: { check_runs: runs } }) },
+      repos: {
+        get: async () => { calls.reposGet += 1; return { data: { stargazers_count: stars } }; },
+      },
+      // F-8 桩保真：未显式 filter:'all' 时模拟官方默认 latest（每 name 仅最新 attempt 可见）。
+      checks: { listForRef: async (params) => ({ data: { check_runs: params && params.filter === 'all' ? runs : latestAttemptOnly(runs) } }) },
       issues: {
         listLabelsForRepo: async () => ({ data: (repoLabels || []).map((n) => ({ name: n })) }),
         listLabelsOnIssue: async () => ({ data: (issueLabels || []).map((n) => ({ name: n })) }),
         addLabels: async (p) => { calls.add += 1; labelsAdded.push(p.labels); },
         removeLabel: async (p) => { calls.remove += 1; labelsRemoved.push(p.name); },
         createLabel: async (p) => { calls.create += 1; provisioned.push(p.name); },
+        listComments: async () => { calls.listComments += 1; return { data: commentList }; },
+        createComment: async (p) => {
+          calls.createComment += 1;
+          const id = 900 + commentList.length;
+          commentList.push({ id, body: p.body, user: { type: 'Bot', login: 'github-actions[bot]' } });
+          return { data: { id } };
+        },
+        updateComment: async (p) => {
+          calls.updateComment += 1;
+          const target = commentList.find((c) => c.id === p.comment_id);
+          if (target) target.body = p.body;
+          return { data: {} };
+        },
       },
     },
   };
@@ -414,10 +520,25 @@ async function runWorkflow({ eventName, payload, env, headSha, reviews, checkRun
     try { scriptBody = extractSyncLabelsScript(text); }
     catch (e) { extractErr = e; scriptBody = ''; }
   }
-  const fn = new Function('context', 'github', 'core', 'process', 'console',
-    'return (async () => {\n' + scriptBody + '\n})()');
-  const err = extractErr || await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
-  return { calls, labelsAdded, labelsRemoved, provisioned, logs, err };
+  // 构造期 SyntaxError（YAML 编辑事故产出非法 JS）与提取失败同走逐例 err 通道（评审 359 契约）：
+  //   new Function 同步 throw 不被 await 链 .then(onrejected) 覆盖，必须就地捕获，否则裸穿终止套件。
+  let fn = null;
+  let constructErr = null;
+  try {
+    fn = new Function('context', 'github', 'core', 'process', 'console',
+      'return (async () => {\n' + scriptBody + '\n})()');
+  } catch (e) {
+    constructErr = e;
+  }
+  // E2 可读性修正：err 优先级拆为显式逐级求值，语义与 F6 契约逐字等价——
+  //   extractErr（提取失败）> constructErr（构造期 SyntaxError）> runtimeErr（运行期异常），
+  //   且保留短路语义：前两者在场时不再执行 fn，避免无谓跑空脚本体。
+  let runtimeErr = null;
+  if (!extractErr && !constructErr && fn) {
+    runtimeErr = await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
+  }
+  const err = extractErr || constructErr || runtimeErr;
+  return { calls, labelsAdded, labelsRemoved, provisioned, comments: commentList, logs, err };
 }
 
 const COMMENTED = { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } };
@@ -429,12 +550,15 @@ async function barrierCase(opts) {
   const r = await runWorkflow({
     eventName: opts.eventName || 'issue_comment',
     payload: opts.payload || { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
-    env: { PR_NUMBER: '8', EXPECTED_BOTS: opts.expectedBots || 'kilocode' },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: opts.expectedBots || 'coderabbit,kilocode' },
     headSha: 'HEAD',
     reviews: opts.reviews || [],
     checkRuns: opts.checkRuns || [],
     issueLabels: opts.issueLabels || [],
-    repoLabels: opts.repoLabels || ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work'],
+    repoLabels: opts.repoLabels || ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work', 'review:pending', 'review:unavailable'],
+    changedFiles: opts.changedFiles,
+    stars: opts.stars,
+    comments: opts.comments,
   });
   return r;
 }
@@ -444,55 +568,89 @@ function record(name, ok, detail) {
   else { behaviorFailures += 1; console.log(`FAIL ${name}${detail ? ' ' + detail : ''}`); }
 }
 
-// 1. COMMENTED head-bound bot review → 满足栅栏（PR8 实测载体形态）→ 进入 verdict 写标签。
+// 1. COMMENTED head-bound bot review → 满足栅栏（PR8 实测载体形态）→ 进入 verdict 写标签 + 状态评论。
 {
-  const r = await barrierCase({ reviews: [COMMENTED] });
+  const r = await barrierCase({ reviews: [ { ...COMMENTED, body: 'WARNING: minor' } ] });
   record('workflow-completes-on-commented-head-review',
-    r.err === null && r.calls.add > 0,
-    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'add=' + r.calls.add + ' logs=' + r.logs.join(' | '));
+    r.err === null && r.calls.add > 0 && r.calls.createComment > 0,
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' logs=' + r.logs.join(' | '));
 }
 // 2. APPROVED / CHANGES_REQUESTED 仍满足（回归：旧终态仍合法）。
 {
-  const rA = await barrierCase({ reviews: [{ ...COMMENTED, state: 'APPROVED' }] });
-  const rC = await barrierCase({ reviews: [{ ...COMMENTED, state: 'CHANGES_REQUESTED' }] });
+  const rA = await barrierCase({ reviews: [{ ...COMMENTED, state: 'APPROVED', body: 'SUGGESTION: ok' }] });
+  const rC = await barrierCase({ reviews: [{ ...COMMENTED, state: 'CHANGES_REQUESTED', body: 'SUGGESTION: ok' }] });
   record('workflow-completes-on-approved-and-changes-requested',
-    rA.calls.add > 0 && rC.calls.add > 0,
+    rA.calls.add > 0 && rC.calls.add > 0 && rA.calls.createComment > 0 && rC.calls.createComment > 0,
     'approved add=' + rA.calls.add + ' changes add=' + rC.calls.add);
 }
-// 3. DISMISSED 不满足；不误写。
+// Rework-5（Bot 意见·多 band 聚合）：CodeRabbit 正文先后携 'ready' 与 'blocked' 两 band——
+//   旧"先匹配先赢"让靠前宽松档遮蔽靠后更严档（落 risk:low+approved）。契约期望：严序取用 →
+//   risk:critical + review:needs-work，approved 不得在场。旧实现下本用例＝红（期望由 4.6 最严原则推导）。
+{
+  const r = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness: Ready\n\n中间文本\n\nMerge Readiness: Blocked' },
+  ] });
+  const flat = r.labelsAdded.flat();
+  record('workflow-coderabbit-multi-band-wins-strictest',
+    r.err === null && flat.includes('risk:critical') && flat.includes('review:needs-work') && !flat.includes('review:approved'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(flat));
+}
+// Rework-6（Bot 意见·连接词 band 吞噬）：完整短语形 "Merge Readiness band: Blocked"——旧正则间隙类
+//   [^a-zA-Z\r\n] 吞不掉连接词 'band'，捕获组落在 'band' 而非 'Blocked'（'band' 非档位词 → crScore=null
+//   → coderabbit 失评静默放行）。期望：连接词被跳过、严格档命中 → risk:critical + review:needs-work。
+{
+  const r = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: '### Merge Readiness band: Blocked\n\n存在高危发现' },
+  ] });
+  const flat = r.labelsAdded.flat();
+  record('workflow-coderabbit-readiness-band-phrase-blocked',
+    r.err === null && flat.includes('risk:critical') && flat.includes('review:needs-work'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(flat));
+}
+// 3. DISMISSED 不满足 barrier；等待分支落 review:unavailable（本轮无可评级来源），不误落最终 risk/approved。
 {
   const r = await barrierCase({ reviews: [{ ...COMMENTED, state: 'DISMISSED' }] });
-  record('workflow-dismissed-review-not-complete', r.err === null && r.calls.add === 0,
-    'add=' + r.calls.add);
+  record('workflow-dismissed-review-not-complete', r.err === null && r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable') && !r.labelsAdded.flat().includes('review:needs-work'),
+    'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
-// 4. 非当前 head 的 review 不满足。
+// 4. 非当前 head 的 review 不满足 barrier。
 {
   const r = await barrierCase({ reviews: [{ ...COMMENTED, commit_id: 'OLD' }] });
-  record('workflow-stale-head-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+  record('workflow-stale-head-review-not-complete', r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable'), 'add=' + r.calls.add);
 }
-// 5. login 不匹配（type Bot 但非配置官方账号）不满足。
+// 5. login 不匹配（type Bot 但非配置官方账号）不满足 barrier。
 {
   const r = await barrierCase({ reviews: [{ ...COMMENTED, user: { type: 'Bot', login: 'evil-bot[bot]' } }] });
-  record('workflow-unauthorized-login-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+  record('workflow-unauthorized-login-review-not-complete', r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable'), 'add=' + r.calls.add);
 }
-// 6. 作者缺失（无 user）不满足。
+// 6. 作者缺失（无 user）不满足 barrier。
 {
   const r = await barrierCase({ reviews: [{ commit_id: 'HEAD', state: 'COMMENTED' }] });
-  record('workflow-missing-author-review-not-complete', r.calls.add === 0, 'add=' + r.calls.add);
+  record('workflow-missing-author-review-not-complete', r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable'), 'add=' + r.calls.add);
 }
-// 7. 顶层 comment 唤醒本身不构成完成信号：仅评论（无 head review、无 check run）→ 不完成。
+// 7. 顶层 comment 唤醒本身不构成完成信号：仅评论（无 head review、无 check run）→ 等待并写 unavailable，非 needs-work。
 {
   const r = await barrierCase({ eventName: 'issue_comment', payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } }, reviews: [], checkRuns: [] });
   const hasDiag = r.logs.some((l) => l.includes('No bindable carrier this round for:'));
-  record('workflow-unbound-comment-not-completion-evidence', r.calls.add === 0 && hasDiag,
-    'add=' + r.calls.add + ' diag=' + hasDiag);
+  record('workflow-unbound-comment-not-completion-evidence', r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable') && !r.labelsAdded.flat().includes('review:needs-work') && hasDiag,
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) + ' diag=' + hasDiag);
 }
-// 8. 无载体 → 等待 + 显式诊断（非静默死等）。
+// 8. 无载体 → 等待 + 显式诊断 + review:unavailable（非 needs-work、非静默死等）。
 {
   const r = await barrierCase({ reviews: [], checkRuns: [] });
   const hasDiag = r.logs.some((l) => l.includes('No bindable carrier this round for:'));
-  record('workflow-no-carrier-waits-with-diagnostic', r.err === null && r.calls.add === 0 && hasDiag,
-    'add=' + r.calls.add + ' diag=' + hasDiag);
+  record('workflow-no-carrier-waits-with-diagnostic', r.err === null && r.calls.add === 1 && r.calls.createComment > 0 &&
+    r.labelsAdded.flat().includes('review:unavailable') && !r.labelsAdded.flat().includes('review:needs-work') && hasDiag,
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) + ' diag=' + hasDiag);
 }
 // 9. F2 actor 门：human actor 的 pull_request_review 触发 → 零标签变更。
 {
@@ -518,7 +676,7 @@ function record(name, ok, detail) {
     r.err === null && r.calls.add === 0 && r.calls.remove === 0 && r.calls.create === 0 && r.calls.pullsGet === 0,
     'add=' + r.calls.add + ' remove=' + r.calls.remove + ' create=' + r.calls.create + ' pullsGet=' + r.calls.pullsGet);
 }
-// 11. 受信 bot 顶层评论唤醒（type=Bot + 派生登录名命中）→ 不早退，进入求值。
+// 11. 受信 bot 顶层评论唤醒（type=Bot + 派生登录名命中）→ 不早退，进入求值并写 needs-work。
 {
   const r = await runWorkflow({
     eventName: 'issue_comment',
@@ -543,20 +701,398 @@ function record(name, ok, detail) {
 }
 
 // 13. PR8 真实形态（EXPECTED_BOTS='coderabbit,kilocode'，coderabbit 本轮零载体，kilocode COMMENTED）：
-//     合法终态=barrier 等待分支——清理非裁决 stale 标签 + 载体缺失诊断，verdict 标签不落地。
+//     可用性模型正解——可选 bot coderabbit 缺席不阻塞，必需 bot kilocode 完成即出正向裁决，
+//     缺席原因记入状态评论；诊断仍记录 coderabbit 载体缺失。
 {
   const r = await barrierCase({
     expectedBots: 'coderabbit,kilocode',
-    reviews: [COMMENTED],
+    changedFiles: 107,
+    stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: looks good' }],
     issueLabels: ['ai-reviewed', 'review:approved'],
   });
-  const diagNames = r.logs.some((l) => l.includes('No bindable carrier this round for: coderabbit'));
-  record('workflow-pr8-coderabbit-absent-waits-no-verdict',
-    r.err === null && r.calls.add === 0
-      && r.labelsRemoved.includes('ai-reviewed')
-      && !r.labelsRemoved.includes('review:approved')
+  const diagNames = r.logs.some((l) => l.includes("Bot 'coderabbit' availability=file_limit")) &&
+    r.comments[0]?.body.includes('file_limit');
+  record('workflow-pr8-coderabbit-absent-yields-verdict',
+    r.err === null && r.calls.add > 0 && r.calls.createComment > 0
+      && r.labelsAdded.flat().includes('risk:low')
+      && !r.labelsAdded.flat().includes('review:needs-work')
       && diagNames,
-    'add=' + r.calls.add + ' removed=' + JSON.stringify(r.labelsRemoved) + ' diag=' + diagNames);
+    'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' added=' + JSON.stringify(r.labelsAdded.flat()) + ' diag=' + diagNames);
+}
+
+// 14. F6：head-bound review 满足载体，但匹配的官方 run 仍 in_progress → 该 bot in_progress →
+//     本轮不可出裁决 → 等待分支落 review:pending；不得写正向标签，最终 verdict 推迟到 completed 重评。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, state: 'APPROVED' }],
+    checkRuns: [{
+      name: 'Kilo Code Review',
+      status: 'in_progress',
+      conclusion: null,
+      app: { slug: 'kilo-code', id: 2193792 },
+      output: { title: 'CRITICAL', summary: 'unfinished', text: '' },
+    }],
+    issueLabels: ['ai-reviewed', 'review:approved'],
+  });
+  record('workflow-in-progress-check-run-blocks-verdict',
+    r.err === null && r.calls.add === 1 && r.calls.remove === 2 &&
+      r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:needs-work') &&
+      r.logs.some((l) => l.includes('No bindable carrier this round for:')),
+    'add=' + r.calls.add + ' remove=' + r.calls.remove + ' labels=' + JSON.stringify(r.labelsAdded.flat()) + ' logs=' + r.logs.join(' | '));
+}
+// 15. F6 对照：同一匹配 run 已完成（success）→ 状态门放行 → 进入 verdict 写标签 + 状态评论。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, state: 'APPROVED' }],
+    checkRuns: [{
+      name: 'Kilo Code Review',
+      status: 'completed',
+      conclusion: 'success',
+      app: { slug: 'kilo-code', id: 2193792 },
+      output: { title: 'SUGGESTION: ready', summary: '', text: '' },
+    }],
+  });
+  record('workflow-completed-check-run-allows-verdict',
+    r.err === null && r.calls.add > 0 && r.calls.createComment > 0,
+    'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' logs=' + r.logs.join(' | '));
+}
+// 16. 等待分支清理陈旧 approved/risk/ai-reviewed 与陈旧的 needs-work（needs-work 不再被等待分支保留），
+//     落 review:unavailable（全 bot 缺席非在途，本轮无可评级来源）。
+{
+  const withNeeds = await barrierCase({
+    reviews: [], checkRuns: [],
+    issueLabels: ['ai-reviewed', 'risk:high', 'review:approved', 'review:needs-work'],
+  });
+  const withoutNeeds = await barrierCase({
+    reviews: [], checkRuns: [],
+    issueLabels: ['ai-reviewed', 'risk:high', 'review:approved'],
+    repoLabels: ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work'],
+  });
+  record('workflow-waiting-cleans-stale-including-needs-work',
+    withNeeds.err === null && withNeeds.calls.add === 1 &&
+      withNeeds.labelsAdded.flat().includes('review:unavailable') &&
+      withNeeds.labelsRemoved.includes('ai-reviewed') &&
+      withNeeds.labelsRemoved.includes('risk:high') &&
+      withNeeds.labelsRemoved.includes('review:approved') &&
+      withNeeds.labelsRemoved.includes('review:needs-work') &&
+      !withNeeds.labelsAdded.flat().includes('review:needs-work'),
+    'removed=' + JSON.stringify(withNeeds.labelsRemoved) + ' added=' + JSON.stringify(withNeeds.labelsAdded.flat()));
+  record('workflow-waiting-adds-missing-unavailable',
+    withoutNeeds.err === null &&
+      withoutNeeds.labelsRemoved.includes('ai-reviewed') &&
+      withoutNeeds.labelsRemoved.includes('risk:high') &&
+      withoutNeeds.labelsRemoved.includes('review:approved') &&
+      withoutNeeds.labelsAdded.flat().includes('review:unavailable') &&
+      withoutNeeds.provisioned.includes('review:unavailable'),
+    'added=' + JSON.stringify(withoutNeeds.labelsAdded.flat()) + ' provisioned=' + JSON.stringify(withoutNeeds.provisioned));
+}
+
+// ================================================================
+// Availability/status model (plan 20261012-bot-review-availability-status):
+// tests first, direct behavioral coverage for file_limit/manual_required/pending/unavailable,
+// own-comment idempotency and authored comment wake-loop rejection.
+// ================================================================
+{
+  const r = await barrierCase({
+    changedFiles: 107,
+    stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: looks good' }],
+  });
+  record('workflow-file-limit-does-not-block-required-kilo',
+    r.err === null && r.calls.add > 0 && r.labelsAdded.flat().includes('ai-reviewed') &&
+      r.calls.createComment === 1 && r.comments[0]?.body.includes('file_limit'),
+    'add=' + r.calls.add + ' comments=' + r.calls.createComment + ' reason=' + (r.comments[0]?.body.includes('file_limit')));
+}
+{
+  const r = await barrierCase({
+    changedFiles: 1,
+    stars: 5,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: looks good' }],
+  });
+  record('workflow-manual-required-does-not-block-required-kilo',
+    r.err === null && r.calls.add > 0 && r.labelsAdded.flat().includes('ai-reviewed') &&
+      r.calls.createComment === 1 && r.comments[0]?.body.includes('manual_required'),
+    'add=' + r.calls.add + ' comments=' + r.calls.createComment + ' reason=' + (r.comments[0]?.body.includes('manual_required')));
+}
+{
+  const r = await barrierCase({
+    changedFiles: 1,
+    stars: 100,
+    reviews: [],
+    checkRuns: [{ name: 'Kilo Code Review', status: 'in_progress', conclusion: null,
+      app: { slug: 'kilo-code', id: 2193792 }, output: { title: '', summary: '', text: '' } }],
+  });
+  record('workflow-required-in-progress-is-pending',
+    r.err === null && r.calls.add === 1 && r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('ai-reviewed') && r.calls.createComment === 1,
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+{
+  const r = await barrierCase({ changedFiles: 107, stars: 100, reviews: [], checkRuns: [] });
+  record('workflow-no-completed-review-source-is-unavailable',
+    r.err === null && r.calls.add === 1 && r.labelsAdded.flat().includes('review:unavailable') &&
+      !r.labelsAdded.flat().includes('review:pending') && r.calls.createComment === 1 &&
+      r.comments[0]?.body.includes('file_limit'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+{
+  const selfComment = { id: 71, body: '<!-- bot-review-labeler:status -->\nold', user: { type: 'Bot', login: 'github-actions[bot]' } };
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100, reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [selfComment],
+  });
+  record('workflow-status-comment-updates-own-marker-comment',
+    r.err === null && r.calls.listComments > 0 && r.calls.updateComment === 1 && r.calls.createComment === 0 &&
+      r.comments.length === 1 && r.comments[0].body.includes('<!-- bot-review-labeler:status -->') &&
+      r.comments[0].body.includes('HEAD'),
+    'list=' + r.calls.listComments + ' update=' + r.calls.updateComment + ' create=' + r.calls.createComment);
+}
+{
+  const r = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { issue: { pull_request: {} }, comment: { user: { type: 'Bot', login: 'github-actions[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'coderabbit,kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+  });
+  record('workflow-action-comment-wake-is-rejected',
+    r.err === null && r.calls.pullsGet === 0 && r.calls.add === 0 && r.calls.remove === 0,
+    'pullsGet=' + r.calls.pullsGet + ' add=' + r.calls.add + ' remove=' + r.calls.remove);
+}
+
+// E1 self-heal: head drift mid-wait-cleanup leaves partial state (guard aborts old-head job),
+// then the new head's own event reconciles to a correct verdict — proving the declared
+// pull_request_target:synchronize trigger self-heals the non-atomic per-label window.
+{
+  const partial = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'coderabbit,kilocode' },
+    headSha: 'HEAD', headShaAfter: 'HEAD2', switchAfterCall: 2,
+    reviews: [{ ...COMMENTED, state: 'DISMISSED' }],
+    issueLabels: ['ai-reviewed', 'review:approved', 'risk:high'],
+    repoLabels: ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work', 'review:pending', 'review:unavailable'],
+  });
+  const healed = await runWorkflow({
+    eventName: 'pull_request_target',
+    payload: { pull_request: { head: { sha: 'HEAD2' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'coderabbit,kilocode' },
+    headSha: 'HEAD2',
+    reviews: [{ ...COMMENTED, commit_id: 'HEAD2', body: 'SUGGESTION: ok' }],
+    issueLabels: ['review:approved', 'risk:high'],
+    repoLabels: ['ai-reviewed', 'risk:low', 'review:approved', 'review:needs-work', 'review:pending', 'review:unavailable'],
+    changedFiles: 1, stars: 100,
+  });
+  record('workflow-head-drift-partial-then-self-heals',
+    partial.err === null && partial.labelsRemoved.includes('ai-reviewed') &&
+      !partial.labelsRemoved.includes('risk:high') && partial.calls.add === 0 &&
+      healed.err === null && healed.labelsAdded.flat().includes('ai-reviewed') &&
+      healed.labelsRemoved.includes('risk:high') && healed.calls.createComment > 0,
+    'partial removed=' + JSON.stringify(partial.labelsRemoved) + ' add=' + partial.calls.add +
+      ' | healed added=' + JSON.stringify(healed.labelsAdded.flat()) + ' removed=' + JSON.stringify(healed.labelsRemoved));
+}
+
+// E3 negative: a foreign Bot's comment carrying the marker must NOT be overwritten — the
+// Action must create its own comment (author login gate), not update the foreign id.
+{
+  const foreign = { id: 77, body: '<!-- bot-review-labeler:status -->\nnot ours', user: { type: 'Bot', login: 'coderabbitai[bot]' } };
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100, reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [foreign],
+  });
+  record('workflow-foreign-bot-marker-comment-not-updated',
+    r.err === null && r.calls.updateComment === 0 && r.calls.createComment === 1 &&
+      foreign.body.includes('not ours') &&
+      r.comments.some((c) => c.id !== foreign.id && c.user?.login === 'github-actions[bot]'),
+    'update=' + r.calls.updateComment + ' create=' + r.calls.createComment + ' foreignIntact=' + foreign.body.includes('not ours'));
+}
+
+// E5 boundary: exactly at threshold uses the plan's strict comparisons and must remain absent.
+{
+  const atMaxFiles = await barrierCase({ changedFiles: 100, stars: 100, reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }] });
+  const atMinStars = await barrierCase({ changedFiles: 1, stars: 10, reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }] });
+  record('workflow-threshold-boundaries-remain-absent',
+    atMaxFiles.err === null && atMinStars.err === null &&
+      !atMaxFiles.comments[0]?.body.includes('file_limit') &&
+      !atMinStars.comments[0]?.body.includes('manual_required') &&
+      atMaxFiles.comments[0]?.body.includes('coderabbit: absent') &&
+      atMinStars.comments[0]?.body.includes('coderabbit: absent'),
+    'max=' + JSON.stringify(atMaxFiles.comments[0]?.body) + ' min=' + JSON.stringify(atMinStars.comments[0]?.body));
+}
+
+// E2: real newline-separated status comment body (not literal backslash-n) and E4 latest attempt selection.
+{
+  const r = await barrierCase({ changedFiles: 107, stars: 100, reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }] });
+  const body = r.comments[0]?.body || '';
+  const kiloOldFailed = { name: 'Kilo Code Review', status: 'completed', conclusion: 'failure', run_attempt: 1, app: { slug: 'kilo-code', id: 2193792 }, output: { title: 'CRITICAL: old', summary: '', text: '' } };
+  const kiloNewSuccess = { name: 'Kilo Code Review', status: 'completed', conclusion: 'success', run_attempt: 2, app: { slug: 'kilo-code', id: 2193792 }, output: { title: 'SUGGESTION: rerun', summary: '', text: '' } };
+  const rerun = await barrierCase({ reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }], checkRuns: [kiloOldFailed, kiloNewSuccess] });
+  record('workflow-status-comment-uses-real-newlines-and-latest-attempt',
+    r.err === null && body.includes('\n') && !body.includes('\\n') && body.split('\n').length >= 3 &&
+      rerun.err === null && rerun.labelsAdded.flat().includes('ai-reviewed') && !rerun.labelsAdded.flat().includes('review:needs-work'),
+    'newlines=' + body.split('\n').length + ' rerun=' + JSON.stringify(rerun.labelsAdded.flat()));
+}
+
+// 17. failed 终态必须放行 barrier 进入裁决分支，落 review:needs-work，而非永久 review:pending 死等。
+//     契约：required bot 的 completed run conclusion='failure' 且本轮无 active run → allReady=true
+//     → 4.1 hasCheckFailure=true → 走 partialRating/hasCheckFailure 分支 → 'review:needs-work'。
+//     期望值溯源：行为契约"触发域应放行"与"下游裁决推演 2（必需 bot 正文无评级时）"，
+//     非抄录当前实现（当前实现错误地阻塞 barrier）。
+{
+  const r = await barrierCase({
+    reviews: [],
+    checkRuns: [{
+      name: 'Kilo Code Review',
+      status: 'completed',
+      conclusion: 'failure',
+      run_attempt: 1,
+      app: { slug: 'kilo-code', id: 2193792 },
+      output: { title: 'Review failed', summary: 'internal error', text: '' },
+    }],
+  });
+  record('workflow-failed-required-run-enters-verdict-not-pending',
+    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
+      !r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:unavailable'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+
+// 18. E1 观察项修正契约：可选 bot 的 in_progress 不阻塞 barrier——必需 bot 已终态时
+//     直接出裁决；可选 bot 的 in_progress 状态仅记入状态评论。期望值溯源：行为契约 1/2
+//     （required 门控收窄），非抄录当前实现（当前实现首支无门控，可选 in_progress 误阻塞）。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    checkRuns: [{
+      name: 'CodeRabbit Review',
+      status: 'in_progress',
+      conclusion: null,
+      app: { slug: 'coderabbitai', id: 347564 },
+      output: { title: 'scanning', summary: '', text: '' },
+    }],
+  });
+  record('workflow-optional-bot-inprogress-does-not-block-required-verdict',
+    r.err === null && r.labelsAdded.flat().includes('review:approved') &&
+      !r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:needs-work') &&
+      r.comments[0]?.body.includes('coderabbit: in_progress'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
+      ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
+}
+
+// 19. E-2 重试窗口（r2 回灌）：可选 bot「旧 attempt 失败终态 + 新 attempt 在途」——barrier 已放行
+//     （可选在途不阻塞），但旧失败证据必须仍在聚合中（回退取最新已 completed attempt），落
+//     review:needs-work；状态评论照旧如实显示 coderabbit: in_progress。期望值溯源：PR 审查报告
+//     E-2 方案 (a) + 行为契约 6②，非抄录当前实现（当前实现以 latestRun 为唯一输入，在途时整条
+//     丢弃旧失败证据，误落 review:approved）。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    checkRuns: [
+      { name: 'CodeRabbit Review', status: 'completed', conclusion: 'failure', run_attempt: 1,
+        app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'Review failed', summary: 'internal error', text: '' } },
+      { name: 'CodeRabbit Review', status: 'in_progress', conclusion: null, run_attempt: 2,
+        app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'scanning', summary: '', text: '' } },
+    ],
+  });
+  record('workflow-optional-bot-retry-window-preserves-failure-evidence',
+    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
+      !r.labelsAdded.flat().includes('review:approved') &&
+      !r.labelsAdded.flat().includes('review:pending') &&
+      r.comments[0]?.body.includes('coderabbit: in_progress'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
+      ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
+}
+
+// 19.5 F-8（r 回灌新增）：listForRef 未显式传 filter:'all' 时，GitHub 官方默认 filter=latest
+//     仅返回每个 name 的最新 attempt——重试窗口（旧 attempt 失败终态 + 新 attempt 在途）的旧失败
+//     证据在 API 层就不可见，栅栏聚合 (:344 run_attempt 排序 / :385-389 latestCompletedRun 回退)
+//     全部以"旧 attempt 可见"为前提，故旧失败被静默丢弃、当轮可误落 review:approved。
+//     期望值溯源：行为契约 F-8 触发域 + 官方 REST 文档口径（桩按默认 latest 折叠，只回新 in_progress），
+//     非抄录当前实现。本用例须真红：未传 filter 时旧失败终态丢失 → 断言 needs-work 在场即红。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    checkRuns: [
+      { name: 'CodeRabbit Review', status: 'completed', conclusion: 'failure', run_attempt: 1,
+        app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'Review failed', summary: 'internal error', text: '' } },
+      { name: 'CodeRabbit Review', status: 'in_progress', conclusion: null, run_attempt: 2,
+        app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'scanning', summary: '', text: '' } },
+    ],
+  });
+  record('workflow-listforref-filter-all-preserves-retry-window',
+    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
+      !r.labelsAdded.flat().includes('review:approved') &&
+      r.comments[0]?.body.includes('coderabbit: in_progress'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
+      ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
+}
+
+// 20. E-3 退化组合（r2 回灌）：EXPECTED_BOTS 仅含可选 bot 且其在途——requiredKeys 为空，
+//     approved 必须不可达（落无评级兜底 review:needs-work），不得 pending（无必需 bot 可等），
+//     不得 unavailable（in_progress 非 unavailable 语义）。期望值溯源：行为契约 3（退化组合）。
+//     本夹具为纯锁定：按静态推演当前实现已成立、预期到绿；若红则须先推翻推演再议。
+{
+  const r = await barrierCase({
+    expectedBots: 'coderabbit',
+    reviews: [],
+    checkRuns: [{
+      name: 'CodeRabbit Review', status: 'in_progress', conclusion: null,
+      app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'scanning', summary: '', text: '' },
+    }],
+  });
+  record('workflow-optional-only-expected-bots-fallback-needs-work',
+    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
+      !r.labelsAdded.flat().includes('review:approved') &&
+      !r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:unavailable') &&
+      r.comments[0]?.body.includes('coderabbit: in_progress'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
+      ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
+}
+
+// E6/F3: job-level YAML comments must not truncate jobEnd — extraction still finds the block.
+// 期望值溯源：行为契约 F3 触发域（注释行不得被判为 job 边界），非抄录当前实现。
+// E1-r2 修正：整行 splice 保留原缩进，把浅注释作为独立行插在 sync-labels 的 script: 行之前。
+//   旧实现把该行判为下一 job 边界 → jobEnd 截断 → starts=0 → throw（真红）；
+//   新实现跳过注释行 → starts=1 提取成功（转绿）。禁止字符串级 splice（破坏列位、恒绿/永红）。
+{
+  const flines = text.split(/\r?\n/);
+  const fj = flines.findIndex((l) => /^\s{0,4}sync-labels:\s*$/.test(l));
+  const fk = fj + 1 + flines.slice(fj + 1).findIndex((l) => /^([ \t]*)script:[ \t]*\|[ \t]*$/.test(l));
+  const ok0 = fj >= 0 && fk > fj && fk < flines.length;
+  record('workflow-f3-fixture-anchor-found', ok0);
+  // trap 取 job 键同缩进（sync-labels 键缩进=2）：浅缩进方能在旧实现里被判为边界。
+  const jobKeyIndent = (flines[fj] || '').match(/^[ \t]*/)[0].length;
+  const trap = ' '.repeat(jobKeyIndent) + '# job-level boundary trap';
+  const synth = ok0 ? flines.slice(0, fk).concat([trap], flines.slice(fk)).join('\n') : text;
+  let ok = false;
+  let detail = '';
+  try {
+    extractSyncLabelsScript(synth);
+    ok = true;
+  } catch (e) {
+    detail = String(e.message).split('\n')[0];
+  }
+  record('workflow-job-boundary-skips-yaml-comment-lines', ok, detail);
+}
+// E7/F6: syntactically invalid script body must surface as per-case err, never crash the suite.
+// 期望值溯源：F6 契约（构造期 SyntaxError 归并进 err 返回路径）。E2-r2 修正：断言比对异常
+//   类型（instanceof SyntaxError），而非在 err.message 里找 "SyntaxError" 类名（Function
+//   Constructor 抛的 message 只含 "Unexpected token"，类名在 err.name，旧断言修复后仍假红）。
+{
+  const broken = "const x = ;\n github.rest.issues.addLabels(\n github.rest.issues.removeLabel(";
+  const r = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'coderabbit,kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+    scriptSrc: broken,
+  });
+  record('workflow-new-function-syntax-error-surfaces-as-case-err',
+    r.err !== null && r.err instanceof SyntaxError,
+    'err=' + (r.err ? String(r.err.name) + ': ' + String(r.err.message).split('\n')[0] : 'null'));
 }
 
 // --- 突变验证：删除 actor 门后 harness 必须捕获（证明夹具对 gate-removal 敏感，非文本断言）---

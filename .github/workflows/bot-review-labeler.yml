@@ -83,6 +83,8 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       EXPECTED_BOTS: 'coderabbit,kilocode'
+      CODERABBIT_MAX_FILES: '100'
+      CODERABBIT_MIN_STARS: '10'
       PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
     steps:
       - name: Auto-Provision Labels, Wait for Bots & Apply Verdict
@@ -111,9 +113,12 @@ jobs:
             // 防伪；App ID 本身是公开信息，无保密需求。若某 bot 更换 App 注册，需同步更新此
             // 字面量并在变更记录中登记。
             const BOT_DEFINITIONS = {
-              'coderabbit': { pattern: /coderabbit/i, logins: ['coderabbitai[bot]'], appId: 347564 },
-              'kilocode': { pattern: /kilo[-_\s]?code|^kilo$/i, logins: ['kilo-code-bot[bot]'], appId: 2193792 }
+              'coderabbit': { pattern: /coderabbit/i, logins: ['coderabbitai[bot]'], appId: 347564, required: false },
+              'kilocode': { pattern: /kilo[-_\s]?code|^kilo$/i, logins: ['kilo-code-bot[bot]'], appId: 2193792, required: true }
             };
+            const CODERABBIT_MAX_FILES = Number(process.env.CODERABBIT_MAX_FILES || '100');
+            const CODERABBIT_MIN_STARS = Number(process.env.CODERABBIT_MIN_STARS || '10');
+            const STATUS_COMMENT_MARKER = '<!-- bot-review-labeler:status -->';
             const isCommentWake = context.eventName === 'issue_comment';
             const trustedCommentLogins = new Set(Object.values(BOT_DEFINITIONS).flatMap(d => d.logins || []));
             // 空/缺 logins 定义 fail-closed：派生集合不含该 login（不放行未知 actor）。
@@ -160,13 +165,21 @@ jobs:
                 color: '0e8a16', // 安全绿
                 description: '低风险: CodeRabbit [Ready] 且无严重安全隐患'
               },
+              'review:pending': {
+                color: 'fbca04',
+                description: '审查等待中：必需 Bot 尚未完成或存在进行中的审查'
+              },
+              'review:unavailable': {
+                color: 'cfd3d7',
+                description: '本轮没有可用的 AI 审查来源'
+              },
               'review:needs-work': {
                 color: 'e99695', // 浅粉红
                 description: '审查未通过，存在需修改的问题 (Changes Requested)'
               },
               'review:approved': {
                 color: '2cbe4e', // 鲜绿
-                description: '所有审查 Bot 均已核准通过'
+                description: '所有必需审查 Bot 均已核准通过'
               }
             };
 
@@ -243,14 +256,44 @@ jobs:
               return true;
             };
 
+            // Action 自持状态评论只读取定位，不进入任何评分管道；Bot 作者与 marker 双闸防止
+            // 修改/覆盖用户评论。每次写评论前同样复核 head，避免旧轮次状态覆盖新轮次。
+            async function writeStatusComment(botStatuses, verdict, riskScore = null) {
+              const lines = [STATUS_COMMENT_MARKER, `## Bot review status — ${currentHeadSha.slice(0, 7)}`];
+              for (const [key, status] of Object.entries(botStatuses)) {
+                lines.push(`- ${key}: ${status.state}; evidence=${status.evidence || 'none'}; reason=${status.reason || 'none'}`);
+              }
+              lines.push(`- Verdict: ${verdict}`);
+              if (riskScore !== null) lines.push(`- Risk score: ${riskScore}`);
+              const body = lines.join('\n');
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, per_page: 100
+              });
+              const ownComment = comments.find(comment =>
+                comment.body?.includes(STATUS_COMMENT_MARKER) &&
+                comment.user?.type === 'Bot' &&
+                comment.user?.login === 'github-actions[bot]');
+              if (!(await assertCurrentHead())) return;
+              if (ownComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner, repo: context.repo.repo, comment_id: ownComment.id, body
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, body
+                });
+              }
+            }
+
             // ========================================================
-            // 3. 栅栏汇合（按 EXPECTED_BOTS 严格等待，彻底根治死锁与抢跑）
+            // 3. 栅栏汇合（按必需 bot 可用性判定，完成/不可用/等待分层）
             // ========================================================
-            // 解析当前项目声明等待的 Bot
-            const expectedKeys = (process.env.EXPECTED_BOTS || 'coderabbit')
+            // 解析当前项目声明的 Bot，并从配置唯一派生 required 子集。
+            const expectedKeys = (process.env.EXPECTED_BOTS || 'coderabbit,kilocode')
               .split(',')
               .map(s => s.trim().toLowerCase())
               .filter(s => BOT_DEFINITIONS[s]);
+            const requiredKeys = expectedKeys.filter(key => BOT_DEFINITIONS[key].required);
 
             // 规范拉取当前 Commit 的 Check Runs 列表（分页全量：check_runs 超过一页时首页
             //   截断会漏掉后续页的 Bot run，导致 allReady 误判为已完成或漏匹配）
@@ -258,6 +301,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: currentHeadSha,
+              filter: 'all',
               per_page: 100
             });
 
@@ -276,6 +320,8 @@ jobs:
 
             let allReady = true;
             const targetRuns = [];
+            const botStatuses = {};
+            const { data: repositoryData } = await github.rest.repos.get({ owner: context.repo.owner, repo: context.repo.repo });
 
             for (const key of expectedKeys) {
               const def = BOT_DEFINITIONS[key];
@@ -291,21 +337,69 @@ jobs:
                 return true;
               });
               const hasHeadReview = headReviews.some(r =>
-                r.user?.type === 'Bot' &&
-                (def.logins || []).includes(r.user.login));
-              // 双载体取一：head 绑定非 DISMISSED review，或 app.id 防伪通过的 completed check run。
-              if (!hasHeadReview && !runs.some(r => r.status === 'completed')) {
-                console.log(`[Waiting] Configured bot '${key}' has no bindable carrier (head-bound review or completed check run) on head ${currentHeadSha.slice(0, 7)} yet.`);
-                allReady = false;
-                break;
+                r.user?.type === 'Bot' && (def.logins || []).includes(r.user.login));
+              const hasCompletedRun = runs.some(r => r.status === 'completed');
+              const activeRuns = runs.filter(r => r.status !== 'completed');
+              // Re-runs: aggregate the latest attempt for status/failure, not an older failed attempt.
+              const latestRun = [...runs].sort((a, b) =>
+                (Number(b.run_attempt || 0) - Number(a.run_attempt || 0)) ||
+                String(b.completed_at || b.started_at || '').localeCompare(String(a.completed_at || a.started_at || ''))
+              )[0];
+              const failedRun = latestRun?.status === 'completed' &&
+                !['success', 'neutral', 'skipped'].includes(latestRun.conclusion);
+              let state = hasHeadReview || hasCompletedRun ? (failedRun ? 'failed' : 'completed') : 'absent';
+              let reason = '';
+              if (activeRuns.length > 0) {
+                state = 'in_progress';
+                reason = 'check_run_in_progress';
+              } else if (key === 'coderabbit' && !hasHeadReview && !hasCompletedRun) {
+                if (prData.changed_files > CODERABBIT_MAX_FILES) {
+                  state = 'file_limit';
+                  reason = 'file_limit';
+                } else if (repositoryData.stargazers_count < CODERABBIT_MIN_STARS) {
+                  state = 'manual_required';
+                  reason = 'manual_required';
+                }
               }
-              targetRuns.push(...runs);
+              botStatuses[key] = {
+                state,
+                evidence: hasHeadReview ? 'head_review' : hasCompletedRun ? 'authenticated_check_run' : 'none',
+                reason,
+              };
+              // failed 是 latestRun 已落终态且 conclusion ∉ {success, neutral, skipped} 的载体（见 347-349）：
+              //   GitHub 不会再为同一 run_attempt 重投 completed 事件，据此死等将使必需 bot 永久卡
+              //   review:pending（liveness 缺口）。放行进入裁决分支，由 4.1 hasCheckFailure 精确落
+              //   review:needs-work；仅必需 bot 的活跃 run（def.required && activeRuns.length > 0）继续等待。
+              // E1 观察项修正：活跃 run 阻塞仅对必需 bot 生效——可选 bot 的 in_progress 只记入
+              //   状态评论供观察，不阻塞 verdict 出口（其完成自会经 check_run:completed 重评，
+              //   required 已齐时无须等待可选 bot）。必需 bot 的 active run 仍一律等待。
+              if ((def.required && activeRuns.length > 0) || (def.required && !(state === 'completed' || state === 'failed'))) allReady = false;
+              // 评分/失败聚合只用每个 bot「已 completed」的最新 attempt（非 latestRun 本身）：
+              //   ① completed 终态才计入 4.1 的 hasCheckFailure / 文本采集；在途 run（含可选 bot 的
+              //      in_progress，其 conclusion=null 会误命中 :477 判 failure）一律不入——旧实现靠
+              //      barrier 早退隐式保证此不变量，barrier 为可选 bot 放行后必须在此显式设门。
+              //   ② 最新 attempt 在途时回退取「最新已 completed attempt」：可选 bot 重试窗口
+              //      （旧 attempt 失败终态 + 新 attempt 在途）不得静默丢弃旧失败证据（E-2），
+              //      否则当轮误落 review:approved；新 attempt 落定后自会经 check_run 事件重评。
+              //   ③ 失败终态（status=completed 且 conclusion∉{success,neutral,skipped}）仍入，保留
+              //      failed 放行的 needs-work 语义（case 17 与夹具 19 依赖此）。
+              const latestCompletedRun = runs.filter(r => r.status === 'completed').sort((a, b) =>
+                (Number(b.run_attempt || 0) - Number(a.run_attempt || 0)) ||
+                String(b.completed_at || b.started_at || '').localeCompare(String(a.completed_at || a.started_at || ''))
+              )[0];
+              if (latestCompletedRun) targetRuns.push(latestCompletedRun);
+              if (state === 'absent' || state === 'file_limit' || state === 'manual_required') {
+                console.log(`[Barrier] Bot '${key}' availability=${state}${reason ? ` reason=${reason}` : ''}.`);
+              }
             }
+
+            const allUnavailable = Object.values(botStatuses).every(status =>
+              ['absent', 'file_limit', 'manual_required'].includes(status.state));
 
             if (!allReady) {
               console.log('Barrier not reached. Waiting for all expected checks to finish.');
               // 系统性载体缺失必须可观测而非静默死等（完成判据契约 4）：逐 expected bot 复核双载体，
-              //   任一 bot 本轮无任何可绑定载体即显式记录；等待分支保留裁决标签的既有行为零变化。
+              //   任一 bot 本轮无任何可绑定载体即显式记录；等待分支的标签语义见下方 F7 专用清理。
               const missingCarrierKeys = expectedKeys.filter(key => {
                 const def = BOT_DEFINITIONS[key];
                 return !headReviews.some(r => r.user?.type === 'Bot' && (def.logins || []).includes(r.user.login))
@@ -324,9 +418,11 @@ jobs:
               });
               const existing = new Set(currentIssueLabels.map(l => l.name));
 
+              const waitingStatusLabel = allUnavailable ? 'review:unavailable' : 'review:pending';
+              const waitingVerdict = allUnavailable ? 'unavailable' : 'pending';
               for (const l of Object.keys(SYSTEM_LABELS)) {
-                // F1：barrier 未完成不得删除当前裁决组（review:/risk:），仅清非裁决 stale 标签。
-                if ((l.startsWith('review:') || l.startsWith('risk:'))) continue;
+                // 仅保留本轮动态选出的 pending/unavailable；needs-work 专属于真实风险，不复用于等待。
+                if (l === waitingStatusLabel) continue;
                 if (existing.has(l)) {
                   // 逐个删除前复核 head：barrier 清理同样不得在新 head 生效期间删旧轮标签。
                   if (!(await assertCurrentHead())) return;
@@ -344,15 +440,31 @@ jobs:
                 }
               }
 
+              // 等待/不可用分支：清理后落本轮真实状态——in_progress/required 未完成 → review:pending；
+              //   全部 bot 皆缺席且非在途 → review:unavailable。needs-work 仅表达真实风险，此分支绝不复用它。
+              //   添加前依次复核当前 head、确保标签已 provision，再经既有 addLabels 接口写入；
+              //   任一 head 复核失败即整体退出。状态评论（D）在退出前同样落盘，供人类精确定位缺席原因。
+              if (!existing.has(waitingStatusLabel)) {
+                if (!(await assertCurrentHead())) return;
+                await ensureLabelsProvisioned();
+                if (!(await assertCurrentHead())) return;
+                console.log(`[Barrier] Ensuring explicit ${waitingStatusLabel} status label.`);
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  labels: [waitingStatusLabel]
+                });
+              }
+              await writeStatusComment(botStatuses, waitingVerdict);
+
               return;
             }
 
-            console.log(`>>> All configured bots (${expectedKeys.join(', ')}) completed for round ${currentHeadSha.slice(0, 7)}!`);
+            console.log(`>>> All required bots (${requiredKeys.join(', ')}) completed for round ${currentHeadSha.slice(0, 7)}!`);
 
-            if (targetRuns.some(run => run.status !== 'completed')) {
-              console.log('Barrier not reached. Some configured check runs are not completed; waiting for the check_run: completed event to re-evaluate.');
-              return;
-            }
+            // F6 状态门已被 per-bot 可用性分类吸收：in_progress 在 barrier 内直接判为等待分支
+            //   （review:pending + 状态评论），不再走独立的静默 return。
 
             // ========================================================
             // 4. 解析与分值评定（对齐全量数据源与真实评级字段）
@@ -401,16 +513,22 @@ jobs:
 
             // --- 4.4 CodeRabbit 官方 Merge Readiness 提取 (支持 Emoji 与 Markdown 标记) ---
             let crScore = null; // null: 本轮未解析出评级；1: Ready, 2: Caution, 3: Risky, 4: Blocked
-            const crBandMatch = codeRabbitText.match(/(?:merge\s*readiness|readiness\s*band)[^a-zA-Z\r\n]{0,20}([a-zA-Z]+)/i);
-            const crBand = crBandMatch ? crBandMatch[1].toLowerCase() : '';
+            // 汇总全部 band 出现项而非首个匹配（Rework-5·Bot 意见）：codeRabbitText 聚合多载体
+            //   （check run output + review 正文）与多 attempt，先匹配先赢会让靠前文本的 'ready' 遮蔽
+            //   靠后的更严 band——与 4.6 最严原则、及同段 severity 行的全文 presence 判定口径不对称。
+            //   逐档判定按 blocked>risky>caution>ready 严序取用；等级识别格式与 crScore 语义不变。
+            //   Rework-6：交替式按最长前缀优先——「Merge Readiness band: Blocked」短语形里连接词 band 必须被
+            //   前缀整体消费，否则捕获组落在 'band'（间隙类不含字母，回退不能越过词界）→ 真 Blocked 被静默吞掉。
+            const crBands = [...codeRabbitText.matchAll(/(?:merge\s*readiness\s*band|readiness\s*band|merge\s*readiness)[^a-zA-Z\r\n]{0,20}([a-zA-Z]+)/gi)].map(m => m[1].toLowerCase());
+            const crBandHas = (band) => crBands.includes(band);
 
-            if (crBand === 'blocked' || /\bseverity:\s*critical\b/i.test(codeRabbitText)) {
+            if (crBandHas('blocked') || /\bseverity:\s*critical\b/i.test(codeRabbitText)) {
               crScore = 4;
-            } else if (crBand === 'risky' || /\bseverity:\s*major\b/i.test(codeRabbitText)) {
+            } else if (crBandHas('risky') || /\bseverity:\s*major\b/i.test(codeRabbitText)) {
               crScore = 3;
-            } else if (crBand === 'caution' || /\bseverity:\s*minor\b/i.test(codeRabbitText)) {
+            } else if (crBandHas('caution') || /\bseverity:\s*minor\b/i.test(codeRabbitText)) {
               crScore = 2;
-            } else if (crBand === 'ready') {
+            } else if (crBandHas('ready')) {
               crScore = 1;
             }
 
@@ -429,20 +547,22 @@ jobs:
               kiloScore = 1;
             }
 
-            // --- 4.6 裁决汇总（最严原则）---
+            // --- 4.6 裁决汇总（最严原则，正向标签以「全部必需 bot 通过」为门，可选 bot 缺席不阻塞）---
             const ratingByBot = { coderabbit: crScore, kilocode: kiloScore };
             const scores = expectedKeys.map(key => ratingByBot[key]);
             const hasParseableRating = scores.some(score => score !== null);
-            // C3：仅当 EXPECTED_BOTS 每个 bot 都解析出评级（allBotsRated）才写 ai-reviewed/风险标签；
-            //   仅部分 bot 有评级（hasParseableRating 真而 allBotsRated 假）时只写 review:needs-work，杜绝单 bot 冒充完整汇总。
-            const allBotsRated = scores.length > 0 && scores.every(score => score !== null);
+            // 正向门：每个 required bot 都解析出评级才写 ai-reviewed/风险标签；可选 bot 缺席记入
+            //   状态评论但不阻塞（决策 1）。finalScore 取所有已解析 bot（含可选 bot）的最严分。
+            const allBotsRated = requiredKeys.length > 0 && requiredKeys.every(key => ratingByBot[key] !== null);
+            const finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;
+            const partialRating = !allBotsRated && hasParseableRating;
+            let verdict = 'risk';
             const allRiskLabels = ['risk:critical', 'risk:high', 'risk:medium', 'risk:low'];
-            const allStatusLabels = ['review:needs-work', 'review:approved'];
+            const allStatusLabels = ['review:needs-work', 'review:approved', 'review:pending', 'review:unavailable'];
             const allManagedLabels = ['ai-reviewed', ...allRiskLabels, ...allStatusLabels];
             const toAdd = new Set();
 
             if (allBotsRated) {
-              const finalScore = Math.max(...scores.filter(score => score !== null));
               const scoreLabelMap = {
                 4: 'risk:critical',
                 3: 'risk:high',
@@ -464,14 +584,17 @@ jobs:
               toAdd.add('ai-reviewed');
               toAdd.add(targetRiskLabel);
               toAdd.add(targetStatusLabel);
-            } else if (hasParseableRating || hasCheckFailure || reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED')) {
-              // 部分 bot 有评级（未全员）或当前 head 有失败 Check 或 CHANGES_REQUESTED 评审 → 标记 needs-work；本分支不引入 ai-reviewed/risk。
+              verdict = targetStatusLabel === 'review:approved' ? 'complete' : 'risk';
+            } else if (partialRating || hasCheckFailure || reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED')) {
+              // 部分 bot 有评级（必需 bot 缺席）或当前 head 有失败 Check 或 CHANGES_REQUESTED 评审 → 标记 needs-work；本分支不引入 ai-reviewed/risk。
               toAdd.add('review:needs-work');
               console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Partial ratings or failed check / CHANGES_REQUESTED. Marking review:needs-work.`);
+              verdict = 'partial';
             } else {
               // 无可解析评级不是“无 verdict”：保留/新增显式 needs-work，禁止静默清空旧裁决。
               toAdd.add('review:needs-work');
               console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => No parseable rating; preserving an explicit review:needs-work verdict.`);
+              verdict = 'risk';
             }
 
             // ========================================================
@@ -490,8 +613,8 @@ jobs:
             });
             const existing = new Set(currentIssueLabels.map(l => l.name));
 
-            // 仅在 toAdd 有明确 verdict 时移除未被保留的同组历史标签；无评级分支已加入 review:needs-work，
-            //   barrier 未完成分支则在前面跳过 review:/risk: 组，避免单条评论造成裁决标签 DoS。
+            // 仅在 toAdd 有明确 verdict 时移除未被保留的同组历史标签；无评级分支已加入 review:needs-work。
+             //   barrier 未完成分支另有专用语义（F7）：清陈旧 approved/risk，仅保留并显式补写本轮等待态标签（pending/unavailable）；needs-work 不复用于等待。
             // 清理前再次复核 head：初次复核通过后到实际删标签之间 head 可能被 push 更新，
             // 旧 job 不得在新 head 生效期间删除当轮标签（闭合清洗窗口的 TOCTOU）。
             if (!(await assertCurrentHead())) return;
@@ -525,3 +648,7 @@ jobs:
                 labels: finalAdd
               });
             }
+
+            // 裁决分支同步状态评论（D 契约）：汇总逐 bot 状态、缺席原因与本轮裁决/风险分，
+            //   定位与二次编辑规则同等待遇分支；评论内容不回流评分管道。
+            await writeStatusComment(botStatuses, verdict, finalScore);
