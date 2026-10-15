@@ -1622,15 +1622,32 @@ check('anchor-library-registry-no-drift',
 //   canonical rel（g.rel），不得在调用点再做第二套字符串归一化。旧形态
 //   `isSubagentReviewSurfacePath(String(args.filename || '').replace(/\\/g, '/'))` 在
 //   `./review/x.md` 与 `review\x.md` 下与目标解析分叉（视图放行/执行拒绝或反之）。
-//   本断言读 mcp/plan-governor.js 文本：`isSubagentReviewSurfacePath(g.rel)` 在 write/edit
-//   两路各恰一次、且旧形态零残留。
+//   本断言读 mcp/plan-governor.js 文本：write/edit 两路 all 档子实例写面闸共用同一合成谓词
+//   `subagentReviewSurfaceAllowed(g)`（词面 isSubagentReviewSurfacePath(g.rel) ∩ 真实组件
+//   surfaceComponentsReal），canonical g.rel 恰一次消费于该谓词、且调用点二次归一化旧形态零残留。
+//   PR#11 起两路收敛为单一合成闸（旧稿 write/edit 各自内联 isSubagentReviewSurfacePath(g.rel)
+//   已合并——"single source" 语义不变且更强：由 2 处内联降为 1 处共享谓词）。
 check('assert-scoped-write-surface-rel-single-source',
   (() => {
     const pg = fs.readFileSync(path.join(SPEC_ROOT, 'mcp', 'plan-governor.js'), 'utf8');
+    // 合成闸函数体必须把「词面谓词 ∩ 真实组件态」绑定在同一条 return 表达式内——防拆成两处、
+    //   或谓词只在函数体外（注释/死代码）出现而合成闸实际未消费 → 假绿。
+    const boundInBody = /function subagentReviewSurfaceAllowed\(g\)\s*\{\s*return isSubagentReviewSurfacePath\(g\.rel\) && surfaceComponentsReal\(/.test(pg);
+    // canonical g.rel 单一消费点：词面谓词全文件恰一次命中（合成闸体内那一处；任何重复/额外调用即红）
     const gRelCalls = (pg.match(/isSubagentReviewSurfacePath\(g\.rel\)/g) || []).length;
+    // 旧形态（调用点第二套字符串归一化）零残留
     const oldForm = pg.includes("isSubagentReviewSurfacePath(String(args.filename");
-    const writeGate = /WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath\(g\.rel\)/.test(pg);
-    return gRelCalls === 2 && !oldForm && writeGate;
+    // 写面闸调用一律带 WRITE_MODE==='all' && ROLE==='subagent' 双短路守卫（main 实例绝不进入）
+    const guardedCalls = (pg.match(/WRITE_MODE === 'all' && ROLE === 'subagent' && !subagentReviewSurfaceAllowed\(g\)/g) || []).length;
+    // 裸调用（未带上述守卫）必须为零：全角调用数 − 守卫调用数 == 0，防"无 ROLE 短路"或注释假匹配
+    const nakedCalls = (pg.match(/!subagentReviewSurfaceAllowed\(g\)/g) || []).length - guardedCalls;
+    // 按 handler 边界切分，write 与 edit 两路各自至少一次共享闸调用（防"仅一路有闸"假绿）
+    const wStart = pg.indexOf("toolName === 'write_scoped_file'");
+    const eStart = pg.indexOf("toolName === 'edit_scoped_file'");
+    const writeGate = (pg.slice(wStart, eStart).match(/ROLE === 'subagent' && !subagentReviewSurfaceAllowed\(g\)/g) || []).length;
+    const editGate = (pg.slice(eStart).match(/ROLE === 'subagent' && !subagentReviewSurfaceAllowed\(g\)/g) || []).length;
+    return boundInBody && gRelCalls === 1 && !oldForm && nakedCalls === 0
+      && wStart > -1 && eStart > wStart && writeGate >= 1 && editGate >= 1;
   })());
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
