@@ -110,7 +110,7 @@ export function unscannedRoots(topLevelDirNames, scanRoots) {
 // 零依赖纪律：不引 child_process 调 git 做 gitignore 语义过滤（子进程使 checks 套件脱离纯函数
 // 可测域、引入平台二进制依赖与输出解析脆弱面），采用显式登记表 + 漂移断言同级兜底。
 export const SCAN_ROOTS = ['kilocode', 'codebuddy', 'zcode', 'skills'];
-export const NON_PLATFORM_ROOTS = ['checks', 'mcp'];
+export const NON_PLATFORM_ROOTS = ['checks', 'mcp', 'spec'];
 export const BUILD_ARTIFACT_ROOTS = ['node_modules'];
 export const ENTRY_GATE_IDS = ['unscanned-root-directory', 'unclassified-platform-file'];
 

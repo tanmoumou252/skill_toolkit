@@ -497,7 +497,7 @@ check('assert-scan-entry-ignores-build-artifacts',
 // 80 登记常量单一事实源漂移断言：run.mjs 报错文案引用的常量名必须与代码实参同源。
 check('assert-scan-registry-constants-drift',
   invariants.SCAN_ROOTS.join(',') === 'kilocode,codebuddy,zcode,skills'
-  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp'
+  && invariants.NON_PLATFORM_ROOTS.join(',') === 'checks,mcp,spec'
   && invariants.BUILD_ARTIFACT_ROOTS.join(',') === 'node_modules');
 // 81 入口闸 id 登记：防"删掉 run.mjs 闸调用、汇总与 OK 行静默消失"的接线漂移。
 check('assert-entry-gate-ids-registered',
