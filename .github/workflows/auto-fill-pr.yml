@@ -1,0 +1,70 @@
+name: Auto Fill PR Title and Body
+
+# 触发与安全不变式（阅读顺序即依赖顺序，勿重排）：
+# 1) 本工作流走 pull_request_target，运行在**基仓库上下文**，因此 fork PR 也能取到仓库
+#    secrets 与具写权限的 GITHUB_TOKEN；这是"fork 贡献也能自动填描述"的唯一可行路径。
+# 2) 变更事实一律经 REST API 读取（pulls / commits / files），不依赖工作树内容。
+# 3) checkout 只为取到 `.github/scripts/auto-fill-pr.mjs` 自身，故显式钉**基仓库 + 基分支**
+#    （`github.base_ref`），绝不用 `github.head_ref`，也绝不设 `allow-unsafe-pr-checkout`；
+#    PR 提交的代码不进执行面。actions/checkout 在 pull_request_target 下默认即拒绝检出
+#    fork 代码，这里的显式 ref 是可被结构锚校验的加固面，不是唯一防线。
+# 4) `run:` 行不含任何 `${{ }}` 内联插值：事件数据只经 env 传参进入脚本，杜绝脚本注入面。
+#    修改本文件时若把任何不可信字段插进 run/command，`checks/auto-fill-pr-workflow-selftest.mjs`
+#    的结构锚必须转红。
+# 5) 触发集不含 `edited`：回写正文只产生 pull_request.edited，不在触发集内，链路天然收敛无环。
+# 6) 关停面：仓库 Variable `AUTO_FILL_PR_ENABLED` 置 false/0 即整轮零 GET 零 PATCH（job.if 与
+#    脚本内 S11 双道，Variable 改动即生效，无需改 YAML）。
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write   # 佐证记录（review-finding 终局契约）：在本轮处理的 head commit 上落 commit status
+
+concurrency:
+  group: auto-fill-pr-${{ github.event.pull_request.number }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  auto-fill-pr:
+    # dependabot 等机器人 PR 不代笔；draft 期间作者仍在握笔；显式停用即整轮不跑。
+    # 作者信任闸：pull_request_target 运行在基仓库上下文，外部作者的 PR 也会消耗 AI 额度并回写正文——
+    #   缺省仅放行 OWNER/MEMBER/COLLABORATOR；变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式置 'true' 才对
+    #   外部作者开放（opt-in，缺省拒绝，与 :15-16 关停面同款 opt-out 语义方向相反、独立生效）。
+    if: >
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.draft == false &&
+      vars.AUTO_FILL_PR_ENABLED != 'false' && vars.AUTO_FILL_PR_ENABLED != '0' &&
+      (contains('OWNER,MEMBER,COLLABORATOR', github.event.pull_request.author_association) ||
+       vars.AUTO_FILL_PR_ALLOW_EXTERNAL == 'true')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout base branch (workflow code only)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ${{ github.event.repository.full_name }}
+          ref: ${{ github.base_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate and apply PR title/body
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ vars.AI_BASE_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEMPLATE_PATH: .github/pull_request_template.md
+          AUTO_FILL_PR_ENABLED: ${{ vars.AUTO_FILL_PR_ENABLED }}
+          MAX_PATCH_CHARS: '60000'
+          MAX_FILES: '200'
+          MAX_COMMIT_CHARS: '12000'
+          AI_MAX_TOKENS: '2400'
+        run: node .github/scripts/auto-fill-pr.mjs
