@@ -28,6 +28,8 @@ Kilo Code 平台的独立主编排代理与复审流水线，通过双 Reviewer 
 
 将 `agents/` 下文件复制到 `~/.config/kilo/agents/`；在 `kilo.jsonc` 中配置 `"default_agent": "plan-writer-sp"` 并重载配置。权限管控参照 `permission-template.md`。
 
+注意：本目录的 `AGENTS.md` 与 `agents/` 下文件为编译产物（由 `node checks/build-agents.mjs` 从 `spec/blocks/` 与 `spec/platform/*/manifest.json` 生成，头部带 GENERATED 版本戳）；修改必须改 `spec/` 后重生成，不得直改本仓产物。
+
 ## 注意事项与暗坑
 
 - 权限跨主 md / 子 md / `kilo.jsonc` 取最严值，任一层 `deny` 即彻底不注入该工具。
