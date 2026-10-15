@@ -21,6 +21,8 @@ CodeBuddy 平台 SuperPower 计划工程三代理：主编排器与双独立复�
 
 将 `agents/` 下文件复制到 `~/.codebuddy/agents/`。MCP 双实例注册见 `mcp/README.md`。
 
+注意：本目录的 `AGENTS.md` 与 `agents/` 下文件为编译产物（由 `node checks/build-agents.mjs` 从 `spec/blocks/` 与 `spec/platform/*/manifest.json` 生成，头部带 GENERATED 版本戳）；修改必须改 `spec/` 后重生成，不得直改本仓产物。
+
 ## 注意事项与暗坑
 
 - 本客户端无 `plan_exit`，交付方式为口头呈报加路径交付。
