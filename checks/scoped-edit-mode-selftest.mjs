@@ -250,7 +250,38 @@ try {
       }
     }
   } else {
-    check('scoped-lock-stale-share-blocked-bounded-timeout', true, 'SKIP win32-only 夹具（POSIX 归属动态复现项见计划，本套件不重复）');
+    // POSIX 动态复现有界超时：他进程持「活锁」（pid 存活 + time 新鲜）→ edit_scoped_file 必须有界超时拒绝，
+    //   杜绝旧口径在非 Windows 上 check(...,true,...) 的假绿。锁文件路径必须与实现 scopedLockPath
+    //   （mcp/plan-governor.js:1906-1908：dirname(target)/.tmp-lock-<base>.lock）逐字一致；
+    //   win32 夹具同形（checks/scoped-edit-mode-selftest.mjs:218）。
+    const posixLock = path.join(path.dirname(target), '.tmp-lock-' + path.basename(target) + '.lock');
+    const holder = spawn(process.execPath, ['-e',
+      'const fs=require("fs");const p=process.env.PLOCK;fs.writeFileSync(p,JSON.stringify({pid:process.pid,time:new Date().toISOString()}));setTimeout(()=>process.exit(0),6000);'],
+      { stdio: 'ignore', env: { ...process.env, PLOCK: posixLock } });
+    let ready = false;
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      try { const j = JSON.parse(fs.readFileSync(posixLock, 'utf8')); if (j && j.pid === holder.pid) { ready = true; break; } } catch { /* 等待持有者落锁 */ }
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    if (!ready) {
+      try { holder.kill(); } catch { /* 未启动 */ }
+      check('scoped-lock-stale-share-blocked-bounded-timeout', false, 'FAIL POSIX 活锁持有者未就绪，无法构造有界超时夹具');
+    } else {
+      try {
+        const resRo = await rpc('tools/call', {
+          name: 'edit_scoped_file',
+          arguments: { filename: 'mode-inherit.md', old_string: 'ZETA', new_string: 'ETA', expected_count: 1 },
+          _meta: { runtime_scope: 'subagent' },
+        });
+        check('scoped-lock-stale-share-blocked-bounded-timeout',
+          !!resRo.result?.isError && String(resRo.result.content?.[0]?.text || '').includes('scoped-edit-lock-timeout'),
+          String(resRo.result?.content?.[0]?.text || '').slice(0, 60));
+      } finally {
+        try { holder.kill(); } catch { /* 收尾 */ }
+        try { fs.unlinkSync(posixLock); } catch { /* 清理尽力而为 */ }
+      }
+    }
   }
   // 台账结构守卫（七类攻击面在实现文件中的拒绝面逐字在场）。
   check('scoped-edit-path-lock-guard-present', implText.includes('resolveScopedPlanTarget'));
