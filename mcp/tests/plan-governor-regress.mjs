@@ -1263,7 +1263,7 @@ async function main() {
     const echo = (() => { try { return JSON.parse(sessOn.responses[2]?.content?.[0]?.text || '{}'); } catch { return {}; } })();
     check('probe-on-echo-role', echo.role === 'main' && echo.envMcpRole === 'main' && echo.transport === 'stdio', JSON.stringify(echo.role) + '/' + JSON.stringify(echo.transport));
     check('probe-on-echo-clientinfo', echo.clientInfo && echo.clientInfo.name === 'codebuddy-main-probe', JSON.stringify(echo.clientInfo));
-    check('probe-on-echo-meta', echo.meta && echo.meta.runtime_scope === 'subagent' && echo.meta.origin === 'probe-suite', JSON.stringify(echo.meta));
+    check('probe-on-echo-meta', echo.meta && echo.meta.runtime_scope === 'subagent' && echo.meta.origin === '<redacted>', JSON.stringify(echo.meta));
     sessOn.cleanup(); cleanDir(tmpOn);
   }
 
@@ -1277,6 +1277,19 @@ async function main() {
     check('write-scoped-file-no-meta-deny', isDenied(sessScoped.responses[1], '主代理/未知调用方不得直接写计划文件'));
     check('write-scoped-file-no-meta-no-artifact', !fs.existsSync(path.join(tmp, '.kilo')));
     sessScoped.cleanup(); cleanDir(tmp);
+  }
+
+  // —— PR#11：debug_identity_echo 全量回显 _meta 泄露面 → 白名单投影（现码回显 secret=红，修复后不含=绿）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-probe-redact-'));
+    const sess = await runSession({ role: 'main', workdir: tmp, envExtra: { MCP_IDENTITY_PROBE: '1' }, actions: [
+      { id: 1, tool: 'debug_identity_echo', args: {}, meta: { runtime_scope: 'subagent', secret: 'LEAKCANARY' } }
+    ] });
+    const txt = sess.responses[1]?.content?.[0]?.text || '';
+    const leaked = txt.includes('LEAKCANARY');
+    const keptSignal = txt.includes('subagent');
+    check('probe-meta-redacted', !leaked && keptSignal && txt.includes('<redacted>'));
+    sess.cleanup(); cleanDir(tmp);
   }
 
   // —— all 受控写档（MCP_WRITE_MODE=all）：实例即身份锚；锁域与 sub 档全同 ——
@@ -1318,6 +1331,105 @@ async function main() {
     ] });
     check('all-malformed-failclosed', isDenied(sessAF.responses[1], '主代理/未知调用方不得直接写计划文件') && !fs.existsSync(path.join(tmpAF, '.kilo')));
     sessAF.cleanup(); cleanDir(tmpAF);
+  }
+
+  // —— PR#11：子实例复审面 junction 真实路径逃逸回归（词面闸被区内链接击穿 → 现码放行=红，修复后=绿）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-jct-'));
+    const plans = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plans, { recursive: true });
+    let linked = false;
+    try { fs.symlinkSync(plans, path.join(plans, 'review'), 'junction'); linked = true; } catch { /* 无权限环境 SKIP */ }
+    if (linked) {
+      const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'review/ESCAPED.md', content: '#e' } }
+      ] });
+      check('all-sub-junction-review-deny', sess.responses[1]?.isError === true && !fs.existsSync(path.join(plans, 'ESCAPED.md')));
+      sess.cleanup();
+      try { fs.rmdirSync(path.join(plans, 'review')); } catch { /* 拆 junction 链接，防递归 rm 穿链 */ }
+    } else { console.log('SKIP all-sub-junction-review-deny (junction unavailable)'); }
+    cleanDir(tmp);
+  }
+  // —— PR#11：edit_scoped_file 同型逃逸（review→plans junction，编辑落到根主笔面既存文件 → 现码=红，修复后=绿）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-editjct-'));
+    const plans = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plans, { recursive: true });
+    fs.writeFileSync(path.join(plans, 'ROOTPLAN.md'), '# A\nB\n', 'utf8');
+    let linked = false;
+    try { fs.symlinkSync(plans, path.join(plans, 'review'), 'junction'); linked = true; } catch { /* 无权限环境 SKIP */ }
+    if (linked) {
+      const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+        { id: 1, tool: 'edit_scoped_file', args: { filename: 'review/ROOTPLAN.md', old_string: 'B', new_string: 'HACKED' } }
+      ] });
+      const untouched = !fs.readFileSync(path.join(plans, 'ROOTPLAN.md'), 'utf8').includes('HACKED');
+      check('all-edit-sub-junction-review-deny', sess.responses[1]?.isError === true && untouched);
+      sess.cleanup();
+      try { fs.rmdirSync(path.join(plans, 'review')); } catch {}
+    } else { console.log('SKIP all-edit-sub-junction-review-deny (junction unavailable)'); }
+    cleanDir(tmp);
+  }
+  // —— PR#11：main 实例 all 档全子目录面（根/test-evidence/review/pr-review 均放行，回归不回退）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-mainsurf-'));
+    const sess = await runSession({ role: 'main', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+      { id: 1, tool: 'write_scoped_file', args: { filename: 'root-plan.md', content: 'r' } },
+      { id: 2, tool: 'write_scoped_file', args: { filename: 'test-evidence/e.md', content: 'e' } },
+      { id: 3, tool: 'write_scoped_file', args: { filename: 'review/rr.md', content: 'rr' } },
+      { id: 4, tool: 'write_scoped_file', args: { filename: 'pr-review/pp.md', content: 'pp' } }
+    ] });
+    check('all-main-surface-full-allow', [1, 2, 3, 4].every((i) => sess.responses[i]?.isError !== true));
+    sess.cleanup(); cleanDir(tmp);
+  }
+  // —— PR#11：子实例 all 档写 test-evidence/ 被词面闸拒（复审面收窄，回归守卫）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-subte-'));
+    const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+      { id: 1, tool: 'write_scoped_file', args: { filename: 'test-evidence/x.md', content: 'x' } }
+    ] });
+    check('all-sub-testevidence-deny', sess.responses[1]?.isError === true);
+    sess.cleanup(); cleanDir(tmp);
+  }
+  // —— PR#11：子实例 all 档 tools/list 描述与主档同为"实例身份档"（ROLE 拆文案后仍含锚串，护 all-list-desc-parity 同族）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-subdesc-'));
+    const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+      { id: 1, listTools: true }
+    ] });
+    const d = ((sess.responses[1]?.tools || []).find((t) => t.name === 'write_scoped_file') || {}).description || '';
+    check('all-desc-surface-parity-sub', d.includes('实例身份档') && d.includes('review/'));
+    sess.cleanup(); cleanDir(tmp);
+  }
+  // —— PR#11：深层 junction（review 为真实目录，其下 evil→区外）逃逸拒（Files 承诺 all-sub-nested-junction-deny）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-nestjct-'));
+    const plans = path.join(tmp, '.kilo', 'plans');
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-nestout-'));
+    fs.mkdirSync(path.join(plans, 'review'), { recursive: true });
+    let linked = false;
+    try { fs.symlinkSync(outside, path.join(plans, 'review', 'evil'), 'junction'); linked = true; } catch { /* SKIP */ }
+    if (linked) {
+      const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+        { id: 1, tool: 'write_scoped_file', args: { filename: 'review/evil/x.md', content: 'x' } }
+      ] });
+      check('all-sub-nested-junction-deny', sess.responses[1]?.isError === true && !fs.existsSync(path.join(outside, 'x.md')));
+      sess.cleanup();
+      try { fs.rmdirSync(path.join(plans, 'review', 'evil')); } catch {}
+    } else { console.log('SKIP all-sub-nested-junction-deny (junction unavailable)'); }
+    cleanDir(tmp); cleanDir(outside);
+  }
+  // —— PR#11：不该触发域主盘钉——首建 review/、真实 review/ 下深层子目录（均无链接）放行（护合成闸不误伤）——
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-all-suballow-'));
+    const plans = path.join(tmp, '.kilo', 'plans');
+    fs.mkdirSync(plans, { recursive: true });
+    const sess = await runSession({ role: 'subagent', workdir: tmp, envExtra: { MCP_WRITE_MODE: 'all' }, actions: [
+      { id: 1, tool: 'write_scoped_file', args: { filename: 'review/first.md', content: 'f' } },
+      { id: 2, tool: 'write_scoped_file', args: { filename: 'review/sub/deep.md', content: 'd' } }
+    ] });
+    check('all-sub-firstwrite-allow', sess.responses[1]?.isError !== true && fs.existsSync(path.join(plans, 'review', 'first.md')));
+    check('all-sub-deep-allow', sess.responses[2]?.isError !== true && fs.existsSync(path.join(plans, 'review', 'sub', 'deep.md')));
+    sess.cleanup(); cleanDir(tmp);
   }
 
   // —— write_scoped_file 成功路 + 5 类逃逸变体（注入 _meta.runtime_scope=subagent）——

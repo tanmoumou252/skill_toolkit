@@ -298,7 +298,7 @@ export const CLAUSES = [
   },
   {
     id: 'review-severity-axiom',
-    text: '严重度 = 影响半径 × 可逆性',
+    text: '严重度按四要素裁定',
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {

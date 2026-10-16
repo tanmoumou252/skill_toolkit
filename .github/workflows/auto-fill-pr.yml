@@ -32,10 +32,15 @@ concurrency:
 jobs:
   auto-fill-pr:
     # dependabot 等机器人 PR 不代笔；draft 期间作者仍在握笔；显式停用即整轮不跑。
+    # 作者信任闸：pull_request_target 运行在基仓库上下文，外部作者的 PR 也会消耗 AI 额度并回写正文——
+    #   缺省仅放行 OWNER/MEMBER/COLLABORATOR；变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式置 'true' 才对
+    #   外部作者开放（opt-in，缺省拒绝，与 :15-16 关停面同款 opt-out 语义方向相反、独立生效）。
     if: >
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.draft == false &&
-      vars.AUTO_FILL_PR_ENABLED != 'false' && vars.AUTO_FILL_PR_ENABLED != '0'
+      vars.AUTO_FILL_PR_ENABLED != 'false' && vars.AUTO_FILL_PR_ENABLED != '0' &&
+      (contains('OWNER,MEMBER,COLLABORATOR', github.event.pull_request.author_association) ||
+       vars.AUTO_FILL_PR_ALLOW_EXTERNAL == 'true')
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout base branch (workflow code only)

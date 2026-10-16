@@ -251,6 +251,12 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 { const r = await runCase({ finishReason: 'length' }); record('autofill-skip-s8-truncated', skipWith(r, 'S8', '截断'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ aiJson: '{not json' }); record('autofill-skip-s9-bad-json', skipWith(r, 'S9', '不是合法 JSON'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ aiJson: JSON.stringify({ title: 'feat(ci): x', body: '' }) }); record('autofill-skip-s9-empty-body', skipWith(r, 'S9', '正文为空'), JSON.stringify(r.out || {})); }
+{ // CodeRabbit Major（红线 6）：模型正文以未闭合代码围栏收尾 → 放行则拼接的既有尾块落入开栏、下轮被重写。期望值由契约推导：S9 + 该闸独有理由串。
+  const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n```python\nx = 1' } }); record('autofill-skip-s9-model-unclosed-fence', skipWith(r, 'S9', '未闭合代码围栏'), JSON.stringify(r.out || {})); }
+{ // 触发域 tilde 支路（FENCE_RE:48 双识 ~{3,}）：未闭合 ~~~ 同归 S9。契约声称含两类围栏，各须一正控锁，杜绝「声称覆盖 backtick 与 tilde、实只测 backtick」的 claim-vs-evidence 落差。
+  const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n~~~sh\nx = 1' } }); record('autofill-skip-s9-model-unclosed-fence-tilde', skipWith(r, 'S9', '未闭合代码围栏'), JSON.stringify(r.out || {})); }
+{ // 不该触发域反向护栏（防过修）：正文内开闭配平的围栏不得被误拒，须照常写一次。
+  const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n```python\nx = 1\n```' } }); record('autofill-model-closed-fence-not-denied', wroteOne(r), JSON.stringify(r.out || {})); }
 { const r = await runCase({ title: '把正文自动填充工作流补齐' }); record('autofill-skip-s9-title-no-grammar', skipWith(r, 'S9', '文法'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' }); record('autofill-skip-s9-title-multiline', skipWith(r, 'S9', '含换行'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ title: 'feat(nope-module): x' }); record('autofill-skip-s9-scope-not-in-whitelist', skipWith(r, 'S9', '词表白名单'), JSON.stringify(r.out || {})); }
@@ -978,6 +984,12 @@ await withVariant('fence-aware-split', 'if (isInsideFence(i))', 'if (false && is
   const body = String(r.patches[0]?.payload?.body ?? '');
   return { ok: r.err === null && body.includes(SENTINEL), detail: '摘掉围栏判定后围栏引用仍未变成切分点＝该锚测不到真实写面' };
 });
+// 新闸「模型正文未闭合围栏」变异锚（CodeRabbit Major · 红线 6）：摘闸 needle 使 `if (draftFence[...])` 短路为永假——
+//   未闭合 backtick 夹具摘闸后不再判 S9（继续装配至 wroteOne），锚测得到即 ok；配平夹具摘闸前后都写，不干扰本锚。
+await withVariant('model-unclosed-fence-gate', 'if (draftFence[draftFence.length - 1])', 'if (false && draftFence[draftFence.length - 1])', async (run) => {
+  const r = await runCaseWith(run, { aiBody: { 概述: '动机说明。\n```python\nx = 1' } });
+  return { ok: r.err === null && r.out?.skipCode !== 'S9', detail: JSON.stringify(r.out || {}) };
+});
 await withVariant('verification-preserve', 'if (humanRows.length', 'if (false && humanRows.length', async (run) => {
   const r = await runCaseWith(run, { existingBody: '旧头部\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n| `node checks/run.mjs` | 63 项不变式 0 违规 |' });
   const body = String(r.patches[0]?.payload?.body ?? '');
@@ -1092,7 +1104,11 @@ try {
   check('autofill-job-if-guards-draft-bot-and-killswitch',
     /github\.event\.pull_request\.draft == false/.test(yaml) &&
     /vars\.AUTO_FILL_PR_ENABLED != 'false'/.test(yaml) &&
-    /github\.actor != 'dependabot\[bot\]'/.test(yaml));
+    /github\.actor != 'dependabot\[bot\]'/.test(yaml) &&
+    // 作者信任闸（pull_request_target 基仓库上下文加固）：仅信任 OWNER/MEMBER/COLLABORATOR，
+    //   或变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式 'true' 时放行外部作者（opt-in，缺省拒绝）。
+    /contains\('OWNER,MEMBER,COLLABORATOR',\s*github\.event\.pull_request\.author_association\)/.test(yaml) &&
+    /vars\.AUTO_FILL_PR_ALLOW_EXTERNAL == 'true'/.test(yaml));
   check('autofill-env-wired',
     /AI_API_KEY:\s*\$\{\{\s*secrets\.AI_API_KEY\s*\}\}/.test(yaml) &&
     /AI_BASE_URL:\s*\$\{\{\s*vars\.AI_BASE_URL\s*\}\}/.test(yaml) &&

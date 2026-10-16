@@ -60,6 +60,15 @@ const WRITE_MODE = process.env.MCP_WRITE_MODE === 'all' ? 'all' : 'sub';
 //   仅字面量 "1" 判定启用（fail-closed）；探针零副作用（不落盘/不执行/不外发）。
 const PROBE_FLAG_ON = process.env.MCP_IDENTITY_PROBE === '1';
 let _lastInitializeClientInfo = null;
+// PR#11 探针 _meta 白名单投影：仅回显身份信号类字段原值，其余键值置占位（值隐键存，
+//   非机密键名保留可诊断性，机密值不外泄）。判据不依赖值内容，无法用特定 key 名绕过。
+function redactProbeMeta(m) {
+  if (!m || typeof m !== 'object') return {};
+  const allow = ['runtime_scope', 'transport'];
+  const out = {};
+  for (const k of Object.keys(m)) out[k] = allow.includes(k) ? m[k] : '<redacted>';
+  return out;
+}
 
 // ============ 统一路径布局（用户级 + 项目级两层）============
 //   布局分两层，与宿主 .kilo 同族：
@@ -1323,7 +1332,7 @@ function startServer() {
             {
               name: 'write_scoped_file',
               description: WRITE_MODE === 'all'
-                ? '【受控写·实例身份档】本实例受控写模式=部署期 MCP_WRITE_MODE=all：凡达本实例的调用即按实例角色放行受控写（主实例=计划主笔面，子实例=复审报告面），无需 _meta 自声明；路径锁不放宽——仅 .kilo/plans/ 下 .md（含 review/、test-evidence/、pr-review/ 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB；符号链接检查与 O_EXCL 锁互斥与 sub 档完全同码同锁。'
+                ? '【受控写·实例身份档】本实例受控写模式=部署期 MCP_WRITE_MODE=all：凡达本实例的调用即按实例角色放行受控写（主实例=计划主笔面，子实例=复审报告面），无需 _meta 自声明；路径锁不放宽——仅 .kilo/plans/ 下 .md（主实例可及 review/、test-evidence/、pr-review/ 全部子目录及根；子实例仅限 review/、pr-review/ 复审报告面，写 test-evidence/ 或根目录被拒，且子实例面闸对目录组件逐一 lstat 拒符号链接/junction），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB；符号链接检查与 O_EXCL 锁互斥与 sub 档完全同码同锁。'
                 : ROLE === 'subagent'
                 ? '【受控写·不可用】subagent 实例不得经本通道写计划文件，调用即被拒。'
                 : '【受控写·zcode 子代理专用】仅在 .kilo/plans/ 下写 .md 产物（计划/复审报告/取证）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁 `.kilo/plans/`（含 `review/`、`test-evidence/`、`pr-review/` 子目录），拒 `..`、绝对路径、盘符、非 `.md`，≤256KB。主代理与未知调用方一律拒绝。新建文件按默认权限创建（新建场景无既有权限可继承）；如需保留既有权限位请改用 edit_scoped_file。写入全程持与 edit_scoped_file 同名的同目录 O_EXCL 锁文件互斥（陈旧崩溃残留锁自愈回收，Atomics.wait 零 CPU 退避，取得超时以 isError 拒绝并审计）。',
@@ -1339,7 +1348,7 @@ function startServer() {
             {
               name: 'edit_scoped_file',
               description: WRITE_MODE === 'all'
-                ? '【受控编辑·实例身份档】受控写模式同上（all 档）：达本实例即按实例身份放行对 .kilo/plans/ 下既有 .md 的精确串替换；old_string 逐字命中 expected_count 次才放行的计数闸、路径锁、符号链接校验、O_EXCL 锁互斥与 sub 档完全同码同锁，零放宽。'
+                ? '【受控编辑·实例身份档】受控写模式同上（all 档）：达本实例即按实例身份放行对 .kilo/plans/ 下既有 .md 的精确串替换（主实例可及全部子目录及根；子实例仅限 review/、pr-review/ 复审报告面，目录组件经 lstat 拒符号链接/junction）；old_string 逐字命中 expected_count 次才放行的计数闸、路径锁、符号链接校验、O_EXCL 锁互斥与 sub 档完全同码同锁，零放宽。'
                 : ROLE === 'subagent'
                 ? '【受控编辑·不可用】subagent 实例不得经本通道编辑计划文件，调用即被拒。'
                 : '【受控编辑·zcode 子代理专用】对 .kilo/plans/ 下已存在 .md 做精确串替换（old_string 逐字命中 expected_count 次才放行，缺省 1；计数不符即拒并报实际计数）。仅 runtime_scope=subagent 且服务端实例角色为 main 放行；路径锁与符号链接校验同 write_scoped_file；新建文件请用 write_scoped_file。主代理与未知调用方一律拒绝。编辑既有文件时尽力保留其权限位（不跟随符号链接读取，读取失败回退默认写行为），与 write_scoped_file 新建文件的默认权限为有意差异；读-改-写全程持同目录 O_EXCL 锁文件互斥，取得超时以 isError 拒绝并审计。',
@@ -1554,7 +1563,7 @@ function startServer() {
         const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
         if (WRITE_MODE !== 'all' && (ROLE !== 'main' || scope !== 'subagent')) {
           process.stderr.write(`[write_scoped_file] REJECTED mode=${WRITE_MODE} role=${ROLE} scope=${JSON.stringify(scope)}\n`);
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: WRITE_MODE === 'all' ? '实例身份档内部错误：本分支不应在 all 模式命中。' : '主代理/未知调用方不得直接写计划文件，请派 plan-writer 子代理。' }] } });
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '主代理/未知调用方不得直接写计划文件，请派 plan-writer 子代理。' }] } });
           return;
         }
         // 信任边界：scope 信号来自 params._meta.runtime_scope，由 ZCode 宿主注入
@@ -1574,7 +1583,7 @@ function startServer() {
         //   杜绝 `./review/x.md` 与 `review\x.md` 在视图与执行两侧各走一套归一化口径的旧式分叉。
         //   main 实例双锚分支（WRITE_MODE!=='all'）行为零变化；`isSubagentReviewSurfacePath`
         //   仍 fail-closed（空串/仅前缀/前缀外均 false）。
-        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(g.rel)) {
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !subagentReviewSurfaceAllowed(g)) {
           process.stderr.write(`[write_scoped_file] REJECTED all-mode subagent write outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[受控写拦截] 实例身份档：子实例仅可写 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
@@ -1631,6 +1640,7 @@ function startServer() {
           //   见「明确不纳入的事项」，如实声明不入码。
           const realDir = fs.realpathSync(path.dirname(target));
           if (!withinReal(realDir, expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
+          if (WRITE_MODE === 'all' && ROLE === 'subagent' && !subagentReviewSurfaceAllowed(g)) throw new Error('目标经目录符号链接/junction 越出复审报告面（写盘前复核）');
           try { if (fs.lstatSync(target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
           // 权限口径：新建文件按默认权限落盘，不继承既有权限位（编辑路径 edit_scoped_file 才尽力继承
           //   既有权限位）。新建场景无既有权限可继承，该差异为有意设计，非疏漏。
@@ -1727,7 +1737,7 @@ function startServer() {
         const scope = _m.runtime_scope || (_m['com.zcode/request-context'] && _m['com.zcode/request-context'].runtime_scope) || null;
         if (WRITE_MODE !== 'all' && (ROLE !== 'main' || scope !== 'subagent')) {
           process.stderr.write(`[edit_scoped_file] REJECTED mode=${WRITE_MODE} role=${ROLE} scope=${JSON.stringify(scope)}\n`);
-          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: WRITE_MODE === 'all' ? '[scoped-edit-all-mode] 实例身份档内部错误：本分支不应在 all 模式命中。' : '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
+          send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-no-meta] 主代理/未知调用方不得直接编辑计划文件，请派 plan-writer 子代理。' }] } });
           return;
         }
         const g = resolveScopedPlanTarget(args.filename);
@@ -1739,7 +1749,7 @@ function startServer() {
         //   仅放行 review/ 与 pr-review/ 子目录；主实例放行范围不变。
         // E2：同 write 路——消费 resolveScopedPlanTarget 归一后的 `g.rel`，禁止在调用点再做第二套
         //   字符串归一化（视图-执行分叉）。`g.ok === false` 已在上方早退，此处 `g.rel` 必为已归一串。
-        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !isSubagentReviewSurfacePath(g.rel)) {
+        if (WRITE_MODE === 'all' && ROLE === 'subagent' && !subagentReviewSurfaceAllowed(g)) {
           process.stderr.write(`[edit_scoped_file] REJECTED all-mode subagent edit outside review surface: ${JSON.stringify(String(args.filename || ''))}\n`);
           send({ jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: '[scoped-edit-all-mode-surface] 实例身份档：子实例仅可编辑 review/ 与 pr-review/ 子目录（复审报告面），根目录计划主笔面属主实例写面。' }] } });
           return;
@@ -1848,6 +1858,7 @@ function startServer() {
           // 写盘前复核（同 write 建后复核口径，但不含 mkdirSync——edit 禁建目录）：
           const realDir = fs.realpathSync(path.dirname(g.target));
           if (!g.withinReal(realDir, g.expectRoot)) throw new Error('目标经符号链接越出 .kilo/plans/');
+          if (WRITE_MODE === 'all' && ROLE === 'subagent' && !subagentReviewSurfaceAllowed(g)) throw new Error('目标经目录符号链接/junction 越出复审报告面（写盘前复核）');
           try { if (fs.lstatSync(g.target).isSymbolicLink()) throw new Error('目标文件为符号链接，禁止写入'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
           // C7 原子替换：结果先完整写入同目录临时文件（.kilo/plans/ 锁域内），再同卷 rename 替换
           //   目录项——ENOSPC/配额半写时截断的是临时文件，原文无损；rename 直接替换目录项，
@@ -1917,7 +1928,7 @@ function startServer() {
           envMcpRole: process.env.MCP_ROLE || null,
           workspace: WORKSPACE,
           clientInfo: _lastInitializeClientInfo,
-          meta: params && params._meta ? params._meta : null,
+          meta: redactProbeMeta(params && params._meta ? params._meta : null),
           transport: 'stdio',
           timestamp: new Date().toISOString()
         };
@@ -2176,14 +2187,40 @@ function releaseScopedLock(lockPath, lockFd, meta, wroteMeta) {
 // 受控写/受控编辑共用守卫：filename 归一 → .kilo/plans/ 路径锁 → 符号链接祖先重锚 →
 // 目标自身 lstat。返回 { ok: true, target, expectRoot, withinReal } 或 { ok: false, text }。
 // write 与 edit 必须共用本函数，严禁复制两份（单一事实源）。
-// all 档子实例（ROLE=subagent）写面谓词：仅复审报告面（review/ 或 pr-review/ 直接子路径）。
+// all 档子实例（ROLE=subagent）写面谓词（词面层）：仅复审报告面（review/ 或 pr-review/ 之下，允许其下任意深度子路径）。
 // 输入为已归一（反斜杠转正斜杠、resolveScopedPlanTarget 已拒 .. 与绝对路径）的相对路径。
 // 退化输入语义：空串/仅前缀（"review/"）/前缀外（"a/review/x.md"、"reviews/x.md"）均判 false（fail-closed）。
+// 注：本词面谓词不单独构成面闸——真实 junction/符号链接逃逸由 surfaceComponentsReal 拦截，两者经 subagentReviewSurfaceAllowed 合成。
 function isSubagentReviewSurfacePath(rel) {
   for (const prefix of ['review/', 'pr-review/']) {
     if (rel.startsWith(prefix) && rel.length > prefix.length) return true;
   }
   return false;
+}
+// PR#11 词法前缀闸可被"留在 .kilo/plans/ 内的 junction/符号链接"击穿（review→.kilo/plans
+//   使 review/X.md 词面判真、字节却沿链接落到根主笔面）。故面闸判定必须吃"真实目录组件态"，
+//   不吃纯词法 rel。lexRoot 与 resolveScopedPlanTarget 同一事实源（WORKSPACE/.kilo/plans）。
+// 契约：逐段 lstat 目标 rel 的目录组件（末段文件名除外）——命中符号链接或 Windows junction
+//   （lstatSync().isSymbolicLink()，探针 A 实测 junction 在此返 true）或非目录即 fail-closed；
+//   某目录段"尚未创建"即 return true 早停（mkdirSync(recursive) 将建真实目录，非经链接建到面外）。
+// 退化输入：空串/仅前缀/首段非面由词面闸先拒，本函数不触达；目标文件自身链接由写盘前对 target 的 lstat 自检拦截（同文件内 write/edit 各自的写盘前复判点）。
+// 不该触发域：main 实例（调用侧 ROLE==='subagent' 短路）、首建 review/、真实 review/ 下任意深度——均放行。
+function surfaceComponentsReal(lexRoot, rel) {
+  const segs = rel.split('/');
+  if (segs.length < 2 || !['review', 'pr-review'].includes(segs[0])) return false;
+  if (segs[segs.length - 1] === '') return false;
+  let cur = lexRoot;
+  for (let i = 0; i < segs.length - 1; i++) {
+    cur = path.join(cur, segs[i]);
+    let st; try { st = fs.lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') return true; return false; }
+    if (st.isSymbolicLink() || !st.isDirectory()) return false;
+  }
+  return true;
+}
+// 写面闸唯一消费点：词面 ∩ 真实（单一事实源，write/edit 两路 + 建目录前后/写盘前后共用同一谓词，
+//   杜绝视图-执行分叉）。WORKSPACE 为模块级 const，lexRoot 解析与 resolveScopedPlanTarget 恒等。
+function subagentReviewSurfaceAllowed(g) {
+  return isSubagentReviewSurfacePath(g.rel) && surfaceComponentsReal(path.resolve(WORKSPACE, '.kilo', 'plans'), g.rel);
 }
 function resolveScopedPlanTarget(filename) {
   // E2：归一口径为单一 canonical rel——反斜杠转正斜杠后剥离冗余 `./` 前缀（可重复），

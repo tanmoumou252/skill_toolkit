@@ -546,6 +546,13 @@ export async function runAutoFill(deps) {
     }
   }
 
+  // 未闭合围栏闸（CodeRabbit Major · 设计红线 6）：模型正文若以开栏收尾，随后拼接的既有 CodeRabbit 尾块
+  //   会落进这个未闭合围栏——下一轮 findSplitIndex(:96) 因 CRAB 起始哨兵被 fenceFlags(:79) 判入围栏内
+  //   (:100 isInsideFence 跳过) 而认不出切分点，splitIdx=-1 → 整块被当头部重写，尾块被改写/吞没。
+  //   取围栏结束态：对正文行尾追加一个空行，其 inFence 读数即「全文处理完是否仍开栏」；开栏未闭合 → fail-closed 归 S9。
+  const draftFence = fenceFlags([...draftLines, '']);
+  if (draftFence[draftFence.length - 1]) return report('S9', '模型正文含未闭合代码围栏');
+
   const titleRes = normalizeTitle(model.title, scopes);
   if (titleRes.error) return report('S9', titleRes.error);
 
