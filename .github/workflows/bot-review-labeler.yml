@@ -37,7 +37,7 @@ on:
 # PR 解析完成后由 sync-labels job 以 PR 编号串行；无法归因的 check_run 不进入写标签 job。
 
 permissions:
-  contents: write   # HEAD 徽章每轮写入 .github/assets/badges/HEAD-<sha>.svg（createOrUpdateFileContents）
+  # 无 contents 写权：HEAD 徽章走 shields 动态外链（不落库），本工作流从不写仓库文件。
   pull-requests: write
   issues: write
   checks: read
@@ -300,13 +300,12 @@ jobs:
             ]);
             // 徽章/图标资产本仓固化（外链零依赖）：静态枚举集一次性生成入库（checks/build-status-badges.mjs，
             //   产物冻结），引用走本仓 raw URL；静态文件内容永不变（改内容=换文件名），分支 URL 的
-            //   Camo 强缓存对静态集无害；HEAD 徽章每轮新文件名（HEAD-<sha>.svg），URL 天然唯一同样免缓存。
+            //   Camo 强缓存对静态集无害；HEAD 徽章不落库，改走 shields 动态外链（URL 内嵌 short sha）。
             // OCTICON/BADGE 外链工厂已移除；缺映射即抛错（防静默裂图）：新增枚举必须连资产一起补。
             const BADGE_BASE = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/raw/${context.payload.repository?.default_branch || 'main'}/.github/assets/badges`;
             const ICON = (name, size) => `<img src="${BADGE_BASE}/icon-${name}.svg" width="${size}" height="${size}" valign="middle">`;
             const BADGE = (label, style, height) => {
-              const file = `${label}-${style === 'plastic' ? 'p' : 'f'}`;
-              const known = BADGE_FILES.has(`${file}.svg`) || BADGE_FILES.has(`${label}-${style}.svg`);
+              const known = BADGE_FILES.has(`${label}-${style}.svg`);
               if (!known) throw new Error(`[Status Comment] unknown badge asset for "${label}" (${style}) — add it via checks/build-status-badges.mjs first`);
               return `<img src="${BADGE_BASE}/${label}-${style}.svg"${height ? ` height="${height}"` : ''} valign="middle">`;
             };
@@ -445,58 +444,9 @@ jobs:
               }
               const autofillNote = AUTOFILL_META[autofillState].note(autofillState === 'synced' ? shortSha : '');
               const badgeWrap = (url, img) => url ? `<a href="${url}">${img}</a>` : img;
-              // HEAD 徽章每轮绘制（SVG 文本，rx=3 圆角 #0969da）：写入 .github/assets/badges/HEAD-<sha>.svg
-              //   后引用本仓 raw URL；文件名含 sha 天然唯一 → Camo 缓存永不命中旧版。写入失败（权限/网络）
-              //   降级回 shields 外链——展示面降级不失明，绝不阻塞标签主链路。
-              let headBadgeImg;
-              try {
-                // 先查再写（review-finding 契约）：同一 head 重跑（事件重触发/re-run）时文件已存在，
-                //   直接复用本仓 URL，不重复 createOrUpdateFileContents（零冗余 commit、零配额浪费）；
-                //   404 → 创建；并发 run 已创建（422 fast-forward 冲突）→ 同样复用本仓 URL（竞态不是
-                //   失败，不进降级）；其余错误 → 降级 shields（展示面不失明，绝不阻塞标签主链路）。
-                // ref 显式钉默认分支：未指定 ref 时 getContent/createOrUpdate 的行为依赖 API 默认值，
-                //   显式化避免写错分支（与 BADGE_BASE 的 default_branch 同源）。
-                const badgeRef = context.payload.repository?.default_branch || 'main';
-                const badgePath = `.github/assets/badges/HEAD-${shortSha}.svg`;
-                let exists = false;
-                try {
-                  await github.rest.repos.getContent({
-                    owner: context.repo.owner, repo: context.repo.repo, path: badgePath, ref: badgeRef,
-                  });
-                  exists = true;
-                } catch (checkErr) {
-                  if (checkErr?.status !== 404) throw checkErr;
-                }
-                if (!exists) {
-                  // 画布宽按逐字符渲染宽计算（全角 11px / 半角 7.3px）+ padding 24——固定 96px 会
-                  // 裁剪首尾（与静态徽章同源缺陷，见 checks/build-status-badges.mjs textWidth 注释）。
-                  const headLabel = `HEAD-${shortSha}`;
-                  const headW = Math.ceil([...headLabel].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e7f ? 11 : 7.3), 0)) + 24;
-                  const headSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${headW}" height="20"><rect width="${headW}" height="20" rx="3" fill="#0969da"/><text x="${headW / 2}" y="14" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11" fill="#fff" text-anchor="middle">${headLabel}</text></svg>`;
-                  try {
-                    await github.rest.repos.createOrUpdateFileContents({
-                      owner: context.repo.owner, repo: context.repo.repo,
-                      path: badgePath,
-                      ref: badgeRef,
-                      message: `chore(badges): HEAD badge for ${shortSha} [skip ci]`,
-                      content: Buffer.from(headSvg, 'utf8').toString('base64'),
-                    });
-                  } catch (writeErr) {
-                    // 422（fast-forward 冲突）：大概率是并发 run 已创建，但 422 也可能是其他校验
-                    //   失败（review-finding 契约）——重读确认文件真实存在才复用本仓 URL，
-                    //   否则上抛走 shields 降级（防裂图）。
-                    if (writeErr?.status !== 422) throw writeErr;
-                    console.log(`[Status Comment] HEAD badge write got 422 — re-reading to confirm concurrent creation.`);
-                    await github.rest.repos.getContent({
-                      owner: context.repo.owner, repo: context.repo.repo, path: badgePath, ref: badgeRef,
-                    });
-                  }
-                }
-                headBadgeImg = `<img src="${BADGE_BASE}/HEAD-${shortSha}.svg" height="18" valign="middle">`;
-              } catch (err) {
-                console.log(`[Status Comment] HEAD badge write failed (fallback to shields): ${err?.status || err?.message || err}`);
-                headBadgeImg = `<img src="https://img.shields.io/badge/HEAD-${shortSha}-0969da?style=flat" height="18" valign="middle">`;
-              }
+              // HEAD 徽章走 shields 动态外链：URL 内嵌本轮 short sha 天然唯一（免缓存），不落库、
+              //   不写仓库文件（本工作流因此无需 contents 写权）；展示与降级同形，绝不阻塞标签主链路。
+              const headBadgeImg = `<img src="https://img.shields.io/badge/HEAD-${shortSha}-0969da?style=flat" height="18" valign="middle">`;
               const lines = [
                 STATUS_COMMENT_MARKER,
                 `### ${ICON('git-pull-request', 16)} PR 审查状态 <a href="${repoUrl}/pull/${prNumber}/commits/${currentHeadSha}">${headBadgeImg}</a>`,

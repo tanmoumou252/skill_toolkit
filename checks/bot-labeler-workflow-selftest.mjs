@@ -406,23 +406,25 @@ check('workflow-status-comment-finalized-table-form',
   text.includes('| 组件 | 状态 | 附注 |') &&
   /BADGE\([^)]*'flat'/.test(text) &&
   /BADGE\([^)]*'plastic'/.test(text));
-// S1b 徽章/图标本仓固化：iconify 与 shields 外链在 status comment 模板面零出现（HEAD 写入失败的
-//   shields 降级兜底除外）；BADGE 缺映射抛错（防静默裂图）；HEAD 徽章每轮 createOrUpdateFileContents
-//   写入 + 失败降级可见。
+// S1b 徽章/图标本仓固化 + HEAD 徽章 shields 化（Finding 1 修订）：iconify 零出现；静态徽章经
+//   BADGE_FILES 登记表走本仓 raw URL（缺映射即抛，防静默裂图；图标 raw URL 由 octicon 锚 :432 覆盖）；
+//   HEAD 徽章走 shields 动态外链，writeStatusComment 内绝不出现仓库文件写入 API（getContent/
+//   createOrUpdate）——负向锁死"去 contents:write 写库"这一收口不被回退。
 check('workflow-status-comment-badges-repo-localized',
   (() => {
     const fnStart = text.indexOf('async function writeStatusComment');
     if (fnStart === -1) return false;
     const section41 = text.indexOf('4.1 提取 Checks API');
     const body = text.slice(fnStart, section41 > fnStart ? section41 : text.length);
-    return body.includes('${BADGE_BASE}/') &&
-      body.includes('createOrUpdateFileContents') &&
-      body.includes('HEAD badge write failed') &&
+    return body.includes('img.shields.io/badge/HEAD-') &&
+      !body.includes('createOrUpdateFileContents') &&
+      !body.includes('repos.getContent') &&
       !body.includes('api.iconify.design');
   })() &&
   /const BADGE_FILES = new Set\(\[/.test(text) &&
   /unknown badge asset/.test(text) &&
-  (text.match(/img\.shields\.io/g) || []).length === 1); // 仅 HEAD 降级兜底一处// S2 图标定版（本仓固化后修订）：octicon path 固化于 .github/assets/badges/（icon-*.svg 六枚，
+  !/^[ \t]*contents:[ \t]*write[ \t]*(#.*)?$/m.test(text) &&
+  (text.match(/img\.shields\.io/g) || []).length === 1); // 仅 HEAD 徽章 shields 外链一处// S2 图标定版（本仓固化后修订）：octicon path 固化于 .github/assets/badges/（icon-*.svg 六枚，
 //   生成器 checks/build-status-badges.mjs 着色 #57606a），工作流以 ICON(name,size) 引用本仓 raw URL；
 //   emoji 零使用（负向锚：status comment 区段（常量区 BOT_STATE_META 起）不匹配 emoji 码点区间，
 //   区间含 U+2600-27BF（✅ U+2705 等杂项符号）与 U+1F300-1FAFF）。
@@ -436,6 +438,31 @@ check('workflow-status-comment-octicon-icons-no-emoji',
     if (start === -1 || end === -1 || end <= start) return false;
     return !/[\u{2600}-\u{27BF}\u{1F300}-\u{1FAFF}]/u.test(text.slice(start, end));
   })());
+// S2b 徽章清单单源漂移闸（方案 B，人类锁定 p5 §6.2）：build-status-badges.mjs 的 BADGES 手抄了
+//   labeler 五表（BOT_STATE_META/RISK/VERDICT/AUTOFILL），单一事实源在 labeler、生成侧为冻结镜像；
+//   本闸解析两侧并断言产物 .svg 文件名集（`${file}-${shape}.svg` 口径）逐字相等，缺/多即红。
+{
+  const genText = fs.readFileSync(path.join(root, 'checks', 'build-status-badges.mjs'), 'utf8');
+  const gStart = genText.indexOf('const BADGES = [');
+  const gEnd = gStart === -1 ? -1 : genText.indexOf('];', gStart);
+  const genNames = new Set();
+  if (gEnd !== -1) {
+    for (const m of genText.slice(gStart, gEnd).matchAll(/\[\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'(flat|plastic)'\s*\]/g)) {
+      genNames.add(`${m[1]}-${m[2]}.svg`);
+    }
+  }
+  const bStart = text.indexOf('const BADGE_FILES = new Set([');
+  const bEnd = bStart === -1 ? -1 : text.indexOf(']);', bStart);
+  const labelerNames = new Set();
+  if (bEnd !== -1) {
+    for (const m of text.slice(bStart, bEnd).matchAll(/'([^']+\.svg)'/g)) labelerNames.add(m[1]);
+  }
+  const onlyGen = [...genNames].filter((x) => !labelerNames.has(x));
+  const onlyLabeler = [...labelerNames].filter((x) => !genNames.has(x));
+  check('badge-registry-no-drift',
+    genNames.size > 0 && labelerNames.size > 0 && onlyGen.length === 0 && onlyLabeler.length === 0,
+    'onlyGenerator=' + JSON.stringify(onlyGen) + ' onlyLabeler=' + JSON.stringify(onlyLabeler));
+}
 // S3 内联采集区段隔离：pulls.listComments 仅出现在 writeStatusComment 区段（4.1 节头之前）。
 check('workflow-inline-comments-fetched-in-status-comment-only',
   text.includes('github.rest.pulls.listComments') &&
@@ -1420,11 +1447,13 @@ function record(name, ok, detail) {
     'tails=' + (body.match(/<!-- BOT-METADATA/g) || []).length + ' meta=' + JSON.stringify(meta));
 }
 // D6 采集抛错 fail-safe：listComments 拒绝 → 降级行在场、标签照写、无 err 逃逸。
-//   篡改串用立即 throw 的 IIFE 形态（Promise.reject(...) && fn 短路求值恒为 fn，永不 reject——构造性假靶）。
+//   桩须是「被 paginate 调用时才返回 rejected Promise」的 async 函数，而非立即执行的 IIFE：
+//   `(async()=>{throw})() || fn` 会在求值实参时把 Promise 对象（非函数）传给 paginate → paginate 内
+//   `fn(params)` 抛 TypeError（非 API 拒绝）且被弃的 rejected Promise 触发 unhandled rejection（实测崩全链）。
 {
   const broken = extractSyncLabelsScript(text).replace(
     'github.rest.pulls.listComments',
-    '(async () => { throw new Error("boom"); })() || github.rest.pulls.listComments');
+    'async () => { throw new Error("boom"); }');
   const r = await runWorkflow({
     eventName: 'issue_comment',
     payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
@@ -1434,9 +1463,11 @@ function record(name, ok, detail) {
   });
   record('workflow-inline-fetch-failure-degrades-not-blocks',
     r.err === null && r.calls.add > 0 &&
-      (r.comments[0]?.body || '').includes('内联评论采集失败'),
+      (r.comments[0]?.body || '').includes('内联评论采集失败') &&
+      r.logs.some((l) => l.includes('boom')),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' add=' + r.calls.add +
-      ' degraded=' + (r.comments[0]?.body || '').includes('内联评论采集失败'));
+      ' degraded=' + (r.comments[0]?.body || '').includes('内联评论采集失败') +
+      ' boomCaught=' + r.logs.some((l) => l.includes('boom')));
 }
 // D7 评分管道零消费：变体验证——把内联采集结果拼入 codeRabbitText 的篡改体必须被捕获。
 //   篡改点移入评分区可达作用域：直接在 codeRabbitText 聚合行拼接常量攻击串（证明夹具对
