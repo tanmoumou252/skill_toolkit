@@ -317,10 +317,18 @@ jobs:
               .filter(([, d]) => Number.isInteger(d.appId) && d.appId > 0)
               .map(([k, d]) => [k, d.appId]));
             async function writeStatusComment(botStatuses, verdict, riskScore = null) {
-              // 定位前置（E-1 闭环）：ownComment 单一 selfUrl 事实源，组装前完成；定位失败维持既有 fail-loud。
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, per_page: 100
-              });
+              // 定位前置（E-1 闭环）：ownComment 单一 selfUrl 事实源，组装前完成。定位失败（仅 transient，
+              //   issues:write 已含读面故无 403 面）降级为本轮跳过状态评论：绝不 duplicate marker 评论、
+              //   绝不崩溃已落标签的主链路，下次事件重试自愈。
+              let comments;
+              try {
+                comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, per_page: 100
+                });
+              } catch (err) {
+                console.log(`[Status Comment] Own-comment lookup failed (skip this round, heal on next event): ${err?.status || err?.message || err}`);
+                return;
+              }
               const ownComment = comments.find(comment =>
                 comment.body?.includes(STATUS_COMMENT_MARKER) &&
                 comment.user?.type === 'Bot' &&

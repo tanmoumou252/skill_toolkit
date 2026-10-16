@@ -1469,6 +1469,28 @@ function record(name, ok, detail) {
       ' degraded=' + (r.comments[0]?.body || '').includes('内联评论采集失败') +
       ' boomCaught=' + r.logs.some((l) => l.includes('boom')));
 }
+// D6b 定位降级 fail-safe：issues.listComments（writeStatusComment 内）拒绝 → 本轮跳过状态评论
+//   （不 create 不 update、无 err 逃逸），标签照写、主链路不崩；下次事件重试自愈。
+//   桩同为「被 paginate 调用才 reject 的 async 函数」；降级语义区别于 D6——D6 是内联采集（展示面
+//   降级行仍写入），本用例是 ownComment 定位（直接跳过评论写，不 duplicate marker 评论）。
+{
+  const broken = extractSyncLabelsScript(text).replace(
+    'github.rest.issues.listComments',
+    'async () => { throw new Error("lookup-boom"); }');
+  const r = await runWorkflow({
+    eventName: 'issue_comment',
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
+    headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
+    scriptSrc: broken,
+  });
+  record('workflow-own-comment-lookup-failure-skips-not-crashes',
+    r.err === null && r.calls.add > 0 && r.calls.createComment === 0 && r.calls.updateComment === 0 &&
+      r.logs.some((l) => l.includes('lookup-boom')),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' add=' + r.calls.add +
+      ' create=' + r.calls.createComment + ' update=' + r.calls.updateComment +
+      ' lookupCaught=' + r.logs.some((l) => l.includes('lookup-boom')));
+}
 // D7 评分管道零消费：变体验证——把内联采集结果拼入 codeRabbitText 的篡改体必须被捕获。
 //   篡改点移入评分区可达作用域：直接在 codeRabbitText 聚合行拼接常量攻击串（证明夹具对
 //   "评分区混入评论正文"敏感——干净实现不含该串故 approved，篡改体拉爆评级被捕获）。
