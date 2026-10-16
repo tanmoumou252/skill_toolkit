@@ -9,6 +9,7 @@
 import process from 'node:process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 const EMOJI_BY_TYPE = {
@@ -125,7 +126,7 @@ export function sectionBodyOf(text, name) {
 }
 
 // 模型草稿的验证节整节丢弃 → 现存人类内容按契约 10 决定是否回填。
-export function mergeVerification(draftBody, existingHead) {
+export function mergeVerification(draftBody, existingHead, defaultCommands = []) {
   const draftLines = draftBody.split('\n');
   const draftSecs = sectionsOf(draftBody);
   const verif = draftSecs.find((s) => s.name === '验证');
@@ -159,7 +160,12 @@ export function mergeVerification(draftBody, existingHead) {
     const keep = [...tableBlock, '', ...humanProse].join('\n');
     return spliceVerification(replaced, keep);
   }
-  return replaced;
+  // Bug 4：无人类行时注入模板声明的默认验证命令（命令列填、结果列留空），
+  //   使 PR 描述的「验证」节不再恒空；人类随后只需补「结果」列。
+  const defaultRows = Array.isArray(defaultCommands) && defaultCommands.length > 0
+    ? [VERIF_HEADER, VERIF_SEP, ...defaultCommands]
+    : [VERIF_HEADER, VERIF_SEP];
+  return spliceVerification(replaced, defaultRows.join('\n'));
 }
 
 function VERIF_HEADING_WITH_TABLE() {
@@ -194,7 +200,17 @@ export function normalizeTitle(raw, allowed) {
   return { title, type, scope, summary };
 }
 
-export function checkBullets(mainSectionBody, filesList) {
+// §12 仓库存在性核验：本地 `git cat-file -e HEAD:<path>`（base 分支工作树，零网络）。
+//   探测不可用（无 git / 无状态码）时 fail-open 返 true（不误报），仅在明确「不存在」时返 false。
+function repoHasPathDefault(relPath) {
+  try {
+    const r = spawnSync('git', ['cat-file', '-e', `HEAD:${relPath}`], { stdio: 'ignore' });
+    if (r && typeof r.status === 'number') return r.status === 0;
+    return true;
+  } catch { return true; }
+}
+
+export function checkBullets(mainSectionBody, filesList, repoHasPath = repoHasPathDefault) {
   const bullets = mainSectionBody.split('\n').filter((l) => /^- /.test(l));
   if (bullets.length === 0) return { error: '主要变更无 bullet' };
   for (const line of bullets) {
@@ -211,10 +227,20 @@ export function checkBullets(mainSectionBody, filesList) {
   }
   const fileList = new Set(filesList.map((f) => f.filename));
   const allTokens = [...mainSectionBody.matchAll(CODE_TOKEN_RE)].map((m) => m[1].trim());
-  const pathTokens = [...new Set(allTokens.filter((t) => t.includes('/') || PATH_EXT_RE.test(t)))];
+  // §12 归一化：剔除尾 `/` 目录与含通配符（* ? [ ]）的 glob 形态——它们不是可核验的真实文件路径。
+  const pathTokens = [...new Set(allTokens.filter((t) =>
+    (t.includes('/') || PATH_EXT_RE.test(t)) && !/\/$/.test(t) && !/[?*[\]]/.test(t)))];
+  // 覆盖率：改动清单直命中；裸名（无 `/`）另按后缀命中改动清单（`f === t || f.endsWith('/' + t)`）。
+  const hitChanged = (t) => fileList.has(t) ||
+    (!t.includes('/') && [...fileList].some((f) => f === t || f.endsWith('/' + t)));
   const unverified = [];
   let coverage = 0;
-  for (const t of pathTokens) { if (fileList.has(t)) coverage += 1; else unverified.push(t); }
+  for (const t of pathTokens) {
+    if (hitChanged(t)) { coverage += 1; continue; }
+    // §12 只报「真实文件路径（含 `/` + 带扩展名）且仓库根本不存在」者；
+    //   目录/通配/裸名/真实存在一律不报（消除 path-unverified 误报）。
+    if (t.includes('/') && PATH_EXT_RE.test(t) && !repoHasPath(t)) unverified.push(t);
+  }
   if (coverage < Math.min(3, Math.max(1, fileList.size))) {
     return { error: `路径覆盖率不足：命中清单 ${coverage} < ${Math.min(3, Math.max(1, fileList.size))}` };
   }
@@ -477,7 +503,7 @@ export async function runAutoFill(deps) {
   const note = (text) => { notice(`NOTE ${sanitize(text)}`); };
 
   const enabled = String(env.AUTO_FILL_PR_ENABLED == null ? '' : env.AUTO_FILL_PR_ENABLED).trim().toLowerCase();
-  if (enabled === 'false' || enabled === '0') return report('S11', 'AUTO_FILL_PR_ENABLED 显式停用');
+  if (enabled === 'false') return report('S11', 'AUTO_FILL_PR_ENABLED 显式停用');
 
   if (!env.GITHUB_TOKEN || !env.PR_NUMBER || !env.REPO || !env.HEAD_SHA) return report('S1', '缺少 GITHUB_TOKEN/PR_NUMBER/REPO/HEAD_SHA');
   if (!env.AI_API_KEY || !env.AI_BASE_URL || !env.AI_MODEL) return report('S2', '缺少 AI_API_KEY/AI_BASE_URL/AI_MODEL');
@@ -617,7 +643,11 @@ export async function runAutoFill(deps) {
   const existingTail = splitIdx === -1 ? '' : lines.slice(splitIdx).join('\n');
 
   const statsLine = injectStats(draftWithoutVerif, statsText);
-  let headBody = mergeVerification(statsLine, existingHead);
+  const templateVerifCommands = (() => {
+    const tv = sectionBodyOf(template, '验证').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|') && l.includes('`'));
+    return tv.length > 0 ? tv : [];
+  })();
+  let headBody = mergeVerification(statsLine, existingHead, templateVerifCommands);
   let finalBody = finalBodyOf(existingTail ? headBody.trimEnd() + '\n\n' + existingTail + '\n' : headBody.trimEnd() + '\n');
 
   if (existingTail) {
@@ -649,7 +679,7 @@ export async function runAutoFill(deps) {
     const idx2 = findSplitIndex(l2sLines, f2s);
     const head2 = l2sLines.slice(0, idx2 === -1 ? l2sLines.length : idx2).join('\n');
     const tail2 = idx2 === -1 ? '' : l2sLines.slice(idx2).join('\n');
-    headBody = mergeVerification(statsLine, head2);
+    headBody = mergeVerification(statsLine, head2, templateVerifCommands);
     finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
     if (tail2 && headTailOverlap(headBody, tail2)) {
       return report('S9', '以最新正文重合并后仍与尾块重叠');

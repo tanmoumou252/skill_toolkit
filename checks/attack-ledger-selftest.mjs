@@ -3,7 +3,7 @@
 //   未识别 Files 标题的执法检测（loose Files heading，与 ledger「信任根入口 / 视图-执行语义分叉」咬合）、
 //   --latest 最新执法候选选择（latest-unclosed-exclude-gate 互补面）、装载故障退出码。
 // 断言名与主计划 attack-ledger-selftest 台账登记同源；红灯阶段（未落 R1/R3）即真红，不得静默通过。
-import { isPlanFilename, hasLedgerSection, enforcementSignals, pickLatestEligible, latestFaultGate, testPathOutsideRoot } from './attack-ledger.mjs';
+import { isPlanFilename, hasLedgerSection, enforcementSignals, pickLatestEligible, latestFaultGate, testPathOutsideRoot, collectDeclaredTestPaths } from './attack-ledger.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -194,55 +194,78 @@ check('assert-latest-fault-gate-exit2',
 // 视图-执行语义分叉的守门侧落点：同一缺失路径被 report/shadowReport 双消费时，旧实现
 //   裸 fs.readFileSync 会二次 ENOENT 崩溃；R-A3 的 readOpt 经 seenMissing 去重后仅入队一次。
 // 期望值由行为契约推导（契约 A3「缺失声明只能形成一次 missingDeclared」）。
-// 本用例直接核验守卫谓词：readOpt 由 CLI 闭包持有不可导入，故以行为等价注入验证——
-//   对同一 ENOENT 路径调用两次"读取→ENOENT→去重入队"逻辑，断言入队长度恰为 1。
+// §15.5 L1 改真实 CLI：不再以行为等价注入复刻守卫谓词（伪测试），改走真实 CLI 入口
+//   （--plan + --test 同一缺失路径），断言缺失文案恰出现 1 次且带 --plan 模式前缀。
 {
-  const seen = new Set();
-  const queue = [];
-  const readOptDedup = (x) => {
-    if (!x) return null;
-    try { return fs.readFileSync(x, 'utf8'); }
-    catch (e) {
-      if (e && e.code === 'ENOENT') { if (!seen.has(x)) { seen.add(x); queue.push(x); } return null; }
-      throw e;
-    }
-  };
-  const missing = '/nonexistent/path/for/dedup-check.md';
-  const r1 = readOptDedup(missing);
-  const r2 = readOptDedup(missing);
-  check('ledger-readopt-missing-deduped-once',
-    r1 === null && r2 === null && queue.length === 1 && queue[0] === missing,
-    'queue.length=' + queue.length);
+  const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-readopt-dedup-'));
+  const tmpPlan = path.join(tmp, 'dedup-plan.md');
+  // 同一路径经 --test（testText 通道）声明且缺失：若 readOpt 无去重，missingDeclared 对
+  //   同一路径会重复入队/重复 FAIL；契约要求恰一次（--plan 前缀文案）。
+  //   缺失路径必须在仓库根内（tmpdir 会被 testpath-root-containment 先拦，走的是另一条通道）。
+  const missingPath = path.join(cliRoot, '.kilo', 'plans', 'no-such-selftest-for-dedup.mjs');
+  fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
+  try {
+    const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--test', missingPath], { encoding: 'utf8' });
+    const out = String(r.stdout || '') + String(r.stderr || '');
+    const hits = out.match(/声明的执法\/测试\/报告文件缺失[^\n]*no-such-selftest-for-dedup\.mjs/g) || [];
+    check('ledger-readopt-missing-deduped-once',
+      r.status !== 0 && hits.length === 1 && out.includes('--plan 声明的执法/测试/报告文件缺失'),
+      'hits=' + hits.length + ' status=' + r.status);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // —— 8. A3 文案模式化：--plan 模式不得谎称 --latest ——
 // 期望值由契约 A3 推导：违规文案前缀须随触发模式切换（latestMode ? '--latest' : '--plan'）。
-// 以源码结构断言锁定：CLI 内 latestMode 变量随 --latest 置真，文案三元消费 latestMode。
+// §15.5 L1 改真实 CLI：源码正则钉实现形状属伪测试面，改为真实 CLI 双模式驱动——
+//   --plan 与 --latest 各自传入缺失路径，断言两侧文案前缀互异（--plan 侧不带 --latest 字样）。
 {
-  const src = fs.readFileSync(fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url)), 'utf8');
-  check('ledger-missing-declared-msg-mode-flagged',
-    /latestMode = true;/.test(src)
-      && /\(latestMode \? '--latest' : '--plan'\) \+ ' 声明的执法\/测试\/报告文件缺失/.test(src),
-    '文案未按 latestMode 模式化');
+  const ledgerCli = fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url));
+  const cliRoot = path.resolve(path.dirname(ledgerCli), '..');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-mode-msg-'));
+  const tmpPlan = path.join(tmp, 'mode-plan.md');
+  // 缺失路径必须在仓库根内（tmpdir 会被 testpath-root-containment 先拦，走的是另一条通道）。
+  const missingPath = path.join(cliRoot, '.kilo', 'plans', 'no-such-impl-for-mode.mjs');
+  fs.writeFileSync(tmpPlan, '# p\n\n## Files\n- Modify: `checks/other.mjs`\n\n', 'utf8');
+  try {
+    const r = spawnSync(process.execPath, [ledgerCli, '--plan', tmpPlan, '--impl', missingPath], { encoding: 'utf8' });
+    const out = String(r.stdout || '') + String(r.stderr || '');
+    const planModeMsg = /--plan 声明的执法\/测试\/报告文件缺失/.test(out);
+    const notLatestPrefix = !out.includes('--latest 声明的执法/测试/报告文件缺失');
+    check('ledger-missing-declared-msg-mode-flagged',
+      r.status !== 0 && planModeMsg && notLatestPrefix,
+      'planModeMsg=' + planModeMsg + ' notLatestPrefix=' + notLatestPrefix + ' status=' + r.status);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // —— 9. A4 多测试文件全集检索：Files 节全部 *.mjs 测试路径参与断言名检索 ——
 // 期望值由契约 A4 推导：断言名登记在第二个 Files 测试路径时也必须命中（旧单文件口径假红）。
-// 以 CLI 级行为验证：构造 Files 节含两个测试文件，断言 ledger 实际消费两者——
-//   经 CLI --latest 已在主证据链证实（TEST 行 6 路径）；此处以纯函数等价验证捕获正则行为。
+// §15.5 L1 改真实 CLI + 导出共用：--latest 真实驱动的提取逻辑抽为 collectDeclaredTestPaths 导出，
+//   夹具直调导出函数断言「两个测试路径全收 + Set 去重 + 描述性裸名不捕获」——
+//   判据单一事实源（CLI 与夹具同源），不再以源码正则钉实现形状。
 {
-  const src2 = fs.readFileSync(fileURLToPath(new URL('./attack-ledger.mjs', import.meta.url)), 'utf8');
-  // 结构断言：matchAll 全集收集 + Set 去重 + 目录段锚定（排除描述性裸名）+
-  //   空白排除字符类（命令形态串含空格不捕获）。字符类里的反引号按源码字面量形态匹配。
-  const hasMatchAll = /fsec\.matchAll\(/.test(src2);
-  // 源码中目录段锚定写作 `(?:[\w.-]+\/)+`（正则字面量，\w 与 \. 为转义形态）
-  const hasDirAnchor = src2.includes('(?:[\\w.-]+\\/)+');
-  // `[^\s`]` 在源码中逐字出现（正则字面量，非转义形态）
-  const hasNoSpaceClass = src2.includes('[^\\s`]');
-  const hasSetDedup = /\.\.\.new Set\(tms\)/.test(src2);
+  const fsecA = [
+    '## Files',
+    '- Modify: `checks/aaa-selftest.mjs`',
+    '- Modify: `checks/aaa-selftest.mjs`', // 重复声明 → 去重后仍 1 次
+    '- Modify: `checks/bbb-selftest.mjs`',
+    '- 仅改 `selftest.mjs` 侧四个重名', // 描述性裸名 → 不捕获
+    '- 运行 `node checks/aaa-selftest.mjs` 验证', // 命令形态（含空格）→ 不捕获
+    '',
+  ].join('\n');
+  const collected = collectDeclaredTestPaths(fsecA, '/repo-root');
+  const okA = Array.isArray(collected) && collected.length === 2
+    && collected.some((p) => p.replace(/\\/g, '/').endsWith('checks/aaa-selftest.mjs'))
+    && collected.some((p) => p.replace(/\\/g, '/').endsWith('checks/bbb-selftest.mjs'));
+  const okEmpty = collectDeclaredTestPaths('## Files\n- Modify: `checks/other.mjs`\n', '/repo-root') === null;
   check('ledger-test-path-collects-all-files',
-    hasMatchAll && hasDirAnchor && hasNoSpaceClass && hasSetDedup,
-    `matchAll=${hasMatchAll} dirAnchor=${hasDirAnchor} noSpaceClass=${hasNoSpaceClass} setDedup=${hasSetDedup}`);
+    okA && okEmpty,
+    'collected=' + JSON.stringify(collected) + ' emptyCaseNull=' + okEmpty);
 }
 
 // —— 10. testpath-root-containment：真实 CLI 读前拒绝仓库外声明测试路径 ——

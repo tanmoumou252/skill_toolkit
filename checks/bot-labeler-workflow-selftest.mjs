@@ -398,14 +398,14 @@ check('workflow-status-comment-marker-and-bot-owner-lookup',
   /github\.rest\.issues\.updateComment\(/.test(text) &&
   /github\.rest\.issues\.createComment\(/.test(text));
 
-// --- §0 定版形态结构锚（方案3表格 + 证据链接 + 进度表 + 两套徽章 + emoji 零使用）。
+// --- §0 定版形态结构锚（方案3表格 + 证据链接 + 进度表 + 统一 flat 两段式徽章 + emoji 零使用）。
 //     期望值溯源：主计划 §0 人类定版（2026-10-14T07:19Z）契约，非抄录当前实现。
-// S1 表格定版：审查表表头/进度表表头/两套徽章形态（flat 圆角 + plastic 直角）在场。
+// S1 表格定版：审查表表头/进度表表头/统一 flat 两段式徽章在场（plastic 形态已退役，负向锁死不回退）。
 check('workflow-status-comment-finalized-table-form',
   text.includes('| 审查节点 | 执行结果 | 风险量化 | 附注 |') &&
   text.includes('| 组件 | 状态 | 附注 |') &&
   /BADGE\([^)]*'flat'/.test(text) &&
-  /BADGE\([^)]*'plastic'/.test(text));
+  !/BADGE\([^)]*'plastic'/.test(text));
 // S1b 徽章/图标本仓固化 + HEAD 徽章 shields 化（Finding 1 修订）：iconify 零出现；静态徽章经
 //   BADGE_FILES 登记表走本仓 raw URL（缺映射即抛，防静默裂图；图标 raw URL 由 octicon 锚 :432 覆盖）；
 //   HEAD 徽章走 shields 动态外链，writeStatusComment 内绝不出现仓库文件写入 API（getContent/
@@ -447,8 +447,8 @@ check('workflow-status-comment-octicon-icons-no-emoji',
   const gEnd = gStart === -1 ? -1 : genText.indexOf('];', gStart);
   const genNames = new Set();
   if (gEnd !== -1) {
-    for (const m of genText.slice(gStart, gEnd).matchAll(/\[\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'(flat|plastic)'\s*\]/g)) {
-      genNames.add(`${m[1]}-${m[2]}.svg`);
+    for (const m of genText.slice(gStart, gEnd).matchAll(/\[\s*'([^']+)'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*,\s*'[^']*'\s*\]/g)) {
+      genNames.add(`${m[1]}-flat.svg`);
     }
   }
   const bStart = text.indexOf('const BADGE_FILES = new Set([');
@@ -1108,6 +1108,9 @@ function record(name, ok, detail) {
 
 // E3 negative: a foreign Bot's comment carrying the marker must NOT be overwritten — the
 // Action must create its own comment (author login gate), not update the foreign id.
+// Bug 1 修复后：create 轮会对自己新创建的评论做一次 URL 回填更新（uuid，非 foreign id）——
+//   断言改为「恰 1 次 update 且 foreign 原文完好 + 自有评论被回填真实 #issuecomment- 链接」，
+//   既守住「绝不覆写他人 marker 评论」原意，又接纳首轮自回填的新语义（update=1 非 foreign）。
 {
   const foreign = { id: 77, body: '<!-- bot-review-labeler:status -->\nnot ours', user: { type: 'Bot', login: 'coderabbitai[bot]' } };
   const r = await barrierCase({
@@ -1115,9 +1118,9 @@ function record(name, ok, detail) {
     comments: [foreign],
   });
   record('workflow-foreign-bot-marker-comment-not-updated',
-    r.err === null && r.calls.updateComment === 0 && r.calls.createComment === 1 &&
+    r.err === null && r.calls.createComment === 1 && r.calls.updateComment === 1 &&
       foreign.body.includes('not ours') &&
-      r.comments.some((c) => c.id !== foreign.id && c.user?.login === 'github-actions[bot]'),
+      r.comments.some((c) => c.id !== foreign.id && c.user?.login === 'github-actions[bot]' && String(c.body).includes('#issuecomment-')),
     'update=' + r.calls.updateComment + ' create=' + r.calls.createComment + ' foreignIntact=' + foreign.body.includes('not ours'));
 }
 
@@ -1358,10 +1361,10 @@ function record(name, ok, detail) {
 // D2 内联命令块分组：2 条同 review id + 1 条无主 + 1 条人类内联 → 恰 1 行 select(==551)。
 {
   const pullComments = [
-    { id: 1, pull_request_review_id: 551, path: 'a.js', line: 10, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 2, pull_request_review_id: 551, path: 'b.js', line: 20, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 3, pull_request_review_id: null, path: 'c.js', line: 30, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 4, pull_request_review_id: 551, path: 'd.js', line: 40, user: { type: 'User', login: 'human' } },
+    { id: 1, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 10, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 2, pull_request_review_id: 551, commit_id: 'HEAD', path: 'b.js', line: 20, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 3, pull_request_review_id: null, commit_id: 'HEAD', path: 'c.js', line: 30, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 4, pull_request_review_id: 551, commit_id: 'HEAD', path: 'd.js', line: 40, user: { type: 'User', login: 'human' } },
   ];
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
@@ -1371,7 +1374,7 @@ function record(name, ok, detail) {
   record('workflow-inline-fetch-command-grouped-by-review-id',
     r.err === null && r.calls.pullsListComments > 0 &&
       body.includes('--paginate') &&
-      body.includes('select(.pull_request_review_id == 551 and (.user.login == "kilo-code-bot[bot]"))') &&
+      body.includes('select(.pull_request_review_id == 551 and .commit_id == "HEAD" and (.user.login == "kilo-code-bot[bot]"))') &&
       body.includes('{path, line, body}') &&
       !body.includes('select(.pull_request_review_id == null)') &&
       (body.match(/select\(/g) || []).length === 1,
@@ -1389,33 +1392,51 @@ function record(name, ok, detail) {
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
       ' cmds=' + (body.match(/select\(/g) || []).length);
 }
-// D2c 兜底隔离：非本轮 head review 的内联（rid=999，即使受信 Bot 作者）不入命令——只输出本轮受信 review id。
+// D2c 陈旧边界：评论自身 commit_id 非当前 head（历史/已过期内联）不入命令——只输出挂在本轮 diff 上的评论。
 {
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, id: 552, body: 'SUGGESTION: ok' }],
-    pullComments: [{ id: 20, pull_request_review_id: 999, path: 'z.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
+    pullComments: [{ id: 20, pull_request_review_id: 552, commit_id: 'OLD', path: 'z.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
   });
   const body = r.comments[0]?.body || '';
-  record('workflow-inline-command-excludes-foreign-review-id',
-    r.err === null && !body.includes('== 999') && !body.includes('select(.pull_request_review_id != null)') &&
+  record('workflow-inline-command-excludes-stale-commit-id',
+    r.err === null && !body.includes('select(.pull_request_review_id ==') &&
       (body.match(/select\(/g) || []).length === 0,
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
 }
-// D3 两轮收敛：create 轮占位 → update 轮以 ownComment.html_url 回填 + metadata comment_url。
+// D2d 重锚纳入：评论自身 commit_id 已重锚到当前 head，但其所属 review 的 commit_id 仍是旧 head
+//   （review id 不在 headReviews）——必须仍被纳入命令（Bug 2 回归：按 review commit_id 过滤会误丢）。
+{
+  const r = await barrierCase({
+    reviews: [{ ...COMMENTED, id: 552, body: 'SUGGESTION: ok' }],
+    pullComments: [{ id: 30, pull_request_review_id: 999, commit_id: 'HEAD', path: 'z.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
+  });
+  const body = r.comments[0]?.body || '';
+  record('workflow-inline-command-includes-reanchored-review-id',
+    r.err === null && body.includes('select(.pull_request_review_id == 999') &&
+      body.includes('.commit_id == "HEAD"') &&
+      (body.match(/select\(/g) || []).length === 1,
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+}
+// D3 首轮即收敛：create 轮立即用 createComment 返回的 html_url 重渲染并 updateComment 回填
+//   （不再依赖第二轮 update 才修正——首轮评论即携带真实 #issuecomment-… 链接）。
 {
   const created = await barrierCase({ reviews: [{ ...COMMENTED, id: 553, body: 'SUGGESTION: ok' }], pullComments: [] });
+  const body1 = created.comments[0]?.body || '';
   const updated = await barrierCase({
     reviews: [{ ...COMMENTED, id: 553, body: 'SUGGESTION: ok' }],
     comments: created.comments.slice(),
     pullComments: [],
   });
   const body2 = updated.comments[0]?.body || '';
-  record('workflow-self-url-create-placeholder-then-update-backfill',
-    created.err === null && updated.err === null && updated.calls.updateComment === 1 &&
-      body2.includes('本评论链接') &&
-      body2.includes('issuecomment-') &&
+  record('workflow-self-url-converges-on-first-create',
+    created.err === null && created.calls.createComment === 1 && created.calls.updateComment === 1 &&
+      body1.includes('issuecomment-') &&
+      body1.includes('"comment_url":"https://github.com/o/r/pull/8#issuecomment-') &&
+      !body1.includes('https://github.com/o/r/pull/8\n') &&
+      updated.err === null && updated.calls.updateComment === 1 &&
       body2.includes('"comment_url":"https://github.com/o/r/pull/8#issuecomment-'),
-    'create=' + created.calls.createComment + ' update=' + updated.calls.updateComment + ' urlRound2=' + body2.includes('issuecomment-'));
+    'create=' + created.calls.createComment + ' update1=' + created.calls.updateComment + ' update2=' + updated.calls.updateComment + ' urlRound1=' + body1.includes('issuecomment-'));
 }
 // D4 BOT-METADATA 六键：JSON.parse 往返 + schema（head/verdict/risk_score/bots/evidence/links/autofill/comment_url）。
 {

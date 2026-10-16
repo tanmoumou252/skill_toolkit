@@ -1,6 +1,6 @@
 // build-status-badges.mjs — 状态评论徽章/图标资产生成器（一次性入库，产物冻结）
 // 运行：node checks/build-status-badges.mjs   产物：.github/assets/badges/*.svg
-// 规则：圆角形态 flat（rx=3）/ 直角 plastic（rx=0）；文本 HTML 实体转义防注入；
+// 规则：统一两段式 flat（左 label #555 + 右 value 原色，rx=3，顶部 #bbb 高光）；文本 HTML 实体转义防注入；
 //       图标为 octicon 官方 path 着色 #57606a；新增枚举必须连资产一起补（缺文件名映射即抛错）。
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -12,12 +12,15 @@ const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, 
 // 半角（ASCII）宽≈0.66×字号；再留左右 padding 12px。禁止按固定系数估——中文标签
 // 曾因按 ASCII 系数估宽被视口裁剪首尾（实测缺陷）。
 const textWidth = (s, fontSize) => [...s].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e7f ? fontSize : fontSize * 0.66), 0);
-const flat = (label, color, opts = {}) => {
-  const bold = opts.bold ? ` font-weight="bold"` : '';
-  const fontSize = opts.fontSize ?? 11;
-  const w = opts.width ?? Math.ceil(textWidth(label, fontSize)) + 24;
-  const h = opts.height ?? 20;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" rx="3" fill="#${color}"/><text x="${w / 2}" y="${h / 2 + 4}" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="${fontSize}"${bold} fill="#fff" text-anchor="middle">${esc(label)}</text></svg>`;
+// 两段式（对齐 shields.io ?style=flat）：左 label 固定 #555，右 value 用原色，圆角 rx=3，
+// 顶部 #bbb 10% 高光渐变；文件名不变，仅改 SVG 内容（与 labeler BADGE_FILES 逐字契约不动）。
+const twoTone = (label, value, color) => {
+  const fontSize = 11;
+  const lw = Math.ceil(textWidth(label, fontSize)) + 12;
+  const vw = Math.ceil(textWidth(value, fontSize)) + 12;
+  const w = lw + vw;
+  const h = 20;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" role="img" aria-label="${esc(label)}: ${esc(value)}"><linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient><clipPath id="r"><rect width="${w}" height="${h}" rx="3"/></clipPath><g clip-path="url(#r)"><rect width="${lw}" height="${h}" fill="#555"/><rect x="${lw}" width="${vw}" height="${h}" fill="#${color}"/><rect width="${w}" height="${h}" fill="url(#s)"/></g><g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="${fontSize}"><text x="${lw / 2}" y="14">${esc(label)}</text><text x="${lw + vw / 2}" y="14">${esc(value)}</text></g></svg>`;
 };
 const ICONS = {
   'icon-git-pull-request': "M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z",
@@ -29,45 +32,41 @@ const ICONS = {
 };
 // 与 labeler BOT_STATE_META / BOT_RISK_LABELS / BOT_VERDICT_META / AUTOFILL_META 逐字同步（单一事实源在 labeler，此处为冻结镜像；改任一侧必须同步另一侧）
 const BADGES = [
-  // 状态（flat 圆角）
-  ['状态-缺席-8c959f', '状态-缺席', '8c959f', 'flat'],
-  ['状态-跳过审查-8c959f', '状态-跳过审查', '8c959f', 'flat'],
-  ['状态-审查中-d97706', '状态-审查中', 'd97706', 'flat'],
-  ['状态-审查完成-2da44e', '状态-审查完成', '2da44e', 'flat'],
-  ['状态-审查失败-crimson', '状态-审查失败', 'dc3545', 'flat'],
-  ['状态-需人工触发-d97706', '状态-需人工触发', 'd97706', 'flat'],
-  // 风险评级（flat）
-  ['风险评级-高-d93f0b', '风险评级-高', 'd93f0b', 'flat'],
-  ['风险评级-中-d97706', '风险评级-中', 'd97706', 'flat'],
-  ['风险评级-低-2da44e', '风险评级-低', '2da44e', 'flat'],
-  // 结论 + 等级（flat）
-  ['本轮结论-等待审查结果-fbca04', '本轮结论-等待审查结果', 'fbca04', 'flat'],
-  ['本轮结论-无可用审查来源-8c959f', '本轮结论-无可用审查来源', '8c959f', 'flat'],
-  ['本轮结论-全部必需_Bot_已核准-2da44e', '本轮结论-全部必需Bot已核准', '2da44e', 'flat'],
-  ['本轮结论-存在风险发现-d93f0b', '本轮结论-存在风险发现', 'd93f0b', 'flat'],
-  ['本轮结论-部分_Bot_已评级-fbca04', '本轮结论-部分Bot已评级', 'fbca04', 'flat'],
-  ['风险等级-低-2da44e', '风险等级-低', '2da44e', 'flat'],
-  ['风险等级-中-d97706', '风险等级-中', 'd97706', 'flat'],
-  ['风险等级-高-d93f0b', '风险等级-高', 'd93f0b', 'flat'],
-  ['风险等级-严重-dc3545', '风险等级-严重', 'dc3545', 'flat'],
-  // auto-fill 进度（plastic 直角）
-  ['已更新-teal', '已更新', '00b8a9', 'plastic'],
-  ['已生成_但head过期-purp', '已生成 但head过期', '9d7cd8', 'plastic'],
-  ['未生成-blueviolet', '未生成', '8a2be2', 'plastic'],
-  ['失败-crimson', '失败', 'dc3545', 'plastic'],
+  // [file, label, value, color] — label 左 #555、value 右原色（统一 flat 两段式，含原 plastic 组）
+  ['状态-缺席-8c959f', '状态', '缺席', '8c959f'],
+  ['状态-跳过审查-8c959f', '状态', '跳过审查', '8c959f'],
+  ['状态-审查中-d97706', '状态', '审查中', 'd97706'],
+  ['状态-审查完成-2da44e', '状态', '审查完成', '2da44e'],
+  ['状态-审查失败-crimson', '状态', '审查失败', 'dc3545'],
+  ['状态-需人工触发-d97706', '状态', '需人工触发', 'd97706'],
+  ['风险评级-高-d93f0b', '风险评级', '高', 'd93f0b'],
+  ['风险评级-中-d97706', '风险评级', '中', 'd97706'],
+  ['风险评级-低-2da44e', '风险评级', '低', '2da44e'],
+  ['本轮结论-等待审查结果-fbca04', '本轮结论', '等待审查结果', 'fbca04'],
+  ['本轮结论-无可用审查来源-8c959f', '本轮结论', '无可用审查来源', '8c959f'],
+  ['本轮结论-全部必需_Bot_已核准-2da44e', '本轮结论', '全部必需Bot已核准', '2da44e'],
+  ['本轮结论-存在风险发现-d93f0b', '本轮结论', '存在风险发现', 'd93f0b'],
+  ['本轮结论-部分_Bot_已评级-fbca04', '本轮结论', '部分Bot已评级', 'fbca04'],
+  ['风险等级-低-2da44e', '风险等级', '低', '2da44e'],
+  ['风险等级-中-d97706', '风险等级', '中', 'd97706'],
+  ['风险等级-高-d93f0b', '风险等级', '高', 'd93f0b'],
+  ['风险等级-严重-dc3545', '风险等级', '严重', 'dc3545'],
+  ['已更新-teal', '自动填充', '已更新', '00b8a9'],
+  ['已生成_但head过期-purp', '自动填充', '已生成 但head过期', '9d7cd8'],
+  ['未生成-blueviolet', '自动填充', '未生成', '8a2be2'],
+  ['失败-crimson', '自动填充', '失败', 'dc3545'],
 ];
 mkdirSync(OUT, { recursive: true });
 let failures = 0;
-for (const [file, label, color, shape] of BADGES) {
-  const svg = flat(label, color, {});
-  // 自检：画布宽必须 ≥ 文本实测宽 + 左右 padding（防首尾缺字回归）；不达标即失败退出。
+for (const [file, label, value, color] of BADGES) {
+  const svg = twoTone(label, value, color);
+  // 自检：画布宽必须 ≥ 左 label 实测宽 + 右 value 实测宽 + 24 总 padding（防首尾缺字回归）。
   const m = svg.match(/width="(\d+)"/);
   const w = Number(m?.[1] || 0);
-  const need = Math.ceil(textWidth(label, 11)) + 16;
+  const need = Math.ceil(textWidth(label, 11)) + Math.ceil(textWidth(value, 11)) + 24;
   if (w < need) { console.error(`FAIL ${file}: canvas=${w} < text=${need}`); failures += 1; }
-  // 输出文件名必须带 shape 后缀（-flat/-plastic），与 labeler BADGE_FILES 登记表及
-  //   工作流 BADGE() 引用形态逐字一致——缺后缀 = 全部静态徽章 404（实测缺陷）。
-  writeFileSync(join(OUT, `${file}-${shape}.svg`), svg);
+  // 输出文件名统一 -flat 后缀，与 labeler BADGE_FILES 登记表及工作流 BADGE() 引用逐字一致。
+  writeFileSync(join(OUT, `${file}-flat.svg`), svg);
 }
 for (const [name, d] of Object.entries(ICONS)) {
   writeFileSync(join(OUT, `${name}.svg`), `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="${d}" fill="#57606a"/></svg>`);

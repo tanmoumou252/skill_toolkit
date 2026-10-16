@@ -563,6 +563,27 @@ export function isPlanFilename(f) {
   return !companion.test(rest);
 }
 
+// 台账测试文件全量收集（ledger-test-path-all-selftests）：旧口径按首个匹配路径取单文件，断言名若登记在
+//   另一 selftest 套件（如 build-agents-selftest.mjs / attack-ledger-selftest.mjs）即机械检索失配，
+//   产出假红/假绿。改为收全 Files 节内所有 backtick 包裹的 *.mjs 测试路径；readOpt 的数组形态
+//   天然 join 多文件内容，断言名 `check(` 检索覆盖全部套件。去重保持声明序，空集仍为 null。
+//   E3b 修正：字符类用 [^\s`] 排除空白——`node checks/selftest.mjs` 等命令形态反引号串因含空格
+//   不被捕获（命令不是路径，捕获会产生带空格的假路径 → 假 missingDeclared → 终验闸不可达）；
+//   Files 节测试条目契约：一律裸路径（`checks/xxx-selftest.mjs`），命令形态不得写入 Files 节。
+//   A4 收锚事实源修正（坑位证伪记录）：字符类无下界时，同一行内描述性引用的裸名反引号串
+//   （如「仅改 `selftest.mjs` 侧四个重名」）会被捕获成无目录路径 → 假 missingDeclared → 台账
+//   终验闸永远 Exit 1。本仓 Files 节行首声明形态一律是带目录前缀（`checks/xxx.mjs`、
+//   `mcp/xxx.js`、`.github/...`），故新增前置 `(?:[\w.-]+\/)+` 要求「目录段 + `/`」结构：
+//   命令形态串含空格仍被 [^\s`] 排除（E3b 语义保留），行首裸路径条目全部命中，描述性裸名引用
+//   一律不再捕获。三项约束互不冲突，均为本判据的正向收窄。
+// --latest 提取导出（§15.5 L1）：selftest 以真实 CLI 形态驱动（同缺失 --impl/--test 入参），
+//   本纯函数自持有可独立导出供夹具与 CLI 共用，判据单一事实源不得分叉。
+export function collectDeclaredTestPaths(fsec, root) {
+  const tms = [...fsec.matchAll(/`((?:[\w.-]+\/)+[^\s`]*(?:tests|selftest)[^\s`]*\.mjs)`/g)]
+    .map((m) => path.join(root, m[1]));
+  return tms.length > 0 ? [...new Set(tms)] : null;
+}
+
 export function testPathOutsideRoot(root, candidate) {
   const rel = path.relative(root, candidate);
   if (path.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + path.sep)) return true;
@@ -733,22 +754,7 @@ if (isMain) {
     const fsec = filesSectionOf(planTextPre);
     const impls = ENFORCEMENT_FILES.filter((f) => fsec.includes(f)).map((f) => path.join(root, f));
     implPath = impls.length > 0 ? impls : null;
-    // 台账测试文件全量收集（ledger-test-path-all-selftests）：旧口径按首个匹配路径取单文件，断言名若登记在
-    //   另一 selftest 套件（如 build-agents-selftest.mjs / attack-ledger-selftest.mjs）即机械检索失配，
-    //   产出假红/假绿。改为收全 Files 节内所有 backtick 包裹的 *.mjs 测试路径；readOpt 的数组形态
-    //   天然 join 多文件内容，断言名 `check(` 检索覆盖全部套件。去重保持声明序，空集仍为 null。
-    //   E3b 修正：字符类用 [^\s`] 排除空白——`node checks/selftest.mjs` 等命令形态反引号串因含空格
-    //   不被捕获（命令不是路径，捕获会产生带空格的假路径 → 假 missingDeclared → 终验闸不可达）；
-    //   Files 节测试条目契约：一律裸路径（`checks/xxx-selftest.mjs`），命令形态不得写入 Files 节。
-    //   A4 收锚事实源修正（坑位证伪记录）：字符类无下界时，同一行内描述性引用的裸名反引号串
-    //   （如「仅改 `selftest.mjs` 侧四个重名」）会被捕获成无目录路径 → 假 missingDeclared → 台账
-    //   终验闸永远 Exit 1。本仓 Files 节行首声明形态一律是带目录前缀（`checks/xxx.mjs`、
-    //   `mcp/xxx.js`、`.github/...`），故新增前置 `(?:[\w.-]+\/)+` 要求「目录段 + `/`」结构：
-    //   命令形态串含空格仍被 [^\s`] 排除（E3b 语义保留），行首裸路径条目全部命中，描述性裸名引用
-    //   一律不再捕获。三项约束互不冲突，均为本判据的正向收窄。
-    const tms = [...fsec.matchAll(/`((?:[\w.-]+\/)+[^\s`]*(?:tests|selftest)[^\s`]*\.mjs)`/g)]
-      .map((m) => path.join(root, m[1]));
-    testPath = tms.length > 0 ? [...new Set(tms)] : null;
+    testPath = collectDeclaredTestPaths(fsec, root);
     const base = path.basename(planPath, '.md');
     // chain-report-base-boundary 闸：报告选取与 checkChainOrder 前缀锁定同口径（base + '-' 边界），
     // 防 base 为他链前缀时跨链误选（如 base=a 误认 ab-…-pr-review.md 为当前计划报告，跳过缺盘红灯）。

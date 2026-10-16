@@ -256,7 +256,7 @@ try {
     //   win32 夹具同形（checks/scoped-edit-mode-selftest.mjs:218）。
     const posixLock = path.join(path.dirname(target), '.tmp-lock-' + path.basename(target) + '.lock');
     const holder = spawn(process.execPath, ['-e',
-      'const fs=require("fs");const p=process.env.PLOCK;fs.writeFileSync(p,JSON.stringify({pid:process.pid,time:new Date().toISOString()}));setTimeout(()=>process.exit(0),6000);'],
+      'const fs=require("fs");const p=process.env.PLOCK;fs.writeFileSync(p,JSON.stringify({pid:process.pid,time:Date.now()}));setTimeout(()=>process.exit(0),6000);'],
       { stdio: 'ignore', env: { ...process.env, PLOCK: posixLock } });
     let ready = false;
     const deadline = Date.now() + 4000;

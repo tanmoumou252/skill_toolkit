@@ -346,6 +346,17 @@ export const CLAUSES = [
     text: '与派发主张的差集',
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
+  {
+    id: 'landing-timing-skeleton-sentinel',
+    text: '首笔即落骨架+哨兵',
+    // 分段落笔（增量落盘）时序义务（§7）：长文起草首笔即落骨架+哨兵，其后每节一次串替换。
+    // 义务文本锚定在 body-incremental-landing.md 的「时序义务」节；plan-writer 三端流水线
+    // 步骤 2 与 zcode 落盘回报句、两份 plan-first 技能（主会话直写长计划场景）同须在场。
+    expect: [
+      new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
+      /^skills\/(?:zcode-plan-first|plan-file-first)\/SKILL\.md$/,
+    ],
+  },
 ];
 
 // —— 派生载体条款（数据层只登记"必须为真"的文本，不登记任何文件清单或平台名）——

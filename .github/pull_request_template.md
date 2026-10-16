@@ -17,3 +17,5 @@
 
 | 命令 | 结果 |
 |---|---|
+| `npm test --prefix checks` |  |
+| `npm test --prefix mcp` |  |

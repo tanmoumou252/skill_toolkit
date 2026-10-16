@@ -12,7 +12,7 @@ name: Auto Fill PR Title and Body
 #    修改本文件时若把任何不可信字段插进 run/command，`checks/auto-fill-pr-workflow-selftest.mjs`
 #    的结构锚必须转红。
 # 5) 触发集不含 `edited`：回写正文只产生 pull_request.edited，不在触发集内，链路天然收敛无环。
-# 6) 关停面：仓库 Variable `AUTO_FILL_PR_ENABLED` 置 false/0 即整轮零 GET 零 PATCH（job.if 与
+# 6) 关停面：仓库 Variable `AUTO_FILL_PR_ENABLED` 置 false 即整轮零 GET 零 PATCH（job.if 与
 #    脚本内 S11 双道，Variable 改动即生效，无需改 YAML）。
 
 on:
@@ -38,9 +38,9 @@ jobs:
     if: >
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.draft == false &&
-      vars.AUTO_FILL_PR_ENABLED != 'false' && vars.AUTO_FILL_PR_ENABLED != '0' &&
+      fromJSON(vars.AUTO_FILL_PR_ENABLED || 'true') &&
       (contains('OWNER,MEMBER,COLLABORATOR', github.event.pull_request.author_association) ||
-       vars.AUTO_FILL_PR_ALLOW_EXTERNAL == 'true')
+       fromJSON(vars.AUTO_FILL_PR_ALLOW_EXTERNAL || 'false'))
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout base branch (workflow code only)

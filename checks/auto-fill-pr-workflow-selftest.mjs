@@ -172,7 +172,11 @@ async function runCase(opts = {}) {
     postStatus: async (sha, payload) => { calls.postStatus = (calls.postStatus || 0) + 1; calls.lastStatus = { sha, ...payload }; return {}; },
   };
 
-  const readFile = opts.readFile ?? ((rel) => (rel === env.TEMPLATE_PATH ? (opts.template === undefined ? TEMPLATE : opts.template) : null));
+  // Bug 4 夹具：templateVerifCommands 注入「验证」节的默认命令行（模拟模板已声明验证命令）。
+  const effectiveTemplate = opts.templateVerifCommands
+    ? TEMPLATE.replace('| 命令 | 结果 |\n|---|---|', ['| 命令 | 结果 |', '|---|---|', ...opts.templateVerifCommands].join('\n'))
+    : (opts.template === undefined ? TEMPLATE : opts.template);
+  const readFile = opts.readFile ?? ((rel) => (rel === env.TEMPLATE_PATH ? effectiveTemplate : null));
   const logs = [];
   let reqText = '';
   const aiJson = opts.aiJson ?? JSON.stringify({ title: opts.title ?? 'feat(ci): 新增正文自动填充工作流与哨兵守恒尾块闸', body: aiBody(opts.aiBody) });
@@ -286,12 +290,19 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`runAutoFill`：注入式入口与跳过矩阵的编排实现\n- 【测试】`loadVariant`：变异锚通道与 ESM 缓存破除机制' } });
   record('autofill-skip-s9-path-coverage-below-floor', skipWith(r, 'S9', '路径覆盖率不足'), JSON.stringify(r.out || {}));
 }
-{
-  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/README.md`：登记入口与调用约定（不在本轮清单内）' } });
+{ // §12 正控：真实文件路径（含 `/` + 扩展名）但仓库根本不存在（编造）→ 必报 path-unverified（且仅 note，不拒绝）。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/NO_SUCH_FILE_zzz.md`：编造的不存在路径（不在本轮清单且仓库无此文件）' } });
   const notes = r.logs.join('\n');
-  record('autofill-path-unverified-note-not-reject',
-    wroteOne(r) && /path-unverified/.test(notes) && /README\.md/.test(notes),
-    `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 160)}`);
+  record('autofill-path-fabricated-reported',
+    wroteOne(r) && /path-unverified/.test(notes) && /NO_SUCH_FILE_zzz\.md/.test(notes),
+    `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 200)}`);
+}
+{ // §12 负控：真实存在但未在改动清单（README.md）、目录（尾 /）、通配（*）、裸名 → 一律不误报 path-unverified。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/README.md`：真实存在但不在本轮清单内\n- 【文档】`checks/subdir/`：目录形态不入核验剔除\n- 【文档】`checks/*.mjs`：通配形态不入核验剔除\n- 【文档】`README.md`：裸名形态不入核验剔除' } });
+  const notes = r.logs.join('\n');
+  record('autofill-path-unverified-no-false-positive',
+    wroteOne(r) && !/path-unverified/.test(notes),
+    `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 200)}`);
 }
 {
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【修复】`vars.AUTO_FILL_PR_ENABLED` 与 `head.sha` 这类点号标识符不得被误判为路径' } });
@@ -418,6 +429,14 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-empty-verification-is-header-only',
     /\|\s*命令\s*\|\s*结果\s*\|/.test(sec) && /\|-+\|/.test(sec) && !/待人类|待复跑|填写/.test(body),
     'sec=' + JSON.stringify(sec.slice(0, 80)));
+}
+{ // Bug 4 回归：无人类「验证」行时，命令列注入模板声明的默认验证命令（结果列留空）。
+  const r = await runCase({ templateVerifCommands: ['| `npm test --prefix checks` |  |', '| `npm test --prefix mcp` |  |'] });
+  const body = String(r.out?.body || '');
+  record('autofill-verification-commands-injected-when-empty',
+    wroteOne(r) && body.includes('`npm test --prefix checks`') && body.includes('`npm test --prefix mcp`') &&
+      /\|\s*命令\s*\|\s*结果\s*\|/.test(body) && !/exit\s*0|ALL OK/i.test(body),
+    'body=' + JSON.stringify(body.split('## 验证')[1] || ''));
 }
 { // 模型只在验证节写结论 → 被丢弃但不触发禁串闸（顺序：先丢验证再判禁串）
   const r = await runCase({ aiBody: { 验证: '| 命令 | 结果 |\n|---|---|\n| node checks/run.mjs | exit 0 |' } });
@@ -1103,12 +1122,12 @@ try {
     /group:\s*auto-fill-pr-\$\{\{\s*github\.event\.pull_request\.number\s*\}\}\s*\n\s*queue:\s*max\s*\n\s*cancel-in-progress:\s*false/.test(yaml));
   check('autofill-job-if-guards-draft-bot-and-killswitch',
     /github\.event\.pull_request\.draft == false/.test(yaml) &&
-    /vars\.AUTO_FILL_PR_ENABLED != 'false'/.test(yaml) &&
+    /fromJSON\(vars\.AUTO_FILL_PR_ENABLED \|\| 'true'\)/.test(yaml) &&
     /github\.actor != 'dependabot\[bot\]'/.test(yaml) &&
     // 作者信任闸（pull_request_target 基仓库上下文加固）：仅信任 OWNER/MEMBER/COLLABORATOR，
-    //   或变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式 'true' 时放行外部作者（opt-in，缺省拒绝）。
+    //   或变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式 true（fromJSON 布尔化；未设缺省 false）时放行外部作者。
     /contains\('OWNER,MEMBER,COLLABORATOR',\s*github\.event\.pull_request\.author_association\)/.test(yaml) &&
-    /vars\.AUTO_FILL_PR_ALLOW_EXTERNAL == 'true'/.test(yaml));
+    /fromJSON\(vars\.AUTO_FILL_PR_ALLOW_EXTERNAL \|\| 'false'\)/.test(yaml));
   check('autofill-env-wired',
     /AI_API_KEY:\s*\$\{\{\s*secrets\.AI_API_KEY\s*\}\}/.test(yaml) &&
     /AI_BASE_URL:\s*\$\{\{\s*vars\.AI_BASE_URL\s*\}\}/.test(yaml) &&
