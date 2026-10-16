@@ -7,7 +7,7 @@ permissionMode: dontAsk
 injectAgentsMd: true
 ---
 
-<!-- GENERATED from spec@942937adaeaf; do not edit -->
+<!-- GENERATED from spec@b0413363f1d7; do not edit -->
 
 # Plan-Reviewer-SP：影子起草与镜像对账子代理（规范内置版）
 

@@ -264,6 +264,19 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 { const r = await runCase({ title: '把正文自动填充工作流补齐' }); record('autofill-skip-s9-title-no-grammar', skipWith(r, 'S9', '文法'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' }); record('autofill-skip-s9-title-multiline', skipWith(r, 'S9', '含换行'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ title: 'feat(nope-module): x' }); record('autofill-skip-s9-scope-not-in-whitelist', skipWith(r, 'S9', '词表白名单'), JSON.stringify(r.out || {})); }
+{ // S9 scope 近似词归一化（PR#17 实测根因）：模型把点前缀目录写成去点近似词（.github→github），
+  //   归一化后照常出标题，不再整包 S9 拒；真词表外语（nope-module）仍拒——上一条负控锁住不放宽。
+  const r = await runCase({ title: 'fix(github): 修复工作流取值口径' });
+  record('autofill-s9-scope-dot-alias-normalized',
+    wroteOne(r) && String(r.out?.title || '').startsWith('🐛 fix(.github):'),
+    `out=${JSON.stringify(r.out || {})});`);
+}
+{ // 归一化不放宽：词表内已有裸名 github 且模型写 .github 时，词表原形态优先、不反归一（消除二义性）。
+  const r = await runCase({ title: 'fix(github): 摘要', env: { AI_SCOPE_WHITELIST: 'github' } });
+  record('autofill-s9-scope-alias-conflict-prefers-table-form',
+    wroteOne(r) && String(r.out?.title || '').startsWith('🐛 fix(github):'),
+    `out=${JSON.stringify(r.out || {})});`);
+}
 { const r = await runCase({ title: 'wonderfeat(ci): x' }); record('autofill-skip-s9-type-unknown', skipWith(r, 'S9', '未知 type'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ aiBody: { 概述: '缺了影响面小节。', 影响面与风险: undefined } }); record('autofill-skip-s9-missing-section', skipWith(r, 'S9', '多重集'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 新增 `.github/scripts/auto-fill-pr.mjs`：说明文字足够长以避免其它闸误命中' } }); record('autofill-skip-s9-bullet-no-category', skipWith(r, 'S9', '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {})); }
@@ -297,7 +310,9 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
     wroteOne(r) && /path-unverified/.test(notes) && /NO_SUCH_FILE_zzz\.md/.test(notes),
     `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 200)}`);
 }
-{ // §12 负控：真实存在但未在改动清单（README.md）、目录（尾 /）、通配（*）、裸名 → 一律不误报 path-unverified。
+{ // §12 负控：非真实文件路径形态不入核验剔除——真实存在但不在清单（README.md）、目录（尾 /）、
+  //   通配（*）、裸名 → 一律不误报 path-unverified（目录/通配/裸名本就不是可核验的真实文件路径，
+  //   实现在存在性核验前按形态剔除，故不产生误报）。
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/README.md`：真实存在但不在本轮清单内\n- 【文档】`checks/subdir/`：目录形态不入核验剔除\n- 【文档】`checks/*.mjs`：通配形态不入核验剔除\n- 【文档】`README.md`：裸名形态不入核验剔除' } });
   const notes = r.logs.join('\n');
   record('autofill-path-unverified-no-false-positive',
@@ -1070,7 +1085,8 @@ await withVariant('sse-done-break', 'if (sawDone) break;', 'if (false && sawDone
   return { ok: r.err === null && r.out?.skipCode === 'S8', detail: JSON.stringify(r.out || {}) };
 });
 // 摘除 scopeHint 直通（闸回到静态表独闸）＝本 PR 实际触及的 `src` 被词表误拒 S9（锚测得到即 ok）。
-await withVariant('scope-hint-gate', "!(allowed || SCOPE_WHITELIST).includes(scope)", "!SCOPE_WHITELIST.includes(scope)", async (run) => {
+//   Rework 修正后闸形 = resolveScopeAlias 返 null（近似词归一化也被摘除时静态表独闸语义保持）。
+await withVariant('scope-hint-gate', "if (allowed.includes(scope)) return scope;", "return null;", async (run) => {
   const srcFiles = [{ filename: 'src/index.js', status: 'added', additions: 60, deletions: 0, patch: '@@ -0,0 +1,3 @@\n+export' }, ...FILES];
   const r = await runCaseWith(run, { files: srcFiles, title: 'feat(src): x' });
   return { ok: r.err === null && r.out?.skipCode === 'S9', detail: JSON.stringify(r.out || {}) };
@@ -1122,12 +1138,16 @@ try {
     /group:\s*auto-fill-pr-\$\{\{\s*github\.event\.pull_request\.number\s*\}\}\s*\n\s*queue:\s*max\s*\n\s*cancel-in-progress:\s*false/.test(yaml));
   check('autofill-job-if-guards-draft-bot-and-killswitch',
     /github\.event\.pull_request\.draft == false/.test(yaml) &&
-    /fromJSON\(vars\.AUTO_FILL_PR_ENABLED \|\| 'true'\)/.test(yaml) &&
     /github\.actor != 'dependabot\[bot\]'/.test(yaml) &&
     // 作者信任闸（pull_request_target 基仓库上下文加固）：仅信任 OWNER/MEMBER/COLLABORATOR，
-    //   或变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式 true（fromJSON 布尔化；未设缺省 false）时放行外部作者。
+    //   或变量 AUTO_FILL_PR_ALLOW_EXTERNAL 按「true/yes/on/1 子串」判开放时放行外部作者。
+    // 停用闸健壮化：不再用 fromJSON(vars…) 直接布尔化（非 JSON 字符串如 'yes'/'True' 会令
+    //   if 表达式报错），改经 JSON 数组包装 contains 子串匹配——对任意字符串输入健壮。
     /contains\('OWNER,MEMBER,COLLABORATOR',\s*github\.event\.pull_request\.author_association\)/.test(yaml) &&
-    /fromJSON\(vars\.AUTO_FILL_PR_ALLOW_EXTERNAL \|\| 'false'\)/.test(yaml));
+    /AUTO_FILL_PR_ENABLED \|\| 'false'/.test(yaml) &&
+    /AUTO_FILL_PR_ALLOW_EXTERNAL \|\| 'false'/.test(yaml) &&
+    !/fromJSON\(vars\.AUTO_FILL_PR_/.test(yaml) &&
+    /AUTO_FILL_PR_ALLOW_EXTERNAL[^\n]*'true'/.test(yaml));
   check('autofill-env-wired',
     /AI_API_KEY:\s*\$\{\{\s*secrets\.AI_API_KEY\s*\}\}/.test(yaml) &&
     /AI_BASE_URL:\s*\$\{\{\s*vars\.AI_BASE_URL\s*\}\}/.test(yaml) &&

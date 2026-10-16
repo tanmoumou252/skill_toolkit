@@ -180,6 +180,18 @@ function spliceVerification(body, tableBlock) {
   return lines.slice(0, verif.start).concat([VERIF_HEADING, '', ...tableBlock.split('\n'), ''], lines.slice(verif.end)).join('\n');
 }
 
+// scope 近似词归一化（S9 误拒根因修复）：模型常把点前缀目录名写成去点近似词（`.github` → `github`、
+//   `.kilo` → `kilo`），旧口径逐字比对直接拒 → S9 整包丢弃（标题+正文全不入）。归一化方向：仅
+//   「去点后完全相等」才对齐回词表形态（github→.github），绝不模糊匹配、绝不放宽词表——词表本身
+//   仍来自 diff 实际触及目录（scope-hint）+ 内置兜底表，注入防线不变。冲突对（词表同时含
+//   `github` 与 `.github`）以词表原形态优先、不归一，消除二义性。
+function resolveScopeAlias(scope, allowed) {
+  if (allowed.includes(scope)) return scope;
+  const dotted = '.' + scope;
+  if (scope && !scope.startsWith('.') && allowed.includes(dotted)) return dotted;
+  return null;
+}
+
 // 标题归一化：剥掉模型给的图标，emoji 由 type 查表回填；NFC 归一（♻️ 含 U+FE0F）。
 export function normalizeTitle(raw, allowed) {
   // 剥掉模型自带的图标：不依赖 \p{Extended_Pictographic}（U+2678 一类符号是否入集随 Unicode 版本漂移），
@@ -193,11 +205,12 @@ export function normalizeTitle(raw, allowed) {
   if (/[\r\n]/.test(m[3])) return { error: '标题含换行，拒：' + nfc(raw) };
   const emoji = EMOJI_BY_TYPE[type];
   if (!emoji) return { error: '未知 type：' + sanitize(type) };
-  if (!(allowed || SCOPE_WHITELIST).includes(scope)) return { error: 'scope 不在词表白名单：' + sanitize(scope) };
+  const resolved = resolveScopeAlias(scope, allowed || SCOPE_WHITELIST);
+  if (!resolved) return { error: 'scope 不在词表白名单：' + sanitize(scope) };
   if (!summary) return { error: '摘要为空' };
-  const title = nfc(`${emoji} ${type}(${scope}): ${summary}`);
+  const title = nfc(`${emoji} ${type}(${resolved}): ${summary}`);
   if (title.length > MAX_TITLE_CHARS) return { error: '标题超长 ' + title.length };
-  return { title, type, scope, summary };
+  return { title, type, scope: resolved, summary };
 }
 
 // §12 仓库存在性核验：本地 `git cat-file -e HEAD:<path>`（base 分支工作树，零网络）。
@@ -503,7 +516,10 @@ export async function runAutoFill(deps) {
   const note = (text) => { notice(`NOTE ${sanitize(text)}`); };
 
   const enabled = String(env.AUTO_FILL_PR_ENABLED == null ? '' : env.AUTO_FILL_PR_ENABLED).trim().toLowerCase();
-  if (enabled === 'false') return report('S11', 'AUTO_FILL_PR_ENABLED 显式停用');
+  // 配置口径：AUTO_FILL_PR_ENABLED 停用值＝小写 `false` 或 `0`（与工作流 job.if 子串匹配口径
+  //   对齐，杜绝 CLI 直调与 Actions 入口的判定分叉）；其余任意值视为启用（宽容消费）。
+  //   未设置时缺省启用。
+  if (enabled === 'false' || enabled === '0') return report('S11', 'AUTO_FILL_PR_ENABLED 显式停用');
 
   if (!env.GITHUB_TOKEN || !env.PR_NUMBER || !env.REPO || !env.HEAD_SHA) return report('S1', '缺少 GITHUB_TOKEN/PR_NUMBER/REPO/HEAD_SHA');
   if (!env.AI_API_KEY || !env.AI_BASE_URL || !env.AI_MODEL) return report('S2', '缺少 AI_API_KEY/AI_BASE_URL/AI_MODEL');

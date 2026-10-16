@@ -77,6 +77,37 @@ export const KILOCODE_SUBAGENT_ALLOW_KEY = 'plan-governor-subagent_exec_guarded_
 
 const P = 'kilocode|codebuddy|zcode';
 
+// —— 条款文本派生（§14 长期项定案落地）——
+// CLAUSES.text 历史上是锚库正文的「字面重复（双写）」：spec/anchor-library/<id>.md 改措辞而
+//   registry 未同步即触发吞锚闸 fail-closed 拒产（2026-10-15 review-severity-axiom 实证，
+//   见 stacked-pr-handover §14）。派生修法：`fromAnchor(id)` 自归档锚块正文**运行时读取**条款
+//   text，单一事实源——锚库改措辞，registry 自动跟随，双写漂移结构性消除。
+// 消费契约（三闸不变）：CLAUSES.text 仍须是 expect 命中的**产物文件**正文的子串（吞锚闸
+//   build-agents.mjs / F8 invariants.mjs / anchor-library-registry-no-drift selftest.mjs）。
+//   因此 fromAnchor 取的子串必须**同时**在锚库与渲染产物中逐字在场——产物只装配 spec/blocks/**，
+//   锚库不参与装配，故派生串只能取「锚库与 spec/blocks 的交叉子串」（同一裁决双写的现存事实，
+//   如 `严重度按四要素裁定`）。锚文件缺失/子串失配 fail-loud 抛错（登记表加载即炸，不留静默漂移）。
+// 豁免与归档纪律不变：条款 id 仍须有 anchor-library 归档块（selftest 咬）；expect 模式照旧。
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REGISTRY_ROOT = fileURLToPath(new URL('..', import.meta.url));
+
+export function fromAnchor(id, substr) {
+  const file = path.join(REGISTRY_ROOT, 'spec', 'anchor-library', id + '.md');
+  let content;
+  try {
+    content = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new Error(`[registry] anchor-library/${id}.md 读取失败（条款文本派生 fail-loud）: ${e.message}`);
+  }
+  if (!content.includes(substr)) {
+    throw new Error(`[registry] 派生子串不在 anchor-library/${id}.md 正文（锚库改措辞后须同步此处交叉子串）: ${substr}`);
+  }
+  return substr;
+}
+
 // —— 散文面：必含条款（模式驱动的 required set：命中该模式的每个文件都必须含该串） ——
 export const CLAUSES = [
   {
@@ -298,7 +329,9 @@ export const CLAUSES = [
   },
   {
     id: 'review-severity-axiom',
-    text: '严重度按四要素裁定',
+    // 派生条款（fromAnchor 单一事实源首例）：text 不再字面双写，锚库改措辞即自动跟随；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-severity-axiom', '严重度按四要素裁定'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {

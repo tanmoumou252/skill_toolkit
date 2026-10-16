@@ -35,12 +35,20 @@ jobs:
     # 作者信任闸：pull_request_target 运行在基仓库上下文，外部作者的 PR 也会消耗 AI 额度并回写正文——
     #   缺省仅放行 OWNER/MEMBER/COLLABORATOR；变量 AUTO_FILL_PR_ALLOW_EXTERNAL 显式置 'true' 才对
     #   外部作者开放（opt-in，缺省拒绝，与 :15-16 关停面同款 opt-out 语义方向相反、独立生效）。
+    # 变量取值口径：AUTO_FILL_PR_ENABLED 与 AUTO_FILL_PR_ALLOW_EXTERNAL 只接受小写 `true` /
+    #   `false`（fromJSON 布尔字面量）；其他值按「含子串匹配」降级判定——enabled 以 'false' / 'off'
+    #   / '0' / 'no' 子串判停用，allow_external 以 'true' / 'yes' / 'on' / '1' 子串判开放，
+    #   未设置时分别缺省 true / false。该写法对任意字符串输入健壮（无 fromJSON 解析失败面）。
     if: >
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.draft == false &&
-      fromJSON(vars.AUTO_FILL_PR_ENABLED || 'true') &&
+      !(contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ENABLED || 'false')), 'false') ||
+        contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ENABLED || 'false')), 'off') ||
+        contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ENABLED || 'false')), 'no')) &&
       (contains('OWNER,MEMBER,COLLABORATOR', github.event.pull_request.author_association) ||
-       fromJSON(vars.AUTO_FILL_PR_ALLOW_EXTERNAL || 'false'))
+       contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ALLOW_EXTERNAL || 'false')), 'true') ||
+       contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ALLOW_EXTERNAL || 'false')), 'yes') ||
+       contains(fromJSON(format('["{0}"]', vars.AUTO_FILL_PR_ALLOW_EXTERNAL || 'false')), '1'))
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout base branch (workflow code only)

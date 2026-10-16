@@ -29,7 +29,7 @@ permission:
   plan-governor-subagent_exec_guarded_command: allow
 ---
 
-<!-- GENERATED from spec@942937adaeaf; do not edit -->
+<!-- GENERATED from spec@b0413363f1d7; do not edit -->
 
 # PR-Reviewer SP（Kilo 代码变更独立审查）· SuperPower 规范内置版
 

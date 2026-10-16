@@ -9,7 +9,7 @@ enabledAutoRun: true
 mcpServers: plan-governor-main, plan-governor-subagent
 ---
 
-<!-- GENERATED from spec@942937adaeaf; do not edit -->
+<!-- GENERATED from spec@b0413363f1d7; do not edit -->
 
 # Plan-Writer SP（CodeBuddy 计划总指挥与起草回灌）· SuperPower 规范内置版
 
@@ -157,7 +157,7 @@ mcpServers: plan-governor-main, plan-governor-subagent
 | `mcp__plan-governor-main__exec_guarded_command` | `mcp_get_tool_description` 取 schema 后 `mcp_call_tool(serverName="plan-governor-main", toolName="exec_guarded_command", arguments={"command":"<单行命令>","timeout_seconds":60})` |
 
 - **主代理（本文件）可用**：`list_dir` `search_file` `search_content` `read_file` `read_lints` `lsp` `connect_cloud_service` `preview_url` `web_fetch` `use_skill` `read_rules` `web_search` `RAG_search` `ask_followup_question` `task` `automation_update` `send_message` `team_create` `team_delete` `mcp_get_tool_description` `mcp_call_tool` 及 `cloud_studio_*` 系列。（其中 `mcp_get_tool_description` / `mcp_call_tool` 随 frontmatter `mcpServers` 注入，不在 `tools:` 中枚举；`cloud_studio_*` 同属宿主注入族。）
-- **子代理（plan-reviewer-sp / pr-reviewer-sp）可用 11 个**：`list_dir` `search_file` `search_content` `read_file` `read_lints` `lsp` `use_skill` `read_rules` `send_message` `mcp_get_tool_description` `mcp_call_tool`；**没有** `task`（子代理不可再派子代理）、**没有** `ask_followup_question`（有疑问回报主编排器转问用户）、**没有** `delete_file`（reviewer 为只读评估角色，无删除权限；主代理为计划角色亦无删除权限）、**没有** `web_fetch` / `web_search` / `connect_cloud_service` / `preview_url` / `automation_update`（与 kilocode 基准 reviewer `webfetch: deny` 对齐的裁剪面）、**没有** `team_create` / `RAG_search` / `cloud_studio_*`；MCP 仅挂 `plan-governor-subagent`（main 实例整体不注入，隔离等级高于逐键 deny）。
+- **子代理（plan-reviewer-sp / pr-reviewer-sp）可用 11 个**：`list_dir` `search_file` `search_content` `read_file` `read_lints` `lsp` `use_skill` `read_rules` `send_message` `mcp_get_tool_description` `mcp_call_tool`；**没有** `task`（子代理不可再派子代理）、**没有** `ask_followup_question`（有疑问回报主编排器转问用户）、**没有** `delete_file`（reviewer 为只读评估角色，无删除权限；主代理为计划角色亦无删除权限）、**没有** 宿主写工具 `write_to_file` / `replace_in_file`（reviewer 报告落盘唯一走受控写 `write_scoped_file` / `edit_scoped_file`，经 `mcp_call_tool` 调 governor 子实例）、**没有** `web_fetch` / `web_search` / `connect_cloud_service` / `preview_url` / `automation_update`（与 kilocode 基准 reviewer `webfetch: deny` 对齐的裁剪面）、**没有** `team_create` / `RAG_search` / `cloud_studio_*`；MCP 仅挂 `plan-governor-subagent`（main 实例整体不注入，隔离等级高于逐键 deny）。
 - **内置 code-explorer 子代理**：仅 `search_file` `search_content` `read_file` `read_lints` `lsp`，纯只读，不能落盘也不能跑命令。
 
 ## 攻击面台账与探针先行律（安全执法类计划硬产物）

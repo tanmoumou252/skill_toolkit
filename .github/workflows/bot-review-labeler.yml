@@ -46,12 +46,22 @@ permissions:
 
 jobs:
   resolve-pr:
+    # 评论唤醒的分流闸前置到触发层：issue_comment 若非受信官方 Bot 作者、或不是 PR 评论
+    # （issue.pull_request 缺席＝普通 issue 顶层评论），在此直接丢弃——不分配 runner、
+    # 不跑 resolve-pr，杜绝「任意评论先拉起工作流、进 job 才发现类型不对」的过程浪费。
+    # 官方 Bot 登录名单一事实源＝工作流顶部 env（脚本内 BOT_DEFINITIONS 与之同源逐字）。
+    if: >
+      github.event_name != 'issue_comment' ||
+      (github.event.comment.user.type == 'Bot' &&
+       contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login) &&
+       github.event.issue.pull_request != null)
     runs-on: ubuntu-24.04
     outputs:
       number: ${{ steps.resolve.outputs.number }}
     steps:
       - id: resolve
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        if: github.event_name != 'issue_comment' || github.event.comment.user.type == 'Bot'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
             let number = context.payload.pull_request?.number ||
@@ -69,11 +79,15 @@ jobs:
 
   sync-labels:
     needs: resolve-pr
+    # 双层前置分流：issue_comment 仅在受信 Bot 作者（与 resolve-pr 同一 login 白名单 env）且为
+    # PR 评论时才进入本 job；check_run 仍按名称/app slug 归因。脚本内 Bot 作者闸保留为纵深防御。
     if: >
       needs.resolve-pr.outputs.number != '' &&
       (github.event_name == 'pull_request_target' ||
        github.event_name == 'pull_request_review' ||
-       github.event_name == 'issue_comment' ||
+       (github.event_name == 'issue_comment' &&
+        github.event.comment.user.type == 'Bot' &&
+        contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login)) ||
        contains(github.event.check_run.name, 'CodeRabbit') ||
        contains(github.event.check_run.app.slug, 'coderabbit') ||
        contains(github.event.check_run.name, 'Kilo') ||
@@ -90,7 +104,9 @@ jobs:
       PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
     steps:
       - name: Auto-Provision Labels, Wait for Bots & Apply Verdict
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        # node24 运行时（v8.0.0，"Update Node.js version support to 24.x"）；钉 SHA 防标签漂移，
+        #   SHA 取自 refs/tags/v8 解引用提交（GitHub 签名验证）。runner 最低 v2.327.1。
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         env:
           EXPECTED_BOTS: ${{ env.EXPECTED_BOTS }}
         with:
@@ -520,11 +536,17 @@ jobs:
                 // 首轮创建时 selfUrl 未知（评论 id 尚未分配），createComment 返回体带 html_url——
                 //   立即用真实评论 URL 重渲染并回写，使首轮评论即携带 #issuecomment-… 链接，
                 //   不再依赖下一事件才修正（Bug 1：首轮回退 PR URL）。
+                // 回写尽力而为（展示面降级）：瞬时失败不阻塞标签主链路（设计声明「仅展示面降级」），
+                //   下一事件经 ownComment 分支以 GET 刷新的 selfUrl 重渲染自然自愈。
                 const createdUrl = created?.html_url || null;
                 if (createdUrl && createdUrl !== selfUrl) {
-                  await github.rest.issues.updateComment({
-                    owner: context.repo.owner, repo: context.repo.repo, comment_id: created.id, body: renderBody(createdUrl)
-                  });
+                  try {
+                    await github.rest.issues.updateComment({
+                      owner: context.repo.owner, repo: context.repo.repo, comment_id: created.id, body: renderBody(createdUrl)
+                    });
+                  } catch (e) {
+                    console.log(`[Status Comment] Self-URL backfill update failed (non-blocking, self-heals next event): ${e && e.message || e}`);
+                  }
                 }
               }
             }

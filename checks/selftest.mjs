@@ -1597,6 +1597,30 @@ check('selftest-inv-shared-atomic-writer-wired', (() => {
 // 必须在场且承载锚文本（CLAUSES/DERIVED 按 text，GATES 按 parts 逐片段）；豁免集动态取自
 // 活跃装配块 id 集（当前仅 direct-dispatch-header 仍在 spec/blocks 装配、无归档义务）。
 // 归档文件名映射：闸块归档名带 gate- 前缀（gate-plan-gate.md 等，盘面实测），条款块不带。
+// 派生条款对账（§14 长期项落地）：fromAnchor 派生的条目必须满足 ① registry 不再字面持有该串
+//   （双写残留＝派生未生效）、② text 取自运行时读取的锚块且等于锚库在场子串、③ 派生串仍是
+//   spec/blocks 装配面在场子串（渲染产物子串契约的源头上游）。锚库改措辞时 ③ 失配即红——
+//   红点落在本断言（含失配子串明文），比旧双写时代的吞锚闸拒产更早、更可定位。
+check('anchor-clause-text-derived-single-source',
+  (() => {
+    const libDir = path.join(SPEC_ROOT, 'spec', 'anchor-library');
+    const anchor = fs.readFileSync(path.join(libDir, 'review-severity-axiom.md'), 'utf8');
+    const blocksDir = path.join(SPEC_ROOT, 'spec', 'blocks');
+    const blocksText = fs.readdirSync(blocksDir).filter((f) => f.endsWith('.md'))
+      .map((f) => fs.readFileSync(path.join(blocksDir, f), 'utf8')).join('\n');
+    // ① registry 源码不再字面写死该子串（fromAnchor 调用形态在场即证明非双写）
+    const regSrc = fs.readFileSync(path.join(SPEC_ROOT, 'checks', 'registry.mjs'), 'utf8');
+    const derivedCall = /text:\s*fromAnchor\('review-severity-axiom',\s*'([^']+)'\)/.exec(regSrc);
+    if (!derivedCall) return false;
+    const sub = derivedCall[1];
+    // ② 派生串确在锚库正文
+    if (!anchor.includes(sub)) return false;
+    // ③ 派生串在装配面上游（spec/blocks）在场——产物子串契约的上游保证
+    if (!blocksText.includes(sub)) return false;
+    // ④ 同一子串不得再以 CLAUSES 字面 text 形态重复登记（双写残留检测）
+    const literalDup = new RegExp(`text:\\s*'${sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'\\s*,\\s*\\n\\s*expect:`).test(regSrc);
+    return !literalDup;
+  })());
 check('anchor-library-registry-no-drift',
   (() => {
     const libDir = path.join(SPEC_ROOT, 'spec', 'anchor-library');

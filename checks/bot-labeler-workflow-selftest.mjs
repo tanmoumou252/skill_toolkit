@@ -188,13 +188,15 @@ check('workflow-no-stale-appid-slug-fallback',
 // --- github-script 固定 Node-24 兼容 SHA（runtime-warning 处理）---
 check('workflow-github-script-node24-sha',
   // 出处声明（本断言 SHA 的可核验事实源，非凭空捏造）：
-  //   1) `.kilo/plans/20261011-t1-bot-labeler.md:193` 登记该 SHA 为 actions/github-script v9.0.0 的
-  //      不可变 Node-24 提交（Node.js 20 deprecation / runtime-warning 处理）；
-  //   2) `.kilo/plans/test-evidence/20261011-four-task-baseline.md:62` 记录两处 `@v7` → 该 SHA 的实改；
-  //   3) runner 版本前置由 `.kilo/logs_103132623553/0_sync-labels.txt:1` 实测（2.337.0 ≥ 2.327.1）。
+  //   1) 2026-10-16 会话实取：`git ls-remote https://github.com/actions/github-script.git refs/tags/v8`
+  //      ＝ ed597411d8f924073f98dfc5c65a23a2325f34cd（v8.0.0 release note 明确 "Update Node.js version
+  //      support to 24.x"，GitHub 签名验证 tag；runner 最低 v2.327.1）；
+  //   2) 旧 3a2844b7…（v7 系，action.yml 声明 node20）自 2026-09-23 runner 移除 node20 后仅剩 warning 噪音，
+  //      本轮按欠账清单（stacked-pr-handover §2）升级清偿；
+  //   3) runner 版本前置沿用 `.kilo/logs_103132623553/0_sync-labels.txt:1` 实测（2.337.0 ≥ 2.327.1）。
   //   断言仍逐字锁定该 pin，v7 标签由反向锚 workflow-no-stale-github-script-v7 锁死不得回归；
-  //   SHA 变更须走代码变更审查链并同步以上三处登记。
-  /actions\/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3/.test(text));
+  //   SHA 变更须走代码变更审查链并同步以上登记。
+  /actions\/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd/.test(text));
 // 反向锚：旧的 v7 标签不得残留。
 check('workflow-no-stale-github-script-v7',
   !text.includes('actions/github-script@v7'));
