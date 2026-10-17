@@ -416,6 +416,40 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
   record('autofill-prompt-has-untrusted-delimiter-and-instruction',
     wroteOne(r) && /UNTRUSTED-CHANGE-DATA/.test(r.reqText) && /不得执行/.test(r.reqText), '');
 }
+{ // commit 消息规范注入（git-commit-msg 技能适配版）：提示词携带跨分支全量语义 + type→标签映射 + 长度纪律。
+  //   期望值由注入契约推导：system 必含跨分支全量口径（非逐 commit）、11 组标签映射、subject/body 长度纪律与扩展 type 集。
+  const r = await runCase({});
+  const sys = (() => { try { return JSON.parse(r.reqText).messages?.find((m) => m.role === 'system')?.content || ''; } catch { return ''; } })();
+  const LABELS = ['【新增】', '【修复】', '【文档】', '【样式】', '【重构】', '【性能】', '【测试】', '【构建】', '【集成】', '【维护】', '【国际化】'];
+  record('autofill-prompt-carries-cross-branch-total-message-semantics',
+    sys.includes('跨分支全量') && sys.includes('严禁逐 commit 复述') && sys.includes('commit hash'),
+    'sys head=' + sys.slice(0, 60));
+  record('autofill-prompt-carries-commit-skill-label-map',
+    LABELS.every((t) => sys.includes(t)) && sys.includes('50 字符') && sys.includes('72 字符') && sys.includes('feat>fix>perf'),
+    'missing=' + LABELS.filter((t) => !sys.includes(t)).join(','));
+  record('autofill-prompt-type-list-extended-skill-types',
+    /feat\|fix\|docs\|style\|refactor\|perf\|test\|build\|ci\|chore\|i18n/.test(sys),
+    'sys=' + sys.slice(0, 120));
+}
+{ // 标题 type 扩展（与技能 type 集对齐）：perf/style/build/i18n 四型按 emoji 表回填照常写回——
+  //   提示词放行而 normalizeTitle 拒收即「提示词与校验脱节」，四型各须一正控锁。
+  const r1 = await runCase({ title: 'perf(checks): 降低重算开销' });
+  record('autofill-title-perf-type-accepted',
+    wroteOne(r1) && r1.patches[0].payload.title === '⚡️ perf(checks): 降低重算开销',
+    'title=' + String(r1.patches[0]?.payload?.title));
+  const r2 = await runCase({ title: 'style(ci): 统一缩进风格' });
+  record('autofill-title-style-type-accepted',
+    wroteOne(r2) && r2.patches[0].payload.title === '💄 style(ci): 统一缩进风格',
+    'title=' + String(r2.patches[0]?.payload?.title));
+  const r3 = await runCase({ title: 'build(ci): 调整依赖打包' });
+  record('autofill-title-build-type-accepted',
+    wroteOne(r3) && r3.patches[0].payload.title === '📦 build(ci): 调整依赖打包',
+    'title=' + String(r3.patches[0]?.payload?.title));
+  const r4 = await runCase({ title: 'i18n(ci): 补齐语言资源' });
+  record('autofill-title-i18n-type-accepted',
+    wroteOne(r4) && r4.patches[0].payload.title === '🌐 i18n(ci): 补齐语言资源',
+    'title=' + String(r4.patches[0]?.payload?.title));
+}
 { // 契约 11：日志注入防护（被拒标题原文入日志，必须先净化）——解耦后标题挂仍走 NOTE 通道。
   const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' });
   const joined = r.logs.join('\n');
