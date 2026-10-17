@@ -39,8 +39,9 @@ function allowedScopes(env, hintList) {
   return [...new Set([...hints, ...table])];
 }
 
-const CATEGORIES = ['新增', '修复', '测试', '文档', '集成'];
-const CATEGORY_RE = /^- 【(新增|修复|测试|文档|集成)】/;
+// 类别词表闸已删除（契约 1：词表无法随 skill 演进，把合法类别误判 out-of-vocab 整包 SKIP）。
+// 仅保留结构闸：类别括号必须存在且非空，取值不限。
+const CATEGORY_RE = /^- 【[^】]+】/;
 const MANUAL_LINE_RE = /^\s*<!--\s*pr-manual\s*-->\s*$/;
 const CRAB_LINE_RE = /^\s*<!--\s*This is an auto-generated comment:/;
 const RESULT_FORBIDDEN_RE = /(exit\s*0|Exit\s*0|退出码\s*0|ALL OK)/i; // 禁串对大小写不敏感（Bot W3/探针 P5b：EXIT 0/All OK 同属伪造输出字面量漏面；契约 :190 意图面）
@@ -227,10 +228,10 @@ export function checkBullets(mainSectionBody, filesList, repoHasPath = repoHasPa
   const bullets = mainSectionBody.split('\n').filter((l) => /^- /.test(l));
   if (bullets.length === 0) return { error: '主要变更无 bullet' };
   for (const line of bullets) {
+    // 结构闸（契约 1）：必须形如 `- 【非空类别】`，取值不限（词表闸已删除）。
+    // 空括号 `- 【】` 仍拒——按「缺 `- 【类别】` 前缀」分句报（夹具按理由串归属断言）。
     if (!CATEGORY_RE.test(line)) {
-      // 两种违例分句报：夹具要按理由串归属断言，合并消息会让"码对但闸错"的假绿蒙混过关。
-      const cat = /^- 【([^】]*)】/.exec(line);
-      return { error: cat ? `类别不在词表：${sanitize(cat[1])}` : 'bullet 缺 `- 【类别】` 前缀：' + sanitize(line) };
+      return { error: 'bullet 缺 `- 【类别】` 前缀：' + sanitize(line) };
     }
     const afterPrefix = line.replace(CATEGORY_RE, '');
     const tokens = [...afterPrefix.matchAll(CODE_TOKEN_RE)].map((m) => m[1].trim());
@@ -326,7 +327,7 @@ function buildPrompt(template, facts) {
     '硬约束二：严禁编造验证结论，不得写出 exit 0 / 通过 / ALL OK 一类结果字样，结果只由人类或审查方填写。',
     `硬约束三：标题只输出 \`type(scope): 摘要\`，不要自带 emoji；type 取 feat|fix|docs|refactor|test|chore|ci 之一；scope 只能取词表 ${facts.scopes.join('|')} 之一（含本 PR 实际触及顶层目录，词表外目录名不得自造）。`,
     `硬约束四：正文必须保留模板全部 ## 小节标题逐字在场，节序 ${'概述→主要变更→影响面与风险→验证'}；只写动机与取舍、路径与闸名级事实、不可逆面与回滚，规模统计由系统填写不要重复。`,
-    '硬约束五：主要变更每条必须形如 `- 【类别】` + 至少一个反引号代码 token（路径或符号名）+ 实质说明；类别取 ' + CATEGORIES.join('|') + '。不得只写能力级散文。',
+    '硬约束五：主要变更每条必须形如 `- 【类别】` + 至少一个反引号代码 token（路径或符号名）+ 实质说明；类别用中文短语概括该条变更性质（如 新增/修复/文档/样式/重构/性能/测试/构建/集成/维护 等均可，不硬限取值）。不得只写能力级散文。',
     '输出：严格 JSON，仅 title 与 body 两个字符串字段，无 Markdown 代码围栏。',
   ].join('\n');
 
@@ -586,125 +587,147 @@ export async function runAutoFill(deps) {
     if (MANUAL_LINE_RE.test(draftLines[i]) || CRAB_LINE_RE.test(draftLines[i])) {
       return report('S10', '模型输出含接管标记或 bot 哨兵整行');
     }
-  }
-
-  // 未闭合围栏闸（CodeRabbit Major · 设计红线 6）：模型正文若以开栏收尾，随后拼接的既有 CodeRabbit 尾块
+  } // 未闭合围栏闸（CodeRabbit Major · 设计红线 6）：模型正文若以开栏收尾，随后拼接的既有 CodeRabbit 尾块
   //   会落进这个未闭合围栏——下一轮 findSplitIndex(:96) 因 CRAB 起始哨兵被 fenceFlags(:79) 判入围栏内
   //   (:100 isInsideFence 跳过) 而认不出切分点，splitIdx=-1 → 整块被当头部重写，尾块被改写/吞没。
   //   取围栏结束态：对正文行尾追加一个空行，其 inFence 读数即「全文处理完是否仍开栏」；开栏未闭合 → fail-closed 归 S9。
+
   const draftFence = fenceFlags([...draftLines, '']);
   if (draftFence[draftFence.length - 1]) return report('S9', '模型正文含未闭合代码围栏');
 
+  // 契约 2（解耦 PATCH）：标题与正文各自校验、各自写回——title 校验失败只影响 title 侧，
+  //   body 校验失败只影响 body 侧；两侧均失败才落 skipCode。S5/S6 写前硬闸（接管标记/head 漂移）
+  //   仍是全局闸，保持整包跳过。
+  const bodyOutcome = await (async () => {
+    const fail = (error) => ({ bodyError: error });
+    const bodyLines = model.body.split('\n');
+    const gotSecs = sectionsOf(model.body).map((s) => s.name);
+    const multisetEq = (arrA, arrB) => {
+      if (arrA.length !== arrB.length) return false;
+      const c = new Map();
+      for (const x of arrA) c.set(x, (c.get(x) || 0) + 1);
+      for (const x of arrB) c.set(x, (c.get(x) || 0) - 1);
+      return [...c.values()].every((v) => v === 0);
+    };
+    const orderOk = gotSecs.length === requiredSections.length && gotSecs.every((n, i) => n === requiredSections[i]);
+    const secErr = !multisetEq(gotSecs, requiredSections) ? '小节名多重集与模板不符（缺节或同名重复）：' + gotSecs.join(',')
+      : !orderOk ? '小节顺序与模板节序不符：' + gotSecs.join(',') : null;
+    if (secErr) return fail(secErr);
+
+    const draftWithoutVerif = (() => {
+      const v = sectionsOf(model.body).find((s) => s.name === '验证');
+      if (!v) return model.body;
+      return bodyLines.slice(0, v.start + 1).concat([''], bodyLines.slice(v.end)).join('\n');
+    })();
+
+    const mainBody = sectionBodyOf(draftWithoutVerif, '主要变更');
+    const bulletRes = checkBullets(mainBody, files);
+    if (bulletRes.error) return fail(bulletRes.error);
+    if (bulletRes.unverified.length) note('path-unverified: ' + bulletRes.unverified.join(','));
+
+    if (RESULT_FORBIDDEN_RE.test(draftWithoutVerif)) return fail('头部区出现命令输出字面量（疑为编造验证结论）');
+
+    // §0.1 auto-fill 联动（事实源：主计划 20261014-100300 §0.1）：PATCH body 尾部追加同步 sentinel 行，
+    //   供 bot-review-labeler 读 PR body 解析三态（synced/stale/absent）渲染进度表。
+    //   head 取本轮事件全量 sha（env.HEAD_SHA），行形固定 `<!-- auto-fill-pr: synced head={sha} -->`。
+    // E1/review 契约：切分与装配前即剥离旧 sentinel 行（围栏感知——围栏内引用不是标记，不剥），
+    //   使旧标记不参与 head/tail 归属、也不被尾块逐字保留；任意轮 PATCH 后全 body 恰 1 条——
+    //   跨轮累积会使 labeler 取到过期标记误判 stale，且 body 无界增长撞超长闸。
+    const SYNC_SENTINEL_RE = /^<!-- auto-fill-pr: synced head=[0-9a-f]{40} -->\s*$/;
+    // 剥离 sentinel 仅处理删除现场的紧邻空行（review-finding 契约）：
+    //   ① 全文范围的 \n{3,} 压缩（更早版本）与"out 尾部是空行就吞"的宽收敛（上一版）都被否——
+    //      前者改写围栏内与尾块的原有空行结构，后者会吞掉正文开头空行与围栏内连续空行；
+    //   ② 仅当上一保留行"不是刚被 sentinel 删除现场"时才保留空行——空行收敛只在 sentinel 删除点
+    //      附近发生；围栏内行（flags[i]===true）永不删除、永不收敛；正文开头空行原样保留。
+    const stripSyncSentinels = (text) => {
+      const ls = String(text).split('\n');
+      const flags = fenceFlags(ls);
+      const out = [];
+      let lastWasRemoval = false; // 上一个输出动作是否为 sentinel 删除（删除现场标记）
+      for (let i = 0; i < ls.length; i += 1) {
+        const inFence = flags[i] === true;
+        if (!inFence && SYNC_SENTINEL_RE.test(ls[i].trim())) { lastWasRemoval = true; continue; }
+        if (!inFence && lastWasRemoval && ls[i].trim() === '') { lastWasRemoval = true; continue; } // 仅删除现场紧邻空行收敛
+        out.push(ls[i]);
+        lastWasRemoval = false;
+      }
+      return out.join('\n');
+    };
+    const syncSentinelLine = `<!-- auto-fill-pr: synced head=${env.HEAD_SHA} -->`;
+    const finalBodyOf = (assembledText) => stripSyncSentinels(assembledText).trimEnd() + '\n' + syncSentinelLine + '\n';
+
+    const splitIdx = findSplitIndex(lines, inFence);
+    const existingHead = lines.slice(0, splitIdx === -1 ? lines.length : splitIdx).join('\n');
+    const existingTail = splitIdx === -1 ? '' : lines.slice(splitIdx).join('\n');
+
+    const statsLine = injectStats(draftWithoutVerif, statsText);
+    const templateVerifCommands = (() => {
+      const tv = sectionBodyOf(template, '验证').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|') && l.includes('`'));
+      return tv.length > 0 ? tv : [];
+    })();
+    let headBody = mergeVerification(statsLine, existingHead, templateVerifCommands);
+    let finalBody = finalBodyOf(existingTail ? headBody.trimEnd() + '\n\n' + existingTail + '\n' : headBody.trimEnd() + '\n');
+
+    if (existingTail && headTailOverlap(headBody, existingTail)) {
+      return fail('头部区与 CodeRabbit 尾块存在连续重叠片段');
+    }
+
+    // E3/review 契约：超长闸对剥离旧标记后的最终 PATCH 长度真实生效（不再用预算近似）。
+    if (finalBody.length > MAX_FINAL_BODY_CHARS) return fail('最终正文超长 ' + finalBody.length);
+
+    const latest = await gh.get(prPath);
+    if (!latest || !latest.head || latest.head.sha !== env.HEAD_SHA) return { headDrift: '写前 head 与事件 head 不一致' };
+    const bodyChanged = (latest.body || '') !== (pr.body || '');
+    const stampChanged = (latest.updated_at || '') !== (pr.updated_at || '');
+    if (bodyChanged || stampChanged) {
+      const l2 = String(latest.body || '').replace(/\r\n/g, '\n');
+      const l2Lines = l2.split('\n');
+      const f2 = fenceFlags(l2Lines);
+      for (let i = 0; i < l2Lines.length; i += 1) {
+        const l = l2Lines[i];
+        if (f2[i]) continue;
+        if (MANUAL_LINE_RE.test(l)) return { manualMarker: true };
+      }
+      // 围栏感知剥离旧 sentinel 后再切分：旧标记不参与 head/tail 归属（review 契约）。
+      const l2Stripped = stripSyncSentinels(l2);
+      const l2sLines = l2Stripped.split('\n');
+      const f2s = fenceFlags(l2sLines);
+      const idx2 = findSplitIndex(l2sLines, f2s);
+      const head2 = l2sLines.slice(0, idx2 === -1 ? l2sLines.length : idx2).join('\n');
+      const tail2 = idx2 === -1 ? '' : l2sLines.slice(idx2).join('\n');
+      headBody = mergeVerification(statsLine, head2, templateVerifCommands);
+      finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
+      if (tail2 && headTailOverlap(headBody, tail2)) {
+        return fail('以最新正文重合并后仍与尾块重叠');
+      }
+      if (finalBody.length > MAX_FINAL_BODY_CHARS) return fail('重合并后最终正文超长 ' + finalBody.length);
+      log('CAS 重合并：正文在 AI 往返期间被更新');
+    }
+    return { finalBody };
+  })();
+  // 解耦闸收束：body 侧全局硬闸（S5/S6）仍整包退出（它们守的是 PR 写入权本身）；
+  //   body 侧内容闸失败 → title 照常 PATCH；两侧均失败 → 落 skipCode。
+  if (bodyOutcome.manualMarker) return report('S5', '写前复核发现新接管标记');
+  if (bodyOutcome.headDrift) return report('S6', bodyOutcome.headDrift);
   const titleRes = normalizeTitle(model.title, scopes);
-  if (titleRes.error) return report('S9', titleRes.error);
-
-  const bodyLines = model.body.split('\n');
-  const gotSecs = sectionsOf(model.body).map((s) => s.name);
-  const multisetEq = (arrA, arrB) => {
-    if (arrA.length !== arrB.length) return false;
-    const c = new Map();
-    for (const x of arrA) c.set(x, (c.get(x) || 0) + 1);
-    for (const x of arrB) c.set(x, (c.get(x) || 0) - 1);
-    return [...c.values()].every((v) => v === 0);
-  };
-  const orderOk = gotSecs.length === requiredSections.length && gotSecs.every((n, i) => n === requiredSections[i]);
-  const secErr = !multisetEq(gotSecs, requiredSections) ? '小节名多重集与模板不符（缺节或同名重复）：' + gotSecs.join(',')
-    : !orderOk ? '小节顺序与模板节序不符：' + gotSecs.join(',') : null;
-  if (secErr) return report('S9', secErr);
-
-  const draftWithoutVerif = (() => {
-    const v = sectionsOf(model.body).find((s) => s.name === '验证');
-    if (!v) return model.body;
-    return bodyLines.slice(0, v.start + 1).concat([''], bodyLines.slice(v.end)).join('\n');
-  })();
-
-  const mainBody = sectionBodyOf(draftWithoutVerif, '主要变更');
-  const bulletRes = checkBullets(mainBody, files);
-  if (bulletRes.error) return report('S9', bulletRes.error);
-  if (bulletRes.unverified.length) note('path-unverified: ' + bulletRes.unverified.join(','));
-
-  if (RESULT_FORBIDDEN_RE.test(draftWithoutVerif)) return report('S9', '头部区出现命令输出字面量（疑为编造验证结论）');
-
-  // §0.1 auto-fill 联动（事实源：主计划 20261014-100300 §0.1）：PATCH body 尾部追加同步 sentinel 行，
-  //   供 bot-review-labeler 读 PR body 解析三态（synced/stale/absent）渲染进度表。
-  //   head 取本轮事件全量 sha（env.HEAD_SHA），行形固定 `<!-- auto-fill-pr: synced head={sha} -->`。
-  // E1/review 契约：切分与装配前即剥离旧 sentinel 行（围栏感知——围栏内引用不是标记，不剥），
-  //   使旧标记不参与 head/tail 归属、也不被尾块逐字保留；任意轮 PATCH 后全 body 恰 1 条——
-  //   跨轮累积会使 labeler 取到过期标记误判 stale，且 body 无界增长撞超长闸。
-  const SYNC_SENTINEL_RE = /^<!-- auto-fill-pr: synced head=[0-9a-f]{40} -->\s*$/;
-  // 剥离 sentinel 仅处理删除现场的紧邻空行（review-finding 契约）：
-  //   ① 全文范围的 \n{3,} 压缩（更早版本）与"out 尾部是空行就吞"的宽收敛（上一版）都被否——
-  //      前者改写围栏内与尾块的原有空行结构，后者会吞掉正文开头空行与围栏内连续空行；
-  //   ② 仅当上一保留行"不是刚被 sentinel 删除现场"时才保留空行——空行收敛只在 sentinel 删除点
-  //      附近发生；围栏内行（flags[i]===true）永不删除、永不收敛；正文开头空行原样保留。
-  const stripSyncSentinels = (text) => {
-    const ls = String(text).split('\n');
-    const flags = fenceFlags(ls);
-    const out = [];
-    let lastWasRemoval = false; // 上一个输出动作是否为 sentinel 删除（删除现场标记）
-    for (let i = 0; i < ls.length; i += 1) {
-      const inFence = flags[i] === true;
-      if (!inFence && SYNC_SENTINEL_RE.test(ls[i].trim())) { lastWasRemoval = true; continue; }
-      if (!inFence && lastWasRemoval && ls[i].trim() === '') { lastWasRemoval = true; continue; } // 仅删除现场紧邻空行收敛
-      out.push(ls[i]);
-      lastWasRemoval = false;
-    }
-    return out.join('\n');
-  };
-  const syncSentinelLine = `<!-- auto-fill-pr: synced head=${env.HEAD_SHA} -->`;
-  const finalBodyOf = (assembledText) => stripSyncSentinels(assembledText).trimEnd() + '\n' + syncSentinelLine + '\n';
-
-  const splitIdx = findSplitIndex(lines, inFence);
-  const existingHead = lines.slice(0, splitIdx === -1 ? lines.length : splitIdx).join('\n');
-  const existingTail = splitIdx === -1 ? '' : lines.slice(splitIdx).join('\n');
-
-  const statsLine = injectStats(draftWithoutVerif, statsText);
-  const templateVerifCommands = (() => {
-    const tv = sectionBodyOf(template, '验证').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|') && l.includes('`'));
-    return tv.length > 0 ? tv : [];
-  })();
-  let headBody = mergeVerification(statsLine, existingHead, templateVerifCommands);
-  let finalBody = finalBodyOf(existingTail ? headBody.trimEnd() + '\n\n' + existingTail + '\n' : headBody.trimEnd() + '\n');
-
-  if (existingTail) {
-    if (headTailOverlap(headBody, existingTail)) {
-      return report('S9', '头部区与 CodeRabbit 尾块存在连续重叠片段');
-    }
+  const bodyError = bodyOutcome.bodyError || null;
+  const titleError = titleRes.error || null;
+  if (titleError && bodyError) {
+    return report('S9', titleError + '；' + bodyError);
   }
+  if (bodyError) note('body-not-updated: ' + bodyError);
+  if (titleError) note('title-not-updated: ' + titleError);
 
-  // E3/review 契约：超长闸对剥离旧标记后的最终 PATCH 长度真实生效（不再用预算近似）。
-  if (finalBody.length > MAX_FINAL_BODY_CHARS) return report('S9', '最终正文超长 ' + finalBody.length);
-
-  const latest = await gh.get(prPath);
-  if (!latest || !latest.head || latest.head.sha !== env.HEAD_SHA) return report('S6', '写前 head 与事件 head 不一致');
-  const bodyChanged = (latest.body || '') !== (pr.body || '');
-  const stampChanged = (latest.updated_at || '') !== (pr.updated_at || '');
-  if (bodyChanged || stampChanged) {
-    const l2 = String(latest.body || '').replace(/\r\n/g, '\n');
-    const l2Lines = l2.split('\n');
-    const f2 = fenceFlags(l2Lines);
-    for (let i = 0; i < l2Lines.length; i += 1) {
-      const l = l2Lines[i];
-      if (f2[i]) continue;
-      if (MANUAL_LINE_RE.test(l)) return report('S5', '写前复核发现新接管标记');
-    }
-    // 围栏感知剥离旧 sentinel 后再切分：旧标记不参与 head/tail 归属（review 契约）。
-    const l2Stripped = stripSyncSentinels(l2);
-    const l2sLines = l2Stripped.split('\n');
-    const f2s = fenceFlags(l2sLines);
-    const idx2 = findSplitIndex(l2sLines, f2s);
-    const head2 = l2sLines.slice(0, idx2 === -1 ? l2sLines.length : idx2).join('\n');
-    const tail2 = idx2 === -1 ? '' : l2sLines.slice(idx2).join('\n');
-    headBody = mergeVerification(statsLine, head2, templateVerifCommands);
-    finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
-    if (tail2 && headTailOverlap(headBody, tail2)) {
-      return report('S9', '以最新正文重合并后仍与尾块重叠');
-    }
-    if (finalBody.length > MAX_FINAL_BODY_CHARS) return report('S9', '重合并后最终正文超长 ' + finalBody.length);
-    log('CAS 重合并：正文在 AI 往返期间被更新');
+  const patchPayload = {};
+  if (!titleError) patchPayload.title = titleRes.title;
+  if (!bodyError) patchPayload.body = bodyOutcome.finalBody;
+  let patchFailed = null;
+  try {
+    await gh.patch(prPath, patchPayload);
+  } catch (err) {
+    patchFailed = 'PATCH 失败：' + sanitize(err && err.message);
   }
-
-  await gh.patch(prPath, { title: titleRes.title, body: finalBody });
+  if (patchFailed) return report('S12', patchFailed);
   // 佐证记录（review-finding 终局契约）：在本轮处理的 head commit 上落 commit status——
   //   status 以 SHA 为键、state/context 不可被 PR 作者伪造、天然携带本轮运行标识（target_url）。
   //   bot-review-labeler 的进度表佐证只消费这条 status（context=auto-fill-pr, state=success）：
@@ -721,7 +744,13 @@ export async function runAutoFill(deps) {
   } catch (err) {
     warn(`NOTE auto-fill status write failed (labeler will mark stale): ${sanitize(err && err.message)}`);
   }
-  return { updated: true, title: titleRes.title, body: finalBody };
+  const updated = { title: !titleError, body: !bodyError };
+  return {
+    updated: updated.title || updated.body,
+    title: updated.title ? titleRes.title : undefined,
+    body: updated.body ? bodyOutcome.finalBody : undefined,
+    detail: updated,
+  };
 }
 
 // ---------------------------------------------------------------- CLI 入口

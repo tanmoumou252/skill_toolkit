@@ -201,6 +201,18 @@ const skipIs = (r, code) => r.err === null && r.out?.skipCode === code && (r.pat
 // skipWith：码 + 该闸独有理由串。缺了后半段，"另一道闸恰好也返回同一码"就会冒充被测闸生效。
 const skipWith = (r, code, frag) => skipIs(r, code) && String(r.out?.skipReason || '').includes(frag);
 const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.length === 1;
+// bodyFailWith（契约 2 解耦翻转）：正文侧内容闸失败 → 标题照写（payload 恰含 title）、
+//   正文不写（payload 无 body、detail.body=false）、理由串经 NOTE body-not-updated 留痕。
+const bodyFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
+  r.patches[0].payload.title && r.patches[0].payload.body === undefined &&
+  r.out?.updated === true && r.out?.detail?.body === false && r.out?.detail?.title === true &&
+  r.logs.join('\n').includes('body-not-updated') && r.logs.join('\n').includes(frag);
+// titleFailWith（契约 2 解耦翻转）：标题侧校验失败 → 正文照写（payload 恰含 body）、
+//   标题不写（payload 无 title、detail.title=false）、理由串经 NOTE title-not-updated 留痕。
+const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
+  r.patches[0].payload.body && r.patches[0].payload.title === undefined &&
+  r.out?.updated === true && r.out?.detail?.title === false && r.out?.detail?.body === true &&
+  r.logs.join('\n').includes('title-not-updated') && r.logs.join('\n').includes(frag);
 
 // ---------------------------------------------------------------- A. 正向
 {
@@ -261,9 +273,47 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n~~~sh\nx = 1' } }); record('autofill-skip-s9-model-unclosed-fence-tilde', skipWith(r, 'S9', '未闭合代码围栏'), JSON.stringify(r.out || {})); }
 { // 不该触发域反向护栏（防过修）：正文内开闭配平的围栏不得被误拒，须照常写一次。
   const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n```python\nx = 1\n```' } }); record('autofill-model-closed-fence-not-denied', wroteOne(r), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: '把正文自动填充工作流补齐' }); record('autofill-skip-s9-title-no-grammar', skipWith(r, 'S9', '文法'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' }); record('autofill-skip-s9-title-multiline', skipWith(r, 'S9', '含换行'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: 'feat(nope-module): x' }); record('autofill-skip-s9-scope-not-in-whitelist', skipWith(r, 'S9', '词表白名单'), JSON.stringify(r.out || {})); }
+{ // 契约 2 翻转：标题文法违例 → 标题不写但正文照写（旧「整包 SKIP」语义退役）。
+  const r = await runCase({ title: '把正文自动填充工作流补齐' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-title-no-grammar-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('title-not-updated') && r.logs.join('\n').includes('文法'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：标题含换行（注解伪造形态）→ 标题不写但正文照写；被拒标题原文入日志仍净化。
+  const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' });
+  const p = r.patches[0]?.payload || {};
+  const joined = r.logs.join('\n');
+  record('autofill-title-multiline-body-still-patched-sanitized',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：scope 越表 → 标题不写但正文照写。
+  const r = await runCase({ title: 'feat(nope-module): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-scope-not-in-whitelist-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('词表白名单'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：未知 type → 标题不写但正文照写。
+  const r = await runCase({ title: 'wonderfeat(ci): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-type-unknown-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('未知 type'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转（scope env 整表替换家族）：governor ∉ 替换表 → 标题不写但正文照写（旧整包 SKIP 退役）。
+  const r = await runCase({ env: { AI_SCOPE_WHITELIST: 'src,docs' }, title: 'feat(governor): x' });
+  const r0 = await runCase({ title: 'feat(governor): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-scope-env-replaces-default-table',
+    r.patches.length === 1 && p.body && p.title === undefined && wroteOne(r0),
+    'gated patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(',') + ' base=' + JSON.stringify(r0.out || {}));
+}
 { // S9 scope 近似词归一化（PR#17 实测根因）：模型把点前缀目录写成去点近似词（.github→github），
   //   归一化后照常出标题，不再整包 S9 拒；真词表外语（nope-module）仍拒——上一条负控锁住不放宽。
   const r = await runCase({ title: 'fix(github): 修复工作流取值口径' });
@@ -277,15 +327,45 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
     wroteOne(r) && String(r.out?.title || '').startsWith('🐛 fix(github):'),
     `out=${JSON.stringify(r.out || {})});`);
 }
-{ const r = await runCase({ title: 'wonderfeat(ci): x' }); record('autofill-skip-s9-type-unknown', skipWith(r, 'S9', '未知 type'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 概述: '缺了影响面小节。', 影响面与风险: undefined } }); record('autofill-skip-s9-missing-section', skipWith(r, 'S9', '多重集'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 新增 `.github/scripts/auto-fill-pr.mjs`：说明文字足够长以避免其它闸误命中' } }); record('autofill-skip-s9-bullet-no-category', skipWith(r, 'S9', '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【优化】`.github/scripts/auto-fill-pr.mjs`：收敛实现使散文长度充分越过薄内容阈值' } }); record('autofill-skip-s9-category-out-of-vocab', skipWith(r, 'S9', '类别不在词表'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`' } }); record('autofill-skip-s9-bullet-too-thin', skipWith(r, 'S9', '无实质内容'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } }); record('autofill-skip-s9-fabricated-result-in-overview', skipWith(r, 'S9', '命令输出字面量'), JSON.stringify(r.out || {})); }
+{ const r = await runCase({ aiBody: { 概述: '缺了影响面小节。', 影响面与风险: undefined } }); record('autofill-skip-s9-missing-section', bodyFailWith(r, '多重集'), JSON.stringify(r.out || {})); }
+{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 新增 `.github/scripts/auto-fill-pr.mjs`：说明文字足够长以避免其它闸误命中\n- 【新增】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【新增】`checks/package.json`：test 链接入与注册说明' } }); record('autofill-skip-s9-bullet-no-category', bodyFailWith(r, '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {})); }
+{ // 契约 1（类别词表闸删除）：`- 【重构】` 等任意非词表类别放行——只校结构/token/实质，不校取值。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【重构】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill，S1-S11 跳过矩阵与哨兵切分\n- 【优化】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言、r.err 前置与变异锚\n- 【维护】`checks/package.json`：新自测接入默认 test 链' } });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  // 强化断言（review 契约）：仅 wroteOne 无法发现非词表类别未写入正文——须显式校验标题与正文分别
+  //   更新成功，且 PATCH 正文 payload 实含 【重构】/【优化】/【维护】 三类，使退化（正文丢类别）可被测到。
+  record('autofill-non-vocab-category-passes',
+    wroteOne(r) && r.out?.detail?.title === true && r.out?.detail?.body === true &&
+      r.patches[0]?.payload?.title && body.includes('【重构】') && body.includes('【优化】') && body.includes('【维护】'),
+    JSON.stringify(r.out || {}) + ' cats=' + JSON.stringify(['【重构】', '【优化】', '【维护】'].filter((c) => body.includes(c))));
+}
+{ // 结构闸保留：空类别括号 `- 【】` 仍拒（缺 `- 【类别】` 前缀分句报）。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【】`.github/scripts/auto-fill-pr.mjs`：收敛实现使散文长度充分越过薄内容阈值' } });
+  record('autofill-skip-s9-empty-category-brackets', bodyFailWith(r, '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {}));
+}
+{ // 薄内容闸（契约 2 翻转）：夹具三条 bullet 达覆盖率下限，唯一失配点是第一条散文过薄。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入实现\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-skip-s9-bullet-too-thin', bodyFailWith(r, '无实质内容'), JSON.stringify(r.out || {}));
+}
+{ const r = await runCase({ aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } }); record('autofill-skip-s9-fabricated-result-in-overview', bodyFailWith(r, '命令输出字面量'), JSON.stringify(r.out || {})); }
+{ // 契约 2 翻转：标题校验失败（type 未知）+ 正文合格 → 仍 PATCH body，标题不写。
+  const r = await runCase({ title: 'wonderfeat(ci): x' });
+  record('autofill-decoupled-title-fail-body-still-patched', titleFailWith(r, '未知 type'),
+    `patches=${r.patches.length} out=${JSON.stringify(r.out || {})} payloadKeys=${Object.keys(r.patches[0]?.payload || {}).join(',')}`);
+}
+{ // 契约 2 反向：正文校验失败（bullet 缺前缀）+ 标题合格 → 仍 PATCH title，正文不写。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 无前缀 bullet：说明文字足够长以避免其它闸误命中\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式实现与跳过矩阵说明\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-decoupled-body-fail-title-still-patched', bodyFailWith(r, '缺 `- 【类别】` 前缀'),
+    `patches=${r.patches.length} out=${JSON.stringify(r.out || {})} payloadKeys=${Object.keys(r.patches[0]?.payload || {}).join(',')}`);
+}
+{ // 契约 2 退化：标题与正文同时失败 → 落 skipCode（S9），什么都不写。
+  const r = await runCase({ title: 'wonderfeat(ci): x', aiBody: { 主要变更: '5 文件\n\n- 无前缀 bullet：说明文字足够长以避免其它闸误命中\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式实现与跳过矩阵说明\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-decoupled-both-fail-skips', skipIs(r, 'S9'),
+    `out=${JSON.stringify(r.out || {})}`);
+}
 { // F-1r（Bot W3/探针 P5b）：大小写变体同属伪造输出字面量漏面——禁串闸对大小写不敏感（契约 :190 意图面）
   const r = await runCase({ aiBody: { 概述: '自测已全部跑通：EXIT 0，All OK。' } });
-  record('autofill-skip-s9-fabricated-result-case-variants', skipWith(r, 'S9', '命令输出字面量'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-fabricated-result-case-variants', bodyFailWith(r, '命令输出字面量'), JSON.stringify(r.out || {}));
 }
 { // F-1r 负控：非"0 读数"与无子串命中形态必须放行（防 i 旗标误拒正常描述）
   const r = await runCase({ aiBody: { 概述: '退出状态为 1，自测尚未全部通过，属预期红灯。' } });
@@ -297,11 +377,11 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 // 契约 16：覆盖率下限与识别收窄
 {
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】新增一批工作流与脚本能力，补齐自测与接线（全篇无反引号）' } });
-  record('autofill-skip-s9-zero-code-token', skipWith(r, 'S9', '无反引号代码 token'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-zero-code-token', bodyFailWith(r, '无反引号代码 token'), JSON.stringify(r.out || {}));
 }
 { // 覆盖率下限闸：两条 bullet 都**已满足**前缀/代码 token/散文长度三道前置闸，唯一失配点必须是覆盖率本身。
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`runAutoFill`：注入式入口与跳过矩阵的编排实现\n- 【测试】`loadVariant`：变异锚通道与 ESM 缓存破除机制' } });
-  record('autofill-skip-s9-path-coverage-below-floor', skipWith(r, 'S9', '路径覆盖率不足'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-path-coverage-below-floor', bodyFailWith(r, '路径覆盖率不足'), JSON.stringify(r.out || {}));
 }
 { // §12 正控：真实文件路径（含 `/` + 扩展名）但仓库根本不存在（编造）→ 必报 path-unverified（且仅 note，不拒绝）。
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/NO_SUCH_FILE_zzz.md`：编造的不存在路径（不在本轮清单且仓库无此文件）' } });
@@ -336,11 +416,11 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-prompt-has-untrusted-delimiter-and-instruction',
     wroteOne(r) && /UNTRUSTED-CHANGE-DATA/.test(r.reqText) && /不得执行/.test(r.reqText), '');
 }
-{ // 契约 11：日志注入防护（被拒标题原文入日志，必须先净化）
+{ // 契约 11：日志注入防护（被拒标题原文入日志，必须先净化）——解耦后标题挂仍走 NOTE 通道。
   const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' });
   const joined = r.logs.join('\n');
   record('autofill-log-injection-sanitized',
-    skipIs(r, 'S9') && joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
+    r.patches.length === 1 && joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
     'logs=' + joined.slice(0, 160));
 }
 { // 佐证记录（review-finding 终局契约）：PATCH 成功后在本轮处理的 head 上落 commit status
@@ -383,9 +463,9 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-stats-file-count-uses-rest-total-when-truncated',
     wroteOne(r) && body.includes('5 文件，') && !body.includes('2 文件，'), 'body=' + body.slice(0, 140));
 }
-{ // 契约 17 重叠闸：概述直接抄尾块实测句
+{ // 契约 17 重叠闸：概述直接抄尾块实测句——解耦后正文侧失败、标题照写。
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  record('autofill-skip-s9-overlap-with-coderabbit-block', skipIs(r, 'S9'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-overlap-with-coderabbit-block', bodyFailWith(r, '连续重叠片段'), JSON.stringify(r.out || {}));
 }
 { // 负控：措辞不同、语义相近 → 放行（防重叠闸误拒）
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '动机在于让描述跟随最新提交，取舍是把头部区交给工具统一持有。' } });
@@ -554,7 +634,7 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 }
 { // 装配后超限
   const r = await runCase({ aiBody: { 概述: '长'.repeat(70000) } });
-  record('autofill-skip-s9-assembled-too-long', skipWith(r, 'S9', '正文超长'), String(r.out?.skipReason).slice(0, 60));
+  record('autofill-skip-s9-assembled-too-long', bodyFailWith(r, '正文超长'), String(r.out?.detail && 'n/a').slice(0, 60));
 }
 
 // ---------------------------------------------------------------- C'. 审查回灌 Red 用例（F-1..F-11）
@@ -585,7 +665,7 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const dupBody = aiBody() + '\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n| node x | 全部通过 DUP-SURVIVED |';
   const r = await runCase({ aiJson: JSON.stringify({ title: 'feat(ci): x', body: dupBody }) });
   record('autofill-skip-s9-duplicate-verification-section',
-    skipWith(r, 'S9', '多重集'),
+    bodyFailWith(r, '多重集'),
     'out=' + JSON.stringify(r.out || {}));
 }
 { // F-3：CRLF 现存正文须与 LF 版逐字节等价（旧 sectionsOf(CRLF)=0 → 骨架写入丢人类结论）
@@ -639,9 +719,9 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK + '\n\n相关入口：`checks/run.mjs`。', aiBody: { 概述: '运行入口是 `checks/run.mjs`，本句其余措辞与尾块毫无共同整句，只为路径重叠负控而写。' } });
   record('autofill-overlap-backtick-path-token-not-counted', wroteOne(r), 'out=' + JSON.stringify(r.out || {}));
 }
-{ // F-7 正控（保留触发域）：整句复制 ≥16 连续汉字/字母数字 → 仍判 S9
+{ // F-7 正控（保留触发域）：整句复制 ≥16 连续汉字/字母数字 → 正文侧仍判 S9 理由（重叠片段）
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  record('autofill-skip-s9-overlap-verbatim-copy', skipIs(r, 'S9'), 'out=' + JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-overlap-verbatim-copy', bodyFailWith(r, '连续重叠片段'), 'out=' + JSON.stringify(r.out || {}));
 }
 { // F-11②：paged 触顶（10 页）须 NOTE paged-cap-hit（makePaged 导出前本用例红）
   const req = async () => Array.from({ length: 100 }, (_, i) => i);
@@ -666,7 +746,7 @@ const SHUFFLED_BODY = ['## 验证', '', '| 命令 | 结果 |', '|---|---|', '', 
 }
 { // F-15 退化输入：节名齐全但乱序 → S9（节序消息），不得像 multisetEq 那样放行
   const r = await runCase({ aiJson: JSON.stringify({ title: 'feat(ci): x', body: SHUFFLED_BODY }) });
-  record('autofill-skip-s9-sections-out-of-order', skipWith(r, 'S9', '节序'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-sections-out-of-order', bodyFailWith(r, '节序'), JSON.stringify(r.out || {}));
 }
 { // F-16 行为用例（Red 形态）：断言"块标量插值能被检测面检出"——旧单行正则恒 false＝稳定语义红；
   //   步骤 N-1 落检测器后由 R-C4c 把断言体替换为新检测器形态转绿（用例名不变，防改名逃逸）。
@@ -918,25 +998,25 @@ const sseLinesOf = (full, finish = 'stop') => {
   const r = await runCase({ files: srcFiles, title: 'feat(src): 新增入口' });
   record('autofill-scope-hint-allows-touched-dir', wroteOne(r), JSON.stringify(r.out || {}));
 }
-{ // Rework-4：AI_SCOPE_WHITELIST 整表替换默认词表（剥离本仓方言面）——governor ∈ 默认表 ∉ src,docs ∪ 触及目录 → S9。
-  //   负控：同标题不设 env → ∈ 默认表 → 写入（旧实现同绿＝回归护栏，如实登记）。
+{ // Rework-4：AI_SCOPE_WHITELIST 整表替换默认词表（剥离本仓方言面）——governor ∈ 默认表 ∉ src,docs ∪ 触及目录 → 标题侧不写。
+  //   负控：同标题不设 env → ∈ 默认表 → 全写（回归护栏，如实登记）。
   const r = await runCase({ env: { AI_SCOPE_WHITELIST: 'src,docs' }, title: 'feat(governor): x' });
   const r0 = await runCase({ title: 'feat(governor): x' });
   record('autofill-scope-env-replaces-default-table',
-    skipWith(r, 'S9', '词表白名单') && wroteOne(r0),
+    titleFailWith(r, '词表白名单') && wroteOne(r0),
     JSON.stringify(r.out || {}) + ' base=' + JSON.stringify(r0.out || {}));
 }
-{ // Rework-4（消毒闸）：外来目录名过词法消毒才得入系统提示词表（注入防线——scopeHint 源自攻击者可控的文件路径）。
-  //   恶意名须：不泄入 system 词表句；AI 拿它作 scope → 闸拒 S9。旧实现词表即静态表——天然无泄漏，green-on-arrival
-  //   如实登记（本用例是给新实现防"把未消毒 hint 喂进 prompt"的回潮面）。
+{ // 消毒闸回归（契约 2 翻转）：恶意目录名不泄入 system 词表句；AI 拿它作 scope → 标题不写但正文照写。
   const hostileFiles = [{ filename: '恶意;rm【注入】/x.js', status: 'added', additions: 60, deletions: 0, patch: '@@ -0,0 +1,3 @@\n+x' }, ...FILES];
   const r = await runCase({ files: hostileFiles });
   let sys = '';
   try { sys = JSON.parse(r.reqText).messages[0].content; } catch { /* 桩面失败即红 */ }
   const r2 = await runCase({ files: hostileFiles, title: 'feat(恶意;rm【注入】): x' });
+  const p2 = r2.patches[0]?.payload || {};
   record('autofill-scope-hostile-dir-sanitized-out-of-vocab',
-    wroteOne(r) && !sys.includes('恶意;rm') && skipWith(r2, 'S9', '词表白名单'),
-    'clean=' + wroteOne(r) + ' leak=' + sys.includes('恶意;rm') + ' gated=' + skipWith(r2, 'S9', '词表白名单'));
+    wroteOne(r) && !sys.includes('恶意;rm') &&
+      r2.patches.length === 1 && p2.body && p2.title === undefined,
+    'clean=' + wroteOne(r) + ' leak=' + sys.includes('恶意;rm') + ' gatedPatches=' + r2.patches.length + ' keys=' + Object.keys(p2).join(','));
 }
 
 // ---------------------------------------------------------------- D. 变异锚（loadVariant）
@@ -1007,11 +1087,15 @@ await withVariant('fabricated-result-gate', 'if (RESULT_FORBIDDEN_RE.test', 'if 
   const r = await runCaseWith(run, { aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } });
   return { ok: r.err === null && r.out?.skipCode !== 'S9', detail: JSON.stringify(r.out || {}) };
 });
-// F-7 needle 同步（计划 R-B7 连带义务）：调用点形状已改为 headTailOverlap，needle 须指新形状；
-// 摘闸＝headTailOverlap 恒 false，正控夹具（整句复制）摘闸后不再判 S9 ＝ 原闸真实生效（锚测得到）。
-await withVariant('overlap-gate', 'if (headTailOverlap(headBody, existingTail))', 'if (false && headTailOverlap(headBody, existingTail))', async (run) => {
+// F-7 needle 同步（计划 R-B7 连带义务 + 契约 2 解耦重排）：调用点形状已并入 bodyOutcome 装配面
+//   （`if (existingTail && headTailOverlap(...))`），needle 须指新形状；摘闸＝headTailOverlap 恒 false，
+//   正控夹具（整句复制）摘闸后不再判 bodyError（body 正常写）＝原闸真实生效（锚测得到）。
+await withVariant('overlap-gate', 'if (existingTail && headTailOverlap(headBody, existingTail))', 'if (false && existingTail && headTailOverlap(headBody, existingTail))', async (run) => {
   const r = await runCaseWith(run, { existingBody: '旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  return { ok: r.err === null && r.out?.skipCode !== 'S9', detail: JSON.stringify(r.out || {}) };
+  const p = r.patches[0]?.payload || {};
+  // 摘闸后：原被正文重叠闸拒绝的夹具应正常写（payload 含 title+body，无 body-not-updated）。
+  return { ok: r.err === null && p.body && p.title && !r.logs.join('\n').includes('body-not-updated'),
+    detail: 'keys=' + Object.keys(p).join(',') + ' out=' + JSON.stringify(r.out || {}) };
 });
 await withVariant('fence-aware-split', 'if (isInsideFence(i))', 'if (false && isInsideFence(i))', async (run) => {
   const r = await runCaseWith(run, { existingBody: '人类真结论\n\n```markdown\n' + SENTINEL + '\n```\n' });
@@ -1089,7 +1173,11 @@ await withVariant('sse-done-break', 'if (sawDone) break;', 'if (false && sawDone
 await withVariant('scope-hint-gate', "if (allowed.includes(scope)) return scope;", "return null;", async (run) => {
   const srcFiles = [{ filename: 'src/index.js', status: 'added', additions: 60, deletions: 0, patch: '@@ -0,0 +1,3 @@\n+export' }, ...FILES];
   const r = await runCaseWith(run, { files: srcFiles, title: 'feat(src): x' });
-  return { ok: r.err === null && r.out?.skipCode === 'S9', detail: JSON.stringify(r.out || {}) };
+  // 契约 2 解耦后：scope 摘闸 → 标题侧不写（NOTE title-not-updated），正文侧照写——
+  //   旧「整包 S9」判定退役，改断 payload 只含 body。
+  const p = r.patches[0]?.payload || {};
+  return { ok: r.err === null && r.patches.length === 1 && p.body && p.title === undefined,
+    detail: 'patches=' + r.patches.length + ' keys=' + Object.keys(p).join(',') };
 });
 // 摘除 env 整表替换（词表回到内置默认）＝配置 AI_SCOPE_WHITELIST 后 governor 仍放行（锚测得到即 ok）。
 await withVariant('scope-env-table', "fromEnv.length > 0 ? fromEnv : SCOPE_WHITELIST", "SCOPE_WHITELIST", async (run) => {
@@ -1196,9 +1284,9 @@ try {
   // CLI 入口判定必须经 realpath 归一：逐字 URL 比对在 Windows 大小写不敏感 FS 下会静默 no-op。
   check('autofill-cli-guard-uses-realpath', /realpathSync/.test(src) && /process\.platform === 'win32'/.test(src));
   check('autofill-cli-guard-not-bare-url-equality', !/pathToFileURL\(path\.resolve\(process\.argv\[1\]\)\)\.href === import\.meta\.url/.test(src));
-  // S9 家族须可归属：类别缺失与类别越表必须分句报，否则夹具的 skipWith 断言形同虚设。
+  // S9 家族须可归属：类别缺失分句报仍保留（结构闸）；词表闸已删除，旧「类别不在词表」分句不得复活。
   check('autofill-category-gate-messages-distinguishable',
-    /缺 `\- 【类别】` 前缀/.test(src) && /类别不在词表/.test(src));
+    /缺 `\- 【类别】` 前缀/.test(src) && !/类别不在词表/.test(src));
 } catch (e) {
   behaviorFailures += 1; failed.push('structural-anchor-block');
   console.log(`FAIL structural-anchor-block: ${e.message}`);
