@@ -782,7 +782,7 @@ jobs:
             //   逐档判定按 blocked>risky>caution>ready 严序取用；等级识别格式与 crScore 语义不变。
             //   Rework-6：交替式按最长前缀优先——「Merge Readiness band: Blocked」短语形里连接词 band 必须被
             //   前缀整体消费，否则捕获组落在 'band'（间隙类不含字母，回退不能越过词界）→ 真 Blocked 被静默吞掉。
-            const crBands = [...codeRabbitText.matchAll(/(?:merge\s*readiness\s*band|readiness\s*band|merge\s*readiness)[^a-zA-Z\r\n]{0,20}([a-zA-Z]+)/gi)].map(m => m[1].toLowerCase());
+            const crBands = [...codeRabbitText.matchAll(/(?:merge\s*readiness\s*band|readiness\s*band|merge\s*readiness)[^a-zA-Z\r\n]{0,8}([a-zA-Z]+)/gi)].map(m => m[1].toLowerCase());
             const crBandHas = (band) => crBands.includes(band);
 
             if (crBandHas('blocked') || /\bseverity:\s*critical\b/i.test(codeRabbitText)) {

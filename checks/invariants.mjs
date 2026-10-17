@@ -19,6 +19,8 @@ import {
   GATES,
   PAIRED,
   REQUIRED_IDENTIFIERS,
+  SIZE_BUDGET,
+  SIZE_BUDGET_EXEMPT,
 } from './registry.mjs';
 
 export const STRUCTURAL_IDS = [
@@ -33,6 +35,7 @@ export const STRUCTURAL_IDS = [
   'kilocode-m7-bash-must-be-map',
   'kilocode-reviewer-main-deny',
   'kilocode-reviewer-subagent-allow',
+  'product-size-budget',
   'clause-target-missing',
   'gate-target-missing',
   'identifier-target-missing',
@@ -225,6 +228,36 @@ export function parseFrontmatter(text) {
   return { present: true, terminated: true, endLine: endIdx + 1, keys: Object.keys(tree), tree };
 }
 
+// —— 臃肿闸门：产物字节棘轮检出（纯函数，只吃 [{path, text}]，不读磁盘）——
+// 度量＝utf8 字节数（Buffer.byteLength，与 PowerShell Get-Item .Length 同口径：run.mjs 传入的 text
+//   为磁盘原样读入、CRLF 保留，故字节数即盘上真实字节）。分类由 classify 决定：仅 SIZE_BUDGET 命中
+//   的类别（platform-agent / platform-governance）参与判定，其余类别（skill/doc/未分类）恒不触发。
+// 触发域：某件产物字节数 > 生效上限（per-file 豁免登记的 cap 优先，否则取类别默认上限）。
+// 不该触发域：≤ 上限；类别无上限（非 agent/AGENTS 文件）；豁免表缺省空即无豁免。
+// 棘轮语义：超限即报「删散文、禁止调高上限凑绿」；上限的调高（抬高）由 selftest 的棘轮单调断言
+//   对照 SIZE_BUDGET_CEILING 拦截，不在本检测器内判定（本器只测产物对上限的逾越，不测上限自身漂移，
+//   职责单一，避免检测器复制登记表事实源）。
+export function productSizeFailures(files, budget = SIZE_BUDGET, exempt = SIZE_BUDGET_EXEMPT) {
+  const out = [];
+  for (const f of files) {
+    const cls = classify(f.path);
+    if (!cls) continue;
+    const cap = budget[cls.id];
+    if (cap === undefined) continue;
+    const ex = exempt[f.path];
+    const effCap = ex && typeof ex.cap === 'number' ? ex.cap : cap;
+    const size = Buffer.byteLength(f.text, 'utf8');
+    if (size > effCap) {
+      out.push({
+        id: 'product-size-budget',
+        path: f.path,
+        msg: `产物字节 ${size}B 超棘轮上限 ${effCap}B（类别 ${cls.id}）：删散文下沉锚库，严禁调高上限凑绿`,
+      });
+    }
+  }
+  return out;
+}
+
 export function runAll(files) {
   const v = [];
   const push = (id, path, msg) => v.push({ id, path, msg });
@@ -360,6 +393,9 @@ export function runAll(files) {
       if (!f.text.includes(r.text)) push('identifier-' + r.id, f.path, `缺少平台私有标识: ${r.text}`);
     }
   }
+
+  // F11 臃肿闸门（字节棘轮）：产物字节超类别上限即判红，减法不可逆（详见 productSizeFailures）。
+  for (const s of productSizeFailures(files)) push(s.id, s.path, s.msg);
 
   return v;
 }

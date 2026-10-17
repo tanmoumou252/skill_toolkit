@@ -75,6 +75,38 @@ export const KILOCODE_MAIN_DENY_KEYS = [
 ];
 export const KILOCODE_SUBAGENT_ALLOW_KEY = 'plan-governor-subagent_exec_guarded_command';
 
+// —— 臃肿闸门：产物字节棘轮上限（Wave 1 装机值，机制在 invariants.mjs product-size-budget，入口在 run.mjs）——
+// 设计纪律（本计划「字节棘轮闸」）：上限只降不升——任何会话再往 prompt 塞说明书即判红，减法从此不可逆。
+// 键为 CLASSES.id（'platform-agent'＝9 个 agents/*.md 产物、'platform-governance'＝3 份 AGENTS.md），
+//   值为逐件字节上限（utf8 字节数）。装机值即历史最高点，写入 SIZE_BUDGET_CEILING 永久钉死。
+// per-file 豁免：确需突破类别上限的个别文件，必须在 SIZE_BUDGET_EXEMPT 显式登记 { cap, reason }，
+//   严禁静默放行；豁免本身不得抬高类别默认上限（棘轮只针对类别默认值与天花板两层）。
+export const SIZE_BUDGET = {
+  'platform-agent': 12000,
+  'platform-governance': 10000,
+};
+// 棘轮天花板＝Wave 1 装机值，是「上限被抬高」形态的机器检出基准：SIZE_BUDGET 任一键值 > 天花板即红。
+export const SIZE_BUDGET_CEILING = {
+  'platform-agent': 12000,
+  'platform-governance': 10000,
+};
+// per-file 豁免登记表（显式登记，缺省空＝无豁免）。cap 为该文件的生效上限、reason 必填。
+// 2026-10-16T22:5xZ 接力步骤 5 口径 B 登记（棘轮两层未动：SIZE_BUDGET/CEILING 保持装机值）：
+//   实测锚+电报祈使地板高于类别默认上限（步骤 4 实测：转写/硬压均为负收益或触红线），逐件显式登记呈人类复核；
+//   本表＝登记时点实测地板的显式快照（声明面压缩已收口，零合法续压面）；复核未通过前即为欠账清单。cap＝登记时实测值+512（禁取整抬高；实测下移后 cap 只随下移不上调）。
+export const SIZE_BUDGET_EXEMPT = {
+  'codebuddy/agents/plan-writer-sp.md': { cap: 30640, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'codebuddy/agents/plan-reviewer-sp.md': { cap: 28431, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'codebuddy/agents/pr-reviewer-sp.md': { cap: 23235, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'kilocode/agents/plan-writer-sp.md': { cap: 27889, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'kilocode/agents/plan-reviewer-sp.md': { cap: 28460, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'kilocode/agents/pr-reviewer-sp.md': { cap: 21262, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'zcode/agents/plan-writer-subagent-sp.md': { cap: 21339, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'zcode/agents/plan-reviewer-subagent-sp.md': { cap: 30470, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'zcode/agents/pr-reviewer-subagent-sp.md': { cap: 23077, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'zcode/AGENTS.md': { cap: 17348, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+};
+
 const P = 'kilocode|codebuddy|zcode';
 
 // —— 条款文本派生（§14 长期项定案落地）——
@@ -112,7 +144,9 @@ export function fromAnchor(id, substr) {
 export const CLAUSES = [
   {
     id: 'no-green-no-start',
-    text: '未见红严禁开工',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('no-green-no-start', '未见红严禁开工'),
     expect: [
       new RegExp(`^(?:${P})/AGENTS\\.md$`),
       new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
@@ -122,7 +156,9 @@ export const CLAUSES = [
   },
   {
     id: 'review-mode-dual',
-    text: 'MODE=cumulative',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-mode-dual', 'MODE=cumulative'),
     expect: [
       new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
       new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`),
@@ -131,7 +167,9 @@ export const CLAUSES = [
   },
   {
     id: 'escalate-to-human',
-    text: 'ESCALATE_TO_HUMAN',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('escalate-to-human', 'ESCALATE_TO_HUMAN'),
     expect: [
       new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
       new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`),
@@ -140,7 +178,9 @@ export const CLAUSES = [
   },
   {
     id: 'rework-human-clean',
-    text: 'REWORK=HUMAN_CLEAN',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('rework-human-clean', 'REWORK=HUMAN_CLEAN'),
     expect: [
       new RegExp(`^(?:${P})/AGENTS\\.md$`),
       new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`),
@@ -149,22 +189,31 @@ export const CLAUSES = [
   },
   {
     id: 'untracked-iron-law',
+    // 豁免派生（字面保留）：text 仅在锚库归档与产物在场、不在 spec/blocks 装配面上游——
+    //   fromAnchor 派生串要求「锚库 ∩ blocks 交叉」，本条不满足交叉前提，fromAnchor 会 fail-loud。
+    //   改锚库措辞须手动同步本字面（无自动跟随），属有意豁免而非遗漏。
     text: '未跟踪新文件铁律',
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'adversarial-imagining',
-    text: '对抗性破坏假想',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('adversarial-imagining', '对抗性破坏假想'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'shape-demo-wording',
-    text: '形态示范',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('shape-demo-wording', '形态示范'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'first-wave-concurrency',
-    text: '首波并发',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('first-wave-concurrency', '首波并发'),
     expect: [
       new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
       /^skills\/(?:zcode-plan-first|plan-file-first)\/SKILL\.md$/,
@@ -172,7 +221,9 @@ export const CLAUSES = [
   },
   {
     id: 'report-path-marker',
-    text: '报告路径：',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('report-path-marker', '报告路径：'),
     expect: [
       new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`),
       new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`),
@@ -182,6 +233,8 @@ export const CLAUSES = [
   },
   {
     id: 'direct-dispatch-header',
+    // 豁免派生（字面保留）：活跃装配块（spec/blocks 在场、无锚库归档义务，selftest 豁免集同源），
+    //   无锚库可派生，text 字面是唯一事实源；若未来该块退役下沉，再转 fromAnchor。
     text: '直连派发参数头',
     // 锁定 ZCode 侧"无主计划直连派发也必须现构参数头"的义务文本。
     // 散文面只做必含（registry.mjs:9-10），不锁措辞、不锁出现次数。
@@ -189,142 +242,198 @@ export const CLAUSES = [
   },
   {
     id: 'invariant-enumeration',
-    text: '不变量枚举',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('invariant-enumeration', '不变量枚举'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'falsifiable-attack',
-    text: '爆炸半径',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('falsifiable-attack', '爆炸半径'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'interleaving-matrix',
-    text: '事件交错矩阵',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('interleaving-matrix', '事件交错矩阵'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'greenlight-downgrade',
-    text: '覆盖证据',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('greenlight-downgrade', '覆盖证据'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'blackbox-first',
-    text: '黑盒先行',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('blackbox-first', '黑盒先行'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'semantic-five-duties',
-    text: '语义正确性五问对抗义务',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('semantic-five-duties', '语义正确性五问对抗义务'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'truth-source-four-duties',
-    text: '真相源、读纯度与活性四问',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('truth-source-four-duties', '真相源、读纯度与活性四问'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'truth-source-anti-lookup',
-    text: '真相源反查（判据必须落在权威源上）',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('truth-source-anti-lookup', '真相源反查（判据必须落在权威源上）'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'read-purity-multi-truth-source',
-    text: '读纯度与多真相源',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('read-purity-multi-truth-source', '读纯度与多真相源'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'liveness-rollback',
-    text: '异常路径回滚与持锁活性',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('liveness-rollback', '异常路径回滚与持锁活性'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'fixture-fidelity-audit',
-    text: '夹具保真度对账',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('fixture-fidelity-audit', '夹具保真度对账'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'four-question-result-table',
-    text: '真相源、读纯度与活性四问节结果表',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('four-question-result-table', '真相源、读纯度与活性四问节结果表'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'depth-basis-machine-line',
-    text: 'DEPTH_BASIS=',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('depth-basis-machine-line', 'DEPTH_BASIS='),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'close-by-adding-not-gutting',
-    text: 'Critical 闭环禁缩范围',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('close-by-adding-not-gutting', 'Critical 闭环禁缩范围'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'independence-depth-not-delegable',
-    text: '独立性与分级不可覆写',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('independence-depth-not-delegable', '独立性与分级不可覆写'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'dispatch-contract-violation-marker',
-    text: 'DISPATCH_CONTRACT_VIOLATED',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('dispatch-contract-violation-marker', 'DISPATCH_CONTRACT_VIOLATED'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'shadow-errata-channel',
-    text: '## ERRATA',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('shadow-errata-channel', '## ERRATA'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'shadow-write-surface',
-    text: '写面单一性',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('shadow-write-surface', '写面单一性'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'shadow-duplicate-dispatch',
-    text: 'DUPLICATE_DISPATCH',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('shadow-duplicate-dispatch', 'DUPLICATE_DISPATCH'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'dispatch-mode-violated-marker',
-    text: 'DISPATCH_MODE_VIOLATED',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('dispatch-mode-violated-marker', 'DISPATCH_MODE_VIOLATED'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'gutting-suspect-marker',
-    text: 'GUTTING_SUSPECT',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('gutting-suspect-marker', 'GUTTING_SUSPECT'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'zero-finding-escalated-marker',
-    text: 'ZERO_FINDING_ESCALATED',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('zero-finding-escalated-marker', 'ZERO_FINDING_ESCALATED'),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'shadow-pass-machine-line',
-    text: 'SHADOW_PASS=',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('shadow-pass-machine-line', 'SHADOW_PASS='),
     expect: [new RegExp(`^(?:${P})/agents/plan-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'truth-pass-machine-line',
-    text: 'TRUTH_PASS=',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('truth-pass-machine-line', 'TRUTH_PASS='),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'fixture-rerun-blocked-marker',
-    text: 'FIXTURE_RERUN=BLOCKED_READONLY',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('fixture-rerun-blocked-marker', 'FIXTURE_RERUN=BLOCKED_READONLY'),
     expect: [new RegExp(`^(?:${P})/agents/pr-reviewer[^/]*\\.md$`)],
   },
   {
     id: 'absent-file-per-item-reason',
-    text: '逐条列出并各给一行缺席理由',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('absent-file-per-item-reason', '逐条列出并各给一行缺席理由'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'baseline-path-declared',
-    text: '测试基线文件路径',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('baseline-path-declared', '测试基线文件路径'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
     id: 'evidence-verb-rerun',
-    text: '先读该基线文件、再逐条复跑其中的每条命令',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('evidence-verb-rerun', '先读该基线文件、再逐条复跑其中的每条命令'),
     expect: [new RegExp(`^(?:${P})/agents/plan-writer[^/]*\\.md$`)],
   },
   {
@@ -336,52 +445,72 @@ export const CLAUSES = [
   },
   {
     id: 'review-doc-evidence-duty',
-    text: '失败语义必须对权威文档取证',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-doc-evidence-duty', '失败语义必须对权威文档取证'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-omission-audit',
-    text: '遗漏型审查',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-omission-audit', '遗漏型审查'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-two-pass-disclosure',
-    text: '两遍法与披露解耦',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-two-pass-disclosure', '两遍法与披露解耦'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-transaction-three-questions',
-    text: '事务三问',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-transaction-three-questions', '事务三问'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-writer|plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-heterogeneous-lens',
-    text: '异源透镜',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-heterogeneous-lens', '异源透镜'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-coupling-lineage',
-    text: '影响面按耦合谱系探',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-coupling-lineage', '影响面按耦合谱系探'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-design-law',
-    text: '先毁后建',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-design-law', '先毁后建'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-writer|plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-quick-check',
-    text: '一页速查',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-quick-check', '一页速查'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'review-dispatch-diff-section',
-    text: '与派发主张的差集',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('review-dispatch-diff-section', '与派发主张的差集'),
     expect: [new RegExp(`^(?:${P})/agents/(?:plan-reviewer|pr-reviewer)[^/]*\\.md$`)],
   },
   {
     id: 'landing-timing-skeleton-sentinel',
-    text: '首笔即落骨架+哨兵',
+    // 派生条款（fromAnchor 单一事实源）：text 运行时取自锚库正文，双写漂移结构性消除；
+    //   子串取「锚库正文 ∩ 渲染产物正文」交叉段（产物只装配 spec/blocks/**，见 fromAnchor 契约）。
+    text: fromAnchor('landing-timing-skeleton-sentinel', '首笔即落骨架+哨兵'),
     // 分段落笔（增量落盘）时序义务（§7）：长文起草首笔即落骨架+哨兵，其后每节一次串替换。
     // 义务文本锚定在 body-incremental-landing.md 的「时序义务」节；plan-writer 三端流水线
     // 步骤 2 与 zcode 落盘回报句、两份 plan-first 技能（主会话直写长计划场景）同须在场。

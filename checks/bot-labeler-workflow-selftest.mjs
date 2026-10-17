@@ -748,6 +748,52 @@ function record(name, ok, detail) {
     r.err === null && flat.includes('risk:critical') && flat.includes('review:needs-work'),
     r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(flat));
 }
+// F4（band 正则收紧回归，三例边界）：工作流 4.4 的 band 间隙量词收紧为 {0,8}（CodeRabbit 实测
+//   band 词与标签间填充 ≤4 空格/分隔符，8 为 2 倍裕度）——过长填充不得被当作 band 分隔符吞进
+//   捕获（防"散文里远处的档位词"被误绑定为 band 值）。三例：① 正常 2 空格分隔命中；② 9 个
+//   连字符（超裕度）不命中；③ 紧邻（零分隔）命中。期望值溯源＝收紧语义本身，非抄录实现。
+{
+  // ① 正常 2 空格：命中（回归保护——收紧不得误伤合法形态）
+  const r1 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness:  Blocked' },
+  ] });
+  const f1 = r1.labelsAdded.flat();
+  record('workflow-coderabbit-band-two-space-hits',
+    r1.err === null && f1.includes('risk:critical') && f1.includes('review:needs-work'),
+    r1.err ? 'err=' + String((r1.err && r1.err.message) || r1.err).split('\n')[0] : 'labels=' + JSON.stringify(f1));
+  // ② 9 个连字符（超 2 倍裕度）：不得命中 → coderabbit 失评 → needs-work 兜底而非 risk:critical
+  const r2 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness --------- Blocked' },
+  ] });
+  const f2 = r2.labelsAdded.flat();
+  record('workflow-coderabbit-band-nine-hyphens-miss',
+    r2.err === null && !f2.includes('risk:critical'),
+    r2.err ? 'err=' + String((r2.err && r2.err.message) || r2.err).split('\n')[0] : 'labels=' + JSON.stringify(f2));
+  // ③ 紧邻（零分隔）：命中
+  const r3 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness:Blocked' },
+  ] });
+  const f3 = r3.labelsAdded.flat();
+  record('workflow-coderabbit-band-adjacent-hits',
+    r3.err === null && f3.includes('risk:critical'),
+    r3.err ? 'err=' + String((r3.err && r3.err.message) || r3.err).split('\n')[0] : 'labels=' + JSON.stringify(f3));
+  // ④ 恰 8 个连字符（=上界，无空格，间隙总长恰 8）：必须命中（钉死 {0,8} 上界含 8 本身，防上界漂移到更小值误伤合法形态）
+  const r4 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness--------Blocked' },
+  ] });
+  const f4 = r4.labelsAdded.flat();
+  record('workflow-coderabbit-band-eight-hyphens-hits',
+    r4.err === null && f4.includes('risk:critical'),
+    r4.err ? 'err=' + String((r4.err && r4.err.message) || r4.err).split('\n')[0] : 'labels=' + JSON.stringify(f4));
+}
 // 3. DISMISSED 不满足 barrier；等待分支落 review:unavailable（本轮无可评级来源），不误落最终 risk/approved。
 // K-1（Bot 意见·Kilo Overview 计数表形态）：Kilo 真实输出 `**Status:** 10 Issues Found` +
 //     `| Severity | Count |` 计数表（PR8 实测，comment id 6117996536）——现有 4.5 正则

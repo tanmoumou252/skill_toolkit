@@ -207,7 +207,7 @@ try {
   check(
     'scoped-lock-stale-eviction-deadline-guard-present',
     (implText.match(/Date\.now\(\) - start >= LOCK_TIMEOUT_MS/g) || []).length >= 2,
-    'stale 回收分支缺 deadline（无界忙轮询风险）',
+    '拒收理由：stale 回收分支缺 deadline（无界忙轮询风险；本行仅在违约时属实）',
   );
   // 动态夹具（win32）：以 PowerShell FileShare::Read 握住锁文件句柄 ~4 秒（允许 stat/read、按共享
   //   规则拒绝 DELETE——模拟 AV/索引器打开锁文件导致 libuv unlinkSync 报 EBUSY/EPERM），验证陈旧
@@ -300,14 +300,14 @@ try {
     'scoped-lock-sleep-fallback-warn-guard',
     implText.includes('scopedLockSleepFallbackWarned') &&
       implText.includes('[scopedLockSleep] SharedArrayBuffer 不可用，锁退避降级为有界忙等（同步上下文无零 CPU 睡眠原语）'),
-    'scopedLockSleep 兜底缺一次性 stderr 警告',
+    '拒收理由：scopedLockSleep 兜底缺一次性 stderr 警告（本行仅在违约时属实）',
   );
   // reaper 恢复失败可观测守卫：期望值溯源＝行为契约 2「linkSync 失败须记 stderr 且语义不变」。
   check(
     'scoped-reaper-restore-link-fail-log-guard',
     implText.includes('恢复 reaper 锁 linkSync 失败（隔离件保留）') &&
       /fs\.linkSync\(quarantine, reaperPath\);\s*\r?\n\s*\} catch \(e\) \{/.test(implText),
-    'reaper 恢复 linkSync 失败缺 stderr 日志或未拆分 try',
+    '拒收理由：reaper 恢复 linkSync 失败缺 stderr 日志或未拆分 try（本行仅在违约时属实）',
   );
   // 释放状态传播守卫：期望值溯源＝行为契约 3「releaseScopedLock 返回 { released, error? } 且两处闭包向上传播」。
   check(
@@ -318,7 +318,7 @@ try {
       /error: 'NO_FD'/.test(implText) &&
       /const result = releaseScopedLock\(lockPath, lockFd, lockMeta, lockMetaWritten\);[\s\S]*?appendAuditRecord\(\{[\s\S]*?releaseStatus: result,[\s\S]*?\}\);/.test(implText) &&
       /const releaseLock = \(\) => \{[\s\S]*?return result;[\s\S]*?\r?\n        \};/.test(implText),
-    'releaseScopedLock 未返回释放状态或两处闭包未真实审计失败状态',
+    '拒收理由：releaseScopedLock 未返回释放状态或两处闭包未真实审计失败状态（本行仅在违约时属实）',
   );
   // write 路汇合点释放状态审计守卫：期望值溯源＝行为契约 W1「write 汇合点释放失败必须留审计痕迹，
   //   且 NO_FD（锁从未取得/成功路已释放的幂等落点）不得误记」——PR #7 review 5462744798
@@ -327,58 +327,58 @@ try {
     'scoped-write-error-release-audit-guard',
     /\[受控写失败\] ' \+ err\.message[\s\S]{0,800}?const writeErrorRelease = releaseLock\(\);/.test(implText) &&
       /const writeErrorRelease = releaseLock\(\);[\s\S]{0,800}?writeErrorRelease\.error !== 'NO_FD'[\s\S]{0,800}?releaseStatus: writeErrorRelease,/.test(implText),
-    'write 汇合点未捕获释放状态、未排除 NO_FD，或未锚定在错误汇合点之后',
+    '拒收理由：write 汇合点未捕获释放状态、未排除 NO_FD，或未锚定在错误汇合点之后（本行仅在违约时属实）',
   );
   // edit 路反过度审计守卫：期望值溯源＝行为契约 W2「edit 路闭包已内置 scoped_lock_release 单源审计，
   //   调用点不得重复捕获审计」——comment 4224045114/4224045126 核验不成立，防回灌误加。
   check(
     'scoped-edit-call-site-no-dup-audit-guard',
     !/const editRelease = releaseLock\(\);/.test(implText),
-    'edit 路调用点出现重复审计捕获（应仅闭包内单源审计）',
+    '拒收理由：edit 路调用点出现重复审计捕获（应仅闭包内单源审计；本行仅在违约时属实）',
   );
   // —— 评审 5466425829 全收敛守卫：期望值溯源＝行为契约 ①②③④⑤⑥⑦（详见计划） ——
   check(
     'scoped-comment-no-hardcoded-line-refs',
     !/:[0-9]{4}/.test(implText),
-    '实现文件注释仍含硬编码行号引用（契约 ②：实测 3 处须全替换）',
+    '拒收理由：实现文件注释含硬编码行号引用（契约 ②；当前合规，本行仅在违约时属实）',
   );
   check(
     'scoped-write-converge-audit-anchor-present',
     /\/\/ WRITE_CONVERGE_AUDIT:/.test(implText),
-    'write 汇合点缺 WRITE_CONVERGE_AUDIT 机读锚（契约 ①：fall-through 有意性未声明）',
+    '拒收理由：write 汇合点缺 WRITE_CONVERGE_AUDIT 机读锚（契约 ①：fall-through 有意性未声明；本行仅在违约时属实）',
   );
   check(
     'scoped-audit-slice-fence-present',
     implText.includes('/* AUDIT-SLICE-BEGIN */') && implText.includes('/* AUDIT-SLICE-END */'),
-    '审计块围栏标记缺失（契约 ⑧：切片无法标记锚定）',
+    '拒收理由：审计块围栏标记缺失（契约 ⑧：切片无法标记锚定；本行仅在违约时属实）',
   );
   check(
     'scoped-release-failure-aging-stamp-guard',
     /if \(e && e\.code !== 'ENOENT'\) \{[\s\S]{0,600}?const aged = new Date\(Date\.now\(\) - LOCK_STALE_MS - 1000\);[\s\S]{0,120}?fs\.utimesSync\(lockPath, aged, aged\);/.test(implText),
-    'unlink 失败路缺即时 mtime 老化戳（契约 ④：孤儿锁须下轮 mtime 龄项即满，消灭 self-pid 10s 空窗）',
+    '拒收理由：unlink 失败路缺即时 mtime 老化戳（契约 ④：孤儿锁须下轮 mtime 龄项即满，消灭 self-pid 10s 空窗；本行仅在违约时属实）',
   );
   check(
     'scoped-reaper-stderr-catch-intentional-guard',
     implText.includes('DESIGN-NOT-BUG: stderr 诊断写') &&
       /try \{ process\.stderr\.write\(`\[acquireReaperLock\][^\n]*\); \} catch \{\}/.test(implText),
-    'stderr 空 catch 隔离或其声明缺失（契约 ⑤：防回灌误拆，拆即击穿 stderr-failure-still-held 实弹回归）',
+    '拒收理由：stderr 空 catch 隔离或其声明缺失（契约 ⑤：防回灌误拆，拆即击穿 stderr-failure-still-held 实弹回归；本行仅在违约时属实）',
   );
   check(
     'scoped-missing-observation-failclosed-guard',
     implText.includes('DESIGN-NOT-BUG: 观测不可读') &&
       implText.includes("return { code: 'MISSING_OBSERVATION' };"),
-    'MISSING_OBSERVATION fail-closed 声明缺失（契约 ⑥：防回灌"再读回收"重蹈 reaper-restore-no-clobber 修掉的 TOCTOU 误删）',
+    '拒收理由：MISSING_OBSERVATION fail-closed 声明缺失（契约 ⑥：防回灌"再读回收"重蹈 reaper-restore-no-clobber 修掉的 TOCTOU 误删；本行仅在违约时属实）',
   );
   check(
     'scoped-verbatim-compare-anti-normalization-guard',
     implText.includes('DESIGN-NOT-BUG: 逐字比对是刻意设计') &&
       !/JSON\.stringify\(JSON\.parse/.test(implText),
-    '逐字比对声明缺失或已引入语义比对回灌形态（契约 ⑦）',
+    '拒收理由：逐字比对声明缺失或已引入语义比对回灌形态（契约 ⑦；本行仅在违约时属实）',
   );
   check(
     'scoped-lock-sleep-fallback-design-guard',
     /while \(Date\.now\(\) < end\) \{ \/\* DESIGN-NOT-BUG: 有界忙等/.test(implText),
-    '忙等兜底缺 DESIGN-NOT-BUG 声明（契约 ③：同步语义唯一兜底，防回灌异步化）',
+    '拒收理由：忙等兜底缺 DESIGN-NOT-BUG 声明（契约 ③：同步语义唯一兜底，防回灌异步化；本行仅在违约时属实）',
   );
 
   // —— W3 动态行为验证（E4 采纳：切片注入，真实代码在 vm 沙箱执行；Oracle 全部由契约 W1 推导）——
@@ -445,7 +445,7 @@ try {
   check(
     'scoped-lock-quarantine-verbatim-compare-guard',
     implText.includes('TOCTOU 防误删闸') && implText.includes('if (currentRaw === observedRaw) {'),
-    'quarantine 逐字比对缺设计理由注释',
+    '拒收理由：quarantine 逐字比对缺设计理由注释（本行仅在违约时属实）',
   );
   // reaper 锁防 TOCTOU 结构守卫（finding 3）：陈旧 reaper 严禁盲删，须移入唯一隔离件回读比对；release 须 token 身份校验。
   check(

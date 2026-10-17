@@ -1,19 +1,18 @@
-<!-- GENERATED from spec@b0413363f1d7; do not edit -->
+<!-- GENERATED from spec@c929c41e5fdb; do not edit -->
 
 ## 终端命令执行硬性规范（CRITICAL: Shell Execution Policy）
 
-你必须严格遵守以下命令执行规则。本环境启用了严格的自动化审计，任何复合命令都会导致系统被强制挂起与权限阻断：
+Strict automated auditing is enabled here; any compound command triggers forced suspension and permission blocking. Obey exactly:
 
-1. **绝对禁止链式与复合命令**：
-   - 严禁使用任何逻辑连接符（`&&`, `||`, `;`）拼接多条命令。
-   - 严禁使用管道符（`|`）传递数据。（注：宿主原生终端严禁一切管道；MCP 受控通道中全段命中白名单的纯只读管道作为受控特例单独放行）
-   - 严禁使用重定向符（`>`, `>>`）写文件（如需写文件，请调用专用文件写入工具，严禁在终端用 echo/cat 重定向）。
-   - 严禁使用后台执行符（`&`）。
+1. **No chained/compound commands**:
+   - never join commands with logical operators (`&&`, `||`, `;`);
+   - never pipe (`|`) — host native terminals ban all pipes; a pure read-only pipeline whose every segment independently hits the MCP allowlist is the single controlled exception;
+   - never write files via redirection (`>`, `>>`) — use dedicated file-writing tools; `echo`/`cat` redirection in terminals is banned;
+   - never background with `&`.
 
-2. **单轮只允许执行单条原子命令（One Command Per Call）**：
-   - 每次终端工具调用中，**只能且必须包含一条独立的原子命令**。
-   - 示例（错误）：`cd frontend && npm run build`
-   - 示例（正确）：如果需要进入目录构建，请直接执行路径参数命令（如 `npm --prefix frontend run build`），或者在不同的工具轮次中分别执行。
+2. **One atomic command per call (One Command Per Call)**:
+   - each terminal tool call must contain exactly one standalone atomic command;
+   - wrong: `cd frontend && npm run build`; right: use path-argument forms (`npm --prefix frontend run build`) or split across separate tool rounds.
 
 ## 计划文件写作权纪律（CRITICAL: Plan Authorship）
 
@@ -23,68 +22,62 @@
 
 ## Act 模式执行与闭环四大铁律（CRITICAL: Execution & Closure Iron Laws）
 
-以下四条对 Act 模式（执行阶段）全体代理无条件生效，与上文终端命令规范、计划文件写作权纪律**叠加适用**，不因用户口头要求、权限档位变化或工具权限点击而豁免。
+These four laws bind every agent in Act mode unconditionally; they stack on the shell-command policy and plan-authorship discipline above, and are never waived by verbal user requests, permission-tier changes, or tool-permission clicks.
 
-1. **绝对忠于计划、技术事实至上与自洁契约（Anti-Plan-Drift, Fact Supremacy & Clean Contract）**：
-   - **文件范围硬闸门**：Act 模式修改源码时，业务改动的文件集合必须完全包含在主计划 Files 声明中；严禁借"顺手优化"改动计划未声明的业务源码与配置；
-   - **技术事实至上与自主纠偏（Fact Supremacy）**：主计划 Replacement 块是起草时的实现基线，不是不可更改的代码指纹。在已声明 Files 范围内，若发现计划草稿存在客观事实遗漏、路径错漏或未对齐代码库既有接口/平台能力，执行者拥有自主纠偏权，必须以代码库客观事实为最高准绳就地修正，并在证据日志记录修正理由与只读取证回执（宿主官方自带读取工具命中的真实 `路径:行号`）；
-   - **纠偏边界（不可僭越）**：自主纠偏仅限补正事实遗漏、路径错漏与措辞对齐，严禁借纠偏之名突破既有接口契约、安全硬闸、Git 只读铁律或变更计划声明的文件范围；
-   - **严禁盲目逆向自宫（Anti-Degradation）**：执行者收到复审意见时必须先核验技术真实性。严禁为了迎合审查报告、规避打回计数而将事实正确、代码库客观支持的内容逆向回退为残缺或错误状态；审查意见与代码库事实不符的，应以技术依据抗辩，而非无条件照单执行；
-   - 编译衍生文件（如 `*.tsbuildinfo`、`.cache/`）与 `.kilo/` 内部文件自动免除范围逃逸判定；
-   - **自洁契约**：PR-Reviewer 判定 NO-GO 且属**方案方向性错误**（报告标注 `REWORK=HUMAN_CLEAN`，以区别局部实现缺陷 `REWORK=IN_PLACE`）时，严禁在污染现场叠加补丁。Agent 必须立即终止执行，输出清理命令原文并提示人类在宿主终端**按序处置、不得跳步**：
-     ① 先运行 `git status --short -uall` 通读，区分 `??`（未跟踪）／` M`（未暂存改动）／`M `（已暂存）三态，确认清理半径只覆盖本计划 Files 声明；
-     ② 半径内若混有非本计划的在途改动，改用**可逆**通道 `git stash push -u -m "discarded-本计划标识" -- :(literal)<路径1> :(literal)<路径2> …`——`-m` 及消息参数必须置于 `--` 之前，`--` 之后仅逐一列出①中已核对、确认属于本计划的文件路径，每个路径**必须带 `:(literal)` 前缀**（Git 字面量 pathspec：路径中的 `*`、`?`、`[`、`]` 等特殊字符按字面匹配，不会作为 glob 展开到指定路径之外）；路径含 shell 特殊字符时另按目标 shell 的引用规则安全引用（两层防护：shell 层引用防 shell 展开，`:(literal)` 防 Git pathspec glob 展开），**严禁**把 `git status` 的原始输出未经引用处理直接拼入可执行命令，严禁无 pathspec 的整仓 stash（会把不在本计划半径内的他方在途改动一并收起）；stash 命令**确认成功退出后方可**继续后续步骤；路径无法逐一确认时，不对该部分执行 stash，交人类逐项手工处置（`本计划标识` 替换为当次计划文件名去 `.md` 后缀的实字符串）；
-     ③ 仅在确认无保留价值时，才执行**限定路径**的破坏性清理：`git restore --staged --worktree --source=HEAD -- :(literal)<路径1> :(literal)<路径2> …`（路径逐一带 `:(literal)` 前缀，防 pathspec glob 逃逸；同时从暂存区与工作树清除，确保已暂存与未暂存改动一并消除；仅恢复工作树的 `git checkout -- <路径>` 不清 index，不得替代）与 `git clean -fd -- :(literal)<未跟踪路径1> :(literal)<未跟踪路径2> …`（逐一带 `:(literal)` 前缀）；路径无法逐一确认时，指示人类对未确认项逐项手工处置。严禁整仓无参形态 `git checkout -- .`、`git restore -- .` 与 `git clean -fd`；
-     Agent 自身在任何情形下都不执行上述命令，只输出命令原文。
+1. **Anti-Plan-Drift / Fact Supremacy / Clean Contract**:
+   - Scope gate: during Act 模式, business-changed files ⊆ the plan's declared Files; no drive-by edits outside it;
+   - Fact Supremacy: a Replacement block is a drafting-time baseline, not a fingerprint. Within Files, fix factual/path/interface misalignment in place against repo facts, logging the reason plus a read-only receipt (real `路径:行号` from host read tools);
+   - Boundary: correction covers fact/path/wording only — never break interface contracts, safety hard gates, the Git read-only law, or the declared scope;
+   - Anti-Degradation: verify review claims against the repo first; never revert factually-correct code to appease a report or dodge rework counters; rebut mismatched findings with evidence;
+   - `*.tsbuildinfo`, `.cache/` and `.kilo/` internals are auto-exempt from scope-escape judgment;
+   - Clean Contract: when PR-Reviewer rules NO-GO on a **wrong design direction** (report tag `REWORK=HUMAN_CLEAN`, vs local defect `REWORK=IN_PLACE`), never patch on the contaminated scene. Agent 必须立即终止执行 — print cleanup commands verbatim; the human runs them **in order, never skipping**:
+     ① `git status --short -uall` — separate `??`(untracked)/` M`(unstaged)/`M `(staged); confirm radius covers only this plan's Files;
+     ② unrelated in-flight changes inside radius → reversible channel `git stash push -u -m "discarded-<plan-id>" -- :(literal)<path> …` — `-m` before `--`; every path `:(literal)`-prefixed (literal pathspec: `* ? [ ]` cannot glob-escape); shell-special chars additionally quoted; never paste raw status output; never bare whole-repo stash; continue only after stash exits 0; unconfirmable paths → hand to human item by item;
+     ③ no keep-value → **path-scoped** destructive cleanup `git restore --staged --worktree --source=HEAD -- :(literal)<path> …` (clears staged+worktree; `git checkout -- <path>` leaves index dirty, not a substitute) plus `git clean -fd -- :(literal)<untracked> …`; never repo-wide `git checkout -- .`, `git restore -- .` or bare `git clean -fd`;
+     The Agent itself never executes these commands — only prints them.
 
-2. **业务失效验红与存证（Failure Matrix & Task-Adaptive Verification）**：
-   - **任务分类自适应**：起草与执行阶段须先判定任务类别，再决定验红策略：
-     - **代码修改类（逻辑、状态、计算、时序、接口）**：编写测试文件后平铺实跑测试，并把真实报错输出物理写入计划指定的证据日志文件；**未见红严禁开工**：测试首次运行若直接通过（Exit 0），或所报错误不属于四维语义真红，严禁修改业务代码，必须推翻重写测试用例直至稳定复现红灯；逻辑上无法复现缺陷的，转入"非代码可测项豁免"申请，由人类裁决；
-     - **纯文档与配置文字类（README、文档、注释、纯文本规范）**：天然免于代码逻辑失效验红，但必须在计划正文中显式标注「本文档类任务经判定豁免 Red-Light Protocol（附非代码可测判定理由）」以通过复审核验门槛；执行期直接进入常驻不变式（checks 套件）与静态语法核验，严禁伪造测试红灯，严禁执行毫无关联的业务测试作秀；
-   - **四维语义化真红判定（代码修改类专属）**：
-     - [PASS-RED] 断言与比对失败：AssertionError、Expectation Mismatch、FAILED；
-     - [PASS-RED] 目标契约缺失：`TypeError: ... is not a function`、TS2339 等针对未实现接口的报错；
-     - [PASS-RED] 业务领域异常：被测代码主动抛出的定制业务异常，且堆栈指向被测入口；
-     - [PASS-RED] 异步时序超时：测试框架报告的执行超时（Timeout exceeded）；
-     - [REJECT-FAKE] 无效假红（一票否决）：全局语法笔误（SyntaxError）、缺少公共依赖（Cannot find module）、测试脚手架自身崩溃。
+2. **Failure Matrix & Task-Adaptive Verification**:
+   - Classify the task first:
+     - **Code changes** (logic/state/computation/timing/interfaces): write the test, run flat, write the real failure output into the plan-designated evidence file; **未见红严禁开工** — first run passing (Exit 0) or an error outside the four true-red classes ⇒ rewrite the test until a stable red; logically unreproducible ⇒ "non-code-testable exemption" for human ruling;
+     - **Docs/config text only**: inherently red-light-exempt, but the plan must carry the tag 「本文档类任务经判定豁免 Red-Light Protocol」 with its justification to pass the review gate; go straight to the checks suite + static syntax verification; forging red or running unrelated tests as theater is forbidden;
+   - Four true-red classes (code only): [PASS-RED] AssertionError / Expectation Mismatch / FAILED; [PASS-RED] contract missing (`TypeError: ... is not a function`, TS2339 vs unimplemented interfaces); [PASS-RED] domain exception, stack at the tested entry; [PASS-RED] framework-reported timeout (Timeout exceeded); [REJECT-FAKE] one-vote veto: global SyntaxError / Cannot find module / harness self-crash.
 
-3. **终结交付门禁与双轨派发（Delivery Gate & Dual-Track）**：
-   - 业务修改转绿并通过静态检查后，严禁直接口头向用户汇报完成；
-   - **轨道 A（有 `task` 工具）**：在当前响应轮次调用 `task` 分派 `pr-reviewer-sp` 发起审查，`prompt` 参数**逐字取用主计划步骤 N 已固化的完整派发串**，不得自行改写、不得留任何待填形态；
-   - **轨道 B（无 `task` 工具，降级通道）**：自行在受控终端运行只读 `git status --short -uall` 与 `git diff`、复跑测试自检，输出结构化报告后交人类处置；
-   - **打回上限与在途链序折算**：PR 审查最多允许 1 次打回修复；第 2 次复审仍判 NO-GO，立即终止自主循环并呈报人类决策。返工轮次仅在**当前在途活跃计划链**中按变更集折算（`.kilo/plans/pr-review/` 下的 `p1/p2/p3`、`r1a/r1b`、`-fixround`、`-adversarial` 等变体折算为同一链序数，换名续作不重置计数；同编号重派覆盖仅限 1 次；历史已交付完成的计划自动出链，不污染新独立任务）。
+3. **Delivery Gate & Dual-Track**:
+   - Once business changes turn green and pass static checks, reporting completion to the user verbally is forbidden;
+   - **轨道 A（有 `task` 工具）**：在当前响应轮次调用 `task` 分派 `pr-reviewer-sp` 发起审查，**逐字取用主计划步骤 N 已固化的完整派发串**——不得自行改写、不得残留任何待填形态；
+   - **轨道 B（无 `task` 工具，降级通道）**：在受控终端运行只读 `git status --short -uall` 与 `git diff`、复跑测试自检，输出结构化报告后交人类处置；
+   - Rework cap: at most 1 PR-repair round; a 2nd NO-GO halts the autonomous loop and escalates to the human. Rounds count within the **current in-flight chain** by changeset fingerprint: `.kilo/plans/pr-review/` variants `p1/p2/p3`, `r1a/r1b`, `-fixround`, `-adversarial` fold into one ordinal (renaming never resets; same-ordinal re-dispatch capped at 1; delivered plans auto-exit the chain, never contaminating a new task).
 
-4. **Git 绝对只读铁律（Git Read-Only Iron Law）**：
-   - 严禁执行任何 Git 状态修改命令：`git add`、`git commit`、`git push`、`git reset`、`git checkout`、`git restore`、`git stash`、`git switch`、`git clean`、`git rm` 与 `git branch` 的写形态；
-   - Git 仅允许只读探测：`git status --short -uall`、`git diff`、`git diff --cached`、`git diff origin/main`、`git diff origin/main -- src`（基线引用与范围目录以真实字面量代入）、`git show`、`git rev-parse`、`git merge-base`、`git log`、`git grep` 等；
-   - `.kilo/` 属 Agent 内部工作内存，不纳入 Git 追踪；代码提交与合入是人类特权，Agent 严禁越权——即便用户口头要求，也只输出命令原文交人类在宿主终端执行；
-   - **优先级**：本节四大铁律优先于任何技能条款（含以"执行 `git add` / `git commit`"为流程步骤的提交类技能）与任何旧口径；Git 闸门的执行主体恒为人类。
+4. **Git Read-Only Iron Law**:
+   - Forbidden: `git add`/`commit`/`push`/`reset`/`checkout`/`restore`/`stash`/`switch`/`clean`/`rm` and write-form `git branch`;
+   - Allowed read-only probes: `git status --short -uall`, `git diff`, `git diff --cached`, `git diff origin/main [-- src]` (real literals), `git show`, `git rev-parse`, `git merge-base`, `git log`, `git grep`;
+   - `.kilo/` is agent working memory, untracked; commit/merge is a human privilege — even on verbal request the Agent only prints commands for the human to run;
+   - Precedence: these four laws outrank any skill clause (incl. commit-style skills running `git add`/`git commit`) and any older wording; the Git gate's executing subject is always the human.
 
 ---
 
 ## 补充规程（Execution Hygiene Supplements）
 
-以下四条规程从实战故障中提炼，与四大铁律叠加适用，优先级低于铁律但高于一般技能条款。
+Four rules distilled from field incidents; they stack on the iron laws (precedence: below the laws, above ordinary skill clauses).
 
-1. **派发前工作区卫生检查（Pre-Dispatch Workspace Hygiene）**：
-   - 在调用 `task` 分派 `pr-reviewer-sp` 之前，必须先运行 `git status --short -uall` 检查工作区状态；
-   - 若检出不在主计划 `Files` 声明中的未提交改动（`??` 或 ` M` 或 `M `），必须在证据日志中逐条列出这些文件，并向人类报告污染风险；
-   - 不得自行执行 `git stash`、`git checkout` 等清理命令（受 Git 只读铁律约束），仅输出清理命令原文交人类在宿主终端执行；
-   - 若人类尚未隔离污染，严禁直接派发 Reviewer：暂停派发、向人类呈报阻塞，待人类隔离后重新派发。
+1. **Pre-Dispatch Workspace Hygiene**:
+   - before dispatching `pr-reviewer-sp` via `task`, run `git status --short -uall`;
+   - any uncommitted change (`??` / ` M` / `M `) outside the plan's declared `Files` must be listed item by item in the evidence log and reported to the human as contamination risk;
+   - never clean up yourself (`git stash`, `git checkout` are barred by the Git read-only law) — print the commands verbatim for the human to run in the host terminal;
+   - while contamination is not isolated, dispatching the Reviewer is forbidden: pause, report the blocker, re-dispatch after the human isolates it.
 
-2. **证据日志追加前回读（Evidence Log Read-Before-Append）**：
-   - 向已有的 test-evidence 文件追加 rework 记录或补充证据前，必须先以宿主官方自带读取工具读取该文件确认当前尾部内容；
-   - 编辑操作的旧字符串/匹配内容必须逐字取自文件实际内容，严禁凭记忆构造；文件落盘按实例能力分流：有宿主原生编辑/写入工具的实例一律走宿主官方自带编辑/写入工具，绑定受控写通道的子代理一律走其规程批准的受控写通道（受控写通道以实例自身平台规程的登记表为唯一事实源，逐平台各异，不跨平台套用他端通道名）；共同禁令＝严禁以终端重定向（`echo`/`cat` 配合输出改向符）写文件；
-   - 若读取返回内容与预期不符，以实际内容为准重新构造编辑参数。
+2. **Evidence Log Read-Before-Append**:
+   - before appending rework records to an existing test-evidence file, read it with the host's built-in read tool and confirm the current tail;
+   - edit old-string/match content must come verbatim from actual file content, never from memory; file writes route by instance capability — instances with host-native edit/write tools use them, agents bound to a controlled-write channel use only that channel (the single source of truth is the instance's own platform registry; never borrow another platform's channel names); universal ban: no terminal redirection (`echo`/`cat` with output redirect) for file writes;
+   - if read-back differs from expectation, rebuild edit parameters from the actual content.
 
-3. **计划指令与审查意见冲突裁决（Plan-vs-Review Conflict Resolution）**：
-   - 当 PR-Reviewer 的修改建议与主计划 Replacement 块直接矛盾时，按以下优先级裁决：
-     ① 代码库客观事实（接口签名、工具基线、平台能力）为最高准绳，适用 Fact Supremacy 自主纠偏（见四大铁律第 1 条）；
-     ② Reviewer 建议若附有可核验的代码/文档证据（真实 `路径:行号`），先核验证据真实性：证据属实且成立时采纳并记录；证据经核验不成立时，保持计划原意并在证据日志写明抗辩理由；
-     ③ Reviewer 建议若仅为无证据的主观偏好（文档取舍、措辞风格），不得无条件顺从，以技术依据与项目既定约束（篇幅上限、禁 Emoji 等）自行判断，并把判断理由记录于证据日志；
-      ④ 双方各有合理依据、无法技术定性的，呈报人类裁决，不得擅自定案；
-   - 裁决结果与理由必须记录在证据日志的 Rework 段落中。
+3. **Plan-vs-Review Conflict Resolution**: when a PR-Reviewer suggestion directly contradicts a plan Replacement block, decide by:
+   ① repo objective facts (interface signatures, tool baselines, platform capabilities) as the supreme standard — apply Fact Supremacy self-correction (Iron Law 1);
+   ② reviewer suggestions carrying verifiable evidence (real `路径:行号`): verify first — evidence sound ⇒ adopt and record; evidence refuted ⇒ keep the plan's intent and write the rebuttal into the evidence log;
+   ③ preference-only suggestions without evidence (doc taste, wording style): never obey unconditionally — judge by technical grounds and project constraints (length caps, no-Emoji etc.), recording the reasoning in the evidence log;
+   ④ genuinely balanced conflicts with no technical verdict: escalate to the human, never settle unilaterally;
+   - verdicts and reasons must appear in the evidence log's Rework section.
 
-4. **测试保真度与夹具反假绿审计（Test Fidelity & Anti-Green-Wash Audit）**：
-   - **核心公理：测试能跑通（Exit 0）≠ 测试本身是正确的。** 测试用例与夹具自身可能存在形态偏差、位置错误、断言过宽或浅层模拟，从而在被测代码存在真实漏洞时依然跑绿（如 M2 自测夹具错写在顶层而漏检嵌套违规，或符号链接仅测目录联接而漏测目标文件本身）；
-   - **逆向审查义务**：Reviewer（含 Plan 与 PR 审查）在核验测试通过时，必须对测试用例与测试夹具自身的保真度（Fixture Fidelity）执行逆向审查——验证测试是否真正模拟并覆盖了最深、最危险的真实缺陷形态；严禁仅凭 Exit Code 0 即盲目轻信放行。
+4. **Test Fidelity & Anti-Green-Wash Audit**:
+   - axiom: tests passing (Exit 0) ≠ tests correct — cases/fixtures may carry shape drift, wrong placement, over-broad assertions or shallow mocks, and still go green while the code under test stays broken;
+   - reverse-review duty: every reviewer (Plan and PR) verifying a passing test must audit the fidelity of the test and its fixtures themselves — confirm they simulate the deepest, most dangerous real defect shape; never rubber-stamp on Exit Code 0 alone.
