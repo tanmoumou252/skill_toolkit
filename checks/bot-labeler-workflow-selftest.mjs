@@ -18,6 +18,13 @@ check('bot-labeler-resolve-pr-job',
   text.includes('resolve-pr:') &&
   text.includes('listPullRequestsAssociatedWithCommit') &&
   text.includes("core.setOutput('number', number || '')"));
+// 触发收敛（🤝 上游实质变化才重评，人类定版）：issue_comment 事件里 review 内联评论的
+//   created/edited 也被 GitHub 投递为 issue_comment（实测 run #101：kilo 内联 edited 触发全量
+//   重评）。顶层摘要评论无 pull_request_url 字段、内联评论有——job-gate 据此排除内联事件，
+//   杜绝「内联编辑也全量跑 resolve-pr+sync-labels」的过程浪费。
+check('bot-labeler-job-gate-excludes-inline-comment-events',
+  /github\.event\.comment\.pull_request_url == null/.test(text) &&
+  (text.match(/github\.event\.comment\.pull_request_url == null/g) || []).length >= 2);
 check('bot-labeler-pr-concurrency',
   text.includes('needs: resolve-pr') &&
   text.includes('group: bot-sync-${{ needs.resolve-pr.outputs.number }}') &&
@@ -265,10 +272,11 @@ check('workflow-round-boundary-no-review-submitted-at-inference',
 // 现各补一条结构式断言（锚新形态关键表达式）与一条反向锚（锁旧形态不得复活）。
 // ================================================================
 
-// --- F1：评论唤醒登录名白名单（新形态）——受信登录名从 BOT_DEFINITIONS 派生 + 双条件 AND 取反门 ---
+// --- F1：评论唤醒登录名白名单（新形态）——受信登录名从 BOT_DEFINITIONS 派生 + 多条件 AND 取反门；
+//     触发收敛第三条件＝内联评论事件排除（payload.pull_request_url 在场即退出）。
 check('workflow-comment-wake-trusted-login-whitelist',
   /const trustedCommentLogins = new Set\(Object\.values\(BOT_DEFINITIONS\)\.flatMap\(d => d\.logins \|\| \[\]\)\)/.test(text) &&
-  /if \(isCommentWake &&\s*\n\s*\(context\.payload\.comment\?\.user\?\.type !== 'Bot' \|\|\s*\n\s*!trustedCommentLogins\.has\(context\.payload\.comment\?\.user\?\.login\)\)\)/.test(text));
+  /if \(isCommentWake &&\s*\n\s*\(context\.payload\.comment\?\.user\?\.type !== 'Bot' \|\|\s*\n\s*!trustedCommentLogins\.has\(context\.payload\.comment\?\.user\?\.login\) \|\|\s*\n\s*context\.payload\.comment\?\.pull_request_url != null\)\)/.test(text));
 // 反向锚：硬编码登录名集合不得复活（单一事实源 = BOT_DEFINITIONS 派生）。
 check('workflow-no-stale-hardcoded-trusted-login-set',
   !/const trustedCommentLogins = new Set\(\[/.test(text));
@@ -326,15 +334,19 @@ check('workflow-barrier-waiting-ensures-waiting-status-label',
 check('workflow-no-stale-barrier-cleanup-deletes-verdict',
   !/for \(const l of Object\.keys\(SYSTEM_LABELS\)\) \{\s*\n\s*if \(existing\.has\(l\)\) \{/.test(text));
 
-// --- F5：无评级分支必须显式保留 needs-work（新形态）---
+// --- F5（契约 3 C-B 翻转，20261017 计划）：纯无评级 → verdict=no-rating 显式态（旧「无条件 needs-work」退役）；
+//     needs-work 仅由 check failure / CHANGES_REQUESTED 单独决定（新文案分支锚 + 排序锚保留）。
 check('workflow-no-rating-preserves-needs-work-verdict',
-  /No parseable rating; preserving an explicit review:needs-work verdict\./.test(text) &&
+  /No parseable rating with check failure \/ CHANGES_REQUESTED; marking review:needs-work\./.test(text) &&
+  /No parseable rating; verdict falls back to no-rating \(N\/A\)\./.test(text) &&
   (() => {
     const elseIdx = text.lastIndexOf('Neither bot produced a parseable rating');
     if (elseIdx !== -1) return false; // 旧"清空裁决"文案零残留
     const partialIdx = text.indexOf('Partial ratings or failed check');
-    const noRateIdx = text.indexOf('No parseable rating; preserving');
-    return partialIdx !== -1 && noRateIdx !== -1 && noRateIdx > partialIdx;
+    const noRateIdx = text.indexOf('No parseable rating; verdict falls back');
+    const noRateFailIdx = text.indexOf('No parseable rating with check failure');
+    return partialIdx !== -1 && noRateIdx !== -1 && noRateFailIdx !== -1 &&
+      noRateIdx > partialIdx && noRateFailIdx > partialIdx;
   })());
 // 反向锚：旧"无评级即清空全部裁决"语义不得复活。
 check('workflow-no-stale-no-rating-clears-verdict',
@@ -431,7 +443,7 @@ check('workflow-status-comment-badges-repo-localized',
 //   emoji 零使用（负向锚：status comment 区段（常量区 BOT_STATE_META 起）不匹配 emoji 码点区间，
 //   区间含 U+2600-27BF（✅ U+2705 等杂项符号）与 U+1F300-1FAFF）。
 check('workflow-status-comment-octicon-icons-no-emoji',
-  ['git-pull-request', 'tasklist', 'link-external', 'code', 'pencil', 'file']
+  ['git-pull-request', 'tasklist', 'link-external', 'code', 'pencil', 'file', 'link', 'issue-opened']
     .every((ic) => text.includes(`ICON('${ic}'`)) &&
   text.includes("BADGE_BASE}/icon-${name}.svg") &&
   (() => {
@@ -556,7 +568,7 @@ function extractSyncLabelsScript(y) {
 //   零额外调用）；repos.get 携 stargazers_count（manual_required 信号，一次读取）；
 //   issues.listComments/createComment/updateComment 承载 D 契约 Action 自持状态评论——
 //   mock 内维护 comments 数组，使定位(create/update)与断言(update 而非 create)可观测。
-async function runWorkflow({ eventName, payload, env, headSha, headBranchRef, reviews, checkRuns, issueLabels, repoLabels, changedFiles, stars, comments, pullComments, prBody, headShaAfter, switchAfterCall, commitStatuses, autofillRunRecord, scriptSrc }) {
+async function runWorkflow({ eventName, payload, env, headSha, headBranchRef, reviews, checkRuns, issueLabels, repoLabels, changedFiles, stars, comments, pullComments, prBody, headShaAfter, switchAfterCall, commitStatuses, autofillRunRecord, scriptSrc, linkedItems, timelineError, issueTypes }) {
   const labelsAdded = []; const labelsRemoved = []; const provisioned = [];
   const calls = { add: 0, remove: 0, create: 0, pullsGet: 0, reposGet: 0, listComments: 0, pullsListComments: 0, createComment: 0, updateComment: 0 };
   const logs = [];
@@ -625,6 +637,22 @@ async function runWorkflow({ eventName, payload, env, headSha, headBranchRef, re
         removeLabel: async (p) => { calls.remove += 1; labelsRemoved.push(p.name); },
         createLabel: async (p) => { calls.create += 1; provisioned.push(p.name); },
         listComments: async () => { calls.listComments += 1; return { data: commentList }; },
+        // 双保险类型闸桩面：issueTypes 显式登记「#N 实为 PR」（issues.get 带 pull_request 字段）；
+        //   未登记编号默认纯 issue 形态（无 pull_request 字段）。
+        get: async (p) => {
+          calls.issueGet = (calls.issueGet || 0) + 1;
+          const n = Number(p.issue_number);
+          if ((issueTypes || []).includes(n)) return { data: { number: n, pull_request: { url: 'x' } } };
+          return { data: { number: n } };
+        },
+        // 关联小节桩面（issues.listEventsForTimeline = GET /issues/N/timeline，与运行时同端点）：
+        //   linkedItems 形态＝[{event:'cross-referenced',source:{issue:{number,pull_request?}}} |
+        //   {event:'connected',subject:{number,pull_request?}}]；timelineError 模拟反查 5xx。
+        listEventsForTimeline: async () => {
+          calls.listEventsForTimeline = (calls.listEventsForTimeline || 0) + 1;
+          if (timelineError) { const e = new Error('timeline 5xx'); e.status = timelineError; throw e; }
+          return { data: linkedItems || [] };
+        },
         createComment: async (p) => {
           calls.createComment += 1;
           const id = 900 + commentList.length;
@@ -696,6 +724,9 @@ async function barrierCase(opts) {
     headBranchRef: opts.headBranchRef,
     commitStatuses: opts.commitStatuses,
     autofillRunRecord: opts.autofillRunRecord,
+    linkedItems: opts.linkedItems,
+    timelineError: opts.timelineError,
+    issueTypes: opts.issueTypes,
   });
   return r;
 }
@@ -705,12 +736,34 @@ function record(name, ok, detail) {
   else { behaviorFailures += 1; console.log(`FAIL ${name}${detail ? ' ' + detail : ''}`); }
 }
 
+// 触发收敛行为锚（上游实质变化才重评）：白名单 bot 的**内联**评论编辑事件（payload 带
+// pull_request_url）在脚本内纵深闸即被退出——零标签写入、零状态评论、零护栏轮询。
+{
+  const r = await barrierCase({
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' }, pull_request_url: 'https://github.com/o/r/pull/8' } },
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+  });
+  record('workflow-inline-comment-edit-event-not-consumed',
+    r.err === null && r.calls.add === 0 && r.calls.createComment === 0 && r.calls.pullsGet === 0,
+    'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' logs=' + r.logs.join('|').slice(0, 120));
+}
+// 顶层摘要评论（无 pull_request_url）仍正常消费（正控：不误杀白名单 bot 顶层事件）。
+{
+  const r = await barrierCase({
+    payload: { comment: { user: { type: 'Bot', login: 'kilo-code-bot[bot]' } } },
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+  });
+  record('workflow-top-level-comment-edit-still-consumed',
+    r.err === null && r.calls.add > 0 && r.calls.createComment > 0,
+    'add=' + r.calls.add + ' createComment=' + r.calls.createComment);
+}
 // 1. COMMENTED head-bound bot review → 满足栅栏（PR8 实测载体形态）→ 进入 verdict 写标签 + 状态评论。
 {
   const r = await barrierCase({ reviews: [ { ...COMMENTED, body: 'WARNING: minor' } ] });
   record('workflow-completes-on-commented-head-review',
     r.err === null && r.calls.add > 0 && r.calls.createComment > 0,
-    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'add=' + r.calls.add + ' createComment=' + r.calls.createComment + ' logs=' + r.logs.join(' | '));
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'add=' + r.calls.add + ' createComment=' + r.calls.createComment
+  );
 }
 // 2. APPROVED / CHANGES_REQUESTED 仍满足（回归：旧终态仍合法）。
 {
@@ -747,6 +800,52 @@ function record(name, ok, detail) {
   record('workflow-coderabbit-readiness-band-phrase-blocked',
     r.err === null && flat.includes('risk:critical') && flat.includes('review:needs-work'),
     r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(flat));
+}
+// F4（band 正则收紧回归，三例边界）：工作流 4.4 的 band 间隙量词收紧为 {0,8}（CodeRabbit 实测
+//   band 词与标签间填充 ≤4 空格/分隔符，8 为 2 倍裕度）——过长填充不得被当作 band 分隔符吞进
+//   捕获（防"散文里远处的档位词"被误绑定为 band 值）。三例：① 正常 2 空格分隔命中；② 9 个
+//   连字符（超裕度）不命中；③ 紧邻（零分隔）命中。期望值溯源＝收紧语义本身，非抄录实现。
+{
+  // ① 正常 2 空格：命中（回归保护——收紧不得误伤合法形态）
+  const r1 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness:  Blocked' },
+  ] });
+  const f1 = r1.labelsAdded.flat();
+  record('workflow-coderabbit-band-two-space-hits',
+    r1.err === null && f1.includes('risk:critical') && f1.includes('review:needs-work'),
+    r1.err ? 'err=' + String((r1.err && r1.err.message) || r1.err).split('\n')[0] : 'labels=' + JSON.stringify(f1));
+  // ② 9 个连字符（超 2 倍裕度）：不得命中 → coderabbit 失评 → needs-work 兜底而非 risk:critical
+  const r2 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness --------- Blocked' },
+  ] });
+  const f2 = r2.labelsAdded.flat();
+  record('workflow-coderabbit-band-nine-hyphens-miss',
+    r2.err === null && !f2.includes('risk:critical'),
+    r2.err ? 'err=' + String((r2.err && r2.err.message) || r2.err).split('\n')[0] : 'labels=' + JSON.stringify(f2));
+  // ③ 紧邻（零分隔）：命中
+  const r3 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness:Blocked' },
+  ] });
+  const f3 = r3.labelsAdded.flat();
+  record('workflow-coderabbit-band-adjacent-hits',
+    r3.err === null && f3.includes('risk:critical'),
+    r3.err ? 'err=' + String((r3.err && r3.err.message) || r3.err).split('\n')[0] : 'labels=' + JSON.stringify(f3));
+  // ④ 恰 8 个连字符（=上界，无空格，间隙总长恰 8）：必须命中（钉死 {0,8} 上界含 8 本身，防上界漂移到更小值误伤合法形态）
+  const r4 = await barrierCase({ reviews: [
+    { ...COMMENTED, body: 'SUGGESTION: ok' },
+    { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      body: 'Merge Readiness--------Blocked' },
+  ] });
+  const f4 = r4.labelsAdded.flat();
+  record('workflow-coderabbit-band-eight-hyphens-hits',
+    r4.err === null && f4.includes('risk:critical'),
+    r4.err ? 'err=' + String((r4.err && r4.err.message) || r4.err).split('\n')[0] : 'labels=' + JSON.stringify(f4));
 }
 // 3. DISMISSED 不满足 barrier；等待分支落 review:unavailable（本轮无可评级来源），不误落最终 risk/approved。
 // K-1（Bot 意见·Kilo Overview 计数表形态）：Kilo 真实输出 `**Status:** 10 Issues Found` +
@@ -891,7 +990,8 @@ function record(name, ok, detail) {
     r.err === null && r.calls.add === 0 && r.calls.remove === 0 && r.calls.create === 0 && r.calls.pullsGet === 0,
     'add=' + r.calls.add + ' remove=' + r.calls.remove + ' create=' + r.calls.create + ' pullsGet=' + r.calls.pullsGet);
 }
-// 11. 受信 bot 顶层评论唤醒（type=Bot + 派生登录名命中）→ 不早退，进入求值并写 needs-work。
+// 11. 受信 bot 顶层评论唤醒（type=Bot + 派生登录名命中）→ 不早退，进入求值并写状态评论
+//     （契约 3 C-B 翻转：夹具正文无可解析评级 → verdict=no-rating 零裁决标签，仅状态评论）。
 {
   const r = await runWorkflow({
     eventName: 'issue_comment',
@@ -899,8 +999,11 @@ function record(name, ok, detail) {
     env: { PR_NUMBER: '8', EXPECTED_BOTS: 'kilocode' },
     headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
   });
-  record('workflow-trusted-bot-comment-wake-proceeds', r.err === null && r.calls.pullsGet > 0 && r.calls.add > 0,
-    'pullsGet=' + r.calls.pullsGet + ' add=' + r.calls.add);
+  const metaMatch = (r.comments[0]?.body || '').match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-trusted-bot-comment-wake-proceeds', r.err === null && r.calls.pullsGet > 0 && meta !== null && meta.verdict === 'no-rating',
+    'pullsGet=' + r.calls.pullsGet + ' add=' + r.calls.add + ' verdict=' + (meta && meta.verdict));
 }
 // 12. 非受信顶层评论（任意 bot 登录名未命中派生集合）→ 唤醒闸 fail-closed 早退，零标签变更。
 {
@@ -1249,10 +1352,10 @@ function record(name, ok, detail) {
       ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
 }
 
-// 20. E-3 退化组合（r2 回灌）：EXPECTED_BOTS 仅含可选 bot 且其在途——requiredKeys 为空，
-//     approved 必须不可达（落无评级兜底 review:needs-work），不得 pending（无必需 bot 可等），
-//     不得 unavailable（in_progress 非 unavailable 语义）。期望值溯源：行为契约 3（退化组合）。
-//     本夹具为纯锁定：按静态推演当前实现已成立、预期到绿；若红则须先推翻推演再议。
+// 20. E-3 退化组合（r2 回灌 + 契约 3 C-B 翻转）：EXPECTED_BOTS 仅含可选 bot 且其在途——requiredKeys 为空，
+//     夹具无可解析评级 → 落 no-rating 显式态（零裁决标签），不得 pending（无必需 bot 可等），
+//     不得 unavailable（in_progress 非 unavailable 语义）。期望值溯源：行为契约 3（退化组合）+ 契约 3 C-B。
+//     用例名保留 `fallback` 语义锚（旧 `needs-work` 后缀为 C-B 翻转前残留，断言体为准）。
 {
   const r = await barrierCase({
     expectedBots: 'coderabbit',
@@ -1262,14 +1365,14 @@ function record(name, ok, detail) {
       app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'scanning', summary: '', text: '' },
     }],
   });
-  record('workflow-optional-only-expected-bots-fallback-needs-work',
-    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
-      !r.labelsAdded.flat().includes('review:approved') &&
+  record('workflow-optional-only-expected-bots-fallback-no-rating',
+    r.err === null && !r.labelsAdded.flat().includes('review:approved') &&
       !r.labelsAdded.flat().includes('review:pending') &&
       !r.labelsAdded.flat().includes('review:unavailable') &&
-      (r.comments[0]?.body || '').includes('"coderabbit":"in_progress"'),
-    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
-      ' status=' + String(r.comments[0]?.body).split('\n').find((l) => l.includes('coderabbit')));
+      !r.labelsAdded.flat().includes('review:needs-work') &&
+      (r.comments[0]?.body || '').includes('"coderabbit":"in_progress"') &&
+      (r.comments[0]?.body || '').includes('"verdict":"no-rating"'),
+    'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
 
 // E6/F3: job-level YAML comments must not truncate jobEnd — extraction still finds the block.
@@ -1334,12 +1437,12 @@ function record(name, ok, detail) {
         headSha: 'HEAD', reviews: [COMMENTED], checkRuns: [],
         scriptSrc: src,
       });
-      // 契约（突变验证）：human actor 在 actor 门被移除后，脚本不再早退——它会把 human 当作合法
-      //   actor 继续求值并在有载体时写标签；这正是该门必须存在的反证。若夹具对 mutation 不敏感
-      //   （add 仍为 0），则 harness 失效（假绿风险）。
+      // 契约（突变验证 + 契约 3 C-B 翻转）：human actor 在 actor 门被移除后，脚本不再早退——
+      //   它会把 human 当作合法 actor 继续求值（夹具无可解析评级 → 状态评论 verdict=no-rating 落盘）。
+      //   若夹具对 mutation 不敏感（零 API 调用），则 harness 失效（假绿风险）。
       record('workflow-harness-catches-actor-gate-removal',
-        r.err === null && r.calls.add > 0,
-        'add=' + r.calls.add + ' err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+        r.err === null && r.calls.pullsGet > 0 && r.calls.createComment > 0,
+        'pullsGet=' + r.calls.pullsGet + ' createComment=' + r.calls.createComment + ' err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
     } catch (e) {
       record('workflow-harness-catches-actor-gate-removal', false,
         'extract/mutation failed: ' + String(e && e.message).split('\n')[0]);
@@ -1485,7 +1588,7 @@ function record(name, ok, detail) {
     scriptSrc: broken,
   });
   record('workflow-inline-fetch-failure-degrades-not-blocks',
-    r.err === null && r.calls.add > 0 &&
+    r.err === null &&
       (r.comments[0]?.body || '').includes('内联评论采集失败') &&
       r.logs.some((l) => l.includes('boom')),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' add=' + r.calls.add +
@@ -1508,7 +1611,7 @@ function record(name, ok, detail) {
     scriptSrc: broken,
   });
   record('workflow-own-comment-lookup-failure-skips-not-crashes',
-    r.err === null && r.calls.add > 0 && r.calls.createComment === 0 && r.calls.updateComment === 0 &&
+    r.err === null && r.calls.createComment === 0 && r.calls.updateComment === 0 &&
       r.logs.some((l) => l.includes('lookup-boom')),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' add=' + r.calls.add +
       ' create=' + r.calls.createComment + ' update=' + r.calls.updateComment +
@@ -1766,6 +1869,292 @@ function record(name, ok, detail) {
   record('workflow-head-badge-links-to-commit',
     r.err === null && body.includes('/pull/8/commits/HEAD'),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' found=' + body.includes('/commits/'));
+}
+
+// ================================================================
+// C-A/C-B/契约 4（20261017-autofill-labeler-fix）：顶层摘要评论采集面 + verdict 兜底 +
+//   空块提示行 + byReview 诊断日志。期望值由计划契约 3/4 推导，非抄录实现。
+// ================================================================
+
+// C-A1：CodeRabbit 顶层摘要评论（marker `summarize by coderabbit.ai` + 受信 login + type=Bot）
+//   含 `**Merge Risk:** **🟡 Moderate**` → crScore=2（moderate）→ 与 kilo SUGGESTION(1) 取最严=2 → risk:medium。
+//   旧实现 4.3 fail-closed 零读顶层评论 → 双 null → needs-work（红）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 81,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<summary><strong>Merge Risk:</strong> <strong>🟡 Moderate</strong> · up to <code>50ddc</code></summary>',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-coderabbit-merge-risk-moderate',
+    r.err === null && r.labelsAdded.flat().includes('risk:medium') && !r.labelsAdded.flat().includes('review:needs-work'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-A1b：Merge Risk: High → crScore=3 → risk:high。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 82,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: High — 多处高危发现',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-coderabbit-merge-risk-high',
+    r.err === null && r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-A1c：已知 marker 但级别词未知（🟣 Unknown）→ 该正则不捕获、不 crash、score 落 null → 兜底分支（C-B）。
+//   反例强化（review 契约）：正文追加含 “high” 子串的文本，使测试实际覆盖风险级别正则的误匹配闸门——
+//   旧跨行 + 无词边界正则会把后续正文里的 'high' 当级别词误命中，本用例据此暴露该漏面。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 83,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: 🟣 Unknown\n后续说明文本含有 high 这个词，不得被当级别误命中',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-unknown-risk-word-fail-closed',
+    r.err === null && !r.labelsAdded.flat().includes('risk:critical') && !r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-A1d：无 marker 顶层评论不消费（4.3 fail-closed 立场收窄不破）——同形态正文缺 marker → 双 null → 兜底。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 84,
+      body: 'Merge Risk: High（无 marker 的顶层评论）',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-without-marker-not-consumed',
+    r.err === null && !r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-A1e：marker 在但 login 非受信（伪造 Bot）→ 不消费。
+//   反例强化（review 契约）：正文补齐 CodeRabbit marker，确保用例能检验不可信登录名闸门
+//   （marker 在场却因 login 不符而 fail-closed，不与 C-A1d「无 marker」路径混淆）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 85,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: High',
+      user: { type: 'Bot', login: 'evil-bot[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-untrusted-login-not-consumed',
+    r.err === null && !r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-A2：Kilo 顶层评论（marker `<!-- kilo-review -->` + 受信 login）含计数表 → kiloScore=2 → risk:medium。
+{
+  const kiloTop = [
+    '<!-- kilo-review -->',
+    '**Status:** 3 Issues Found',
+    '### Overview',
+    '| Severity | Count |',
+    '|----------|-------|',
+    '| CRITICAL | 0 |',
+    '| WARNING | 1 |',
+    '| SUGGESTION | 2 |',
+  ].join('\n');
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '' }],
+    comments: [{ id: 86, body: kiloTop, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-kilo-count-table-rates',
+    r.err === null && r.labelsAdded.flat().includes('risk:medium') && r.labelsAdded.flat().includes('ai-reviewed'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// C-B：评分双 null（无顶层评论或顶层无 marker）→ verdict 落 `no-rating` 而非 `risk`，
+//   风险量化列 `N/A`，不加 review:needs-work（纯无评级不伪造 needs-work）。
+//   兼测意图：夹具 reviews body 为中文纯散文（「本轮无评级形态…」），同时验证 4.5 severity
+//   兜底正则不误命中中文散文（severity/风险/level 前缀均不在场）——正负两面兼得。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '本轮无评级形态（正文既无 band 也无计数表）' }],
+    comments: [],
+    pullComments: [],
+  });
+  const body = r.comments[0]?.body || '';
+  const metaMatch = body.match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-no-rating-verdict-falls-back-to-no-rating',
+    r.err === null && meta !== null && meta.verdict === 'no-rating' &&
+      !r.labelsAdded.flat().includes('review:needs-work') &&
+      body.includes('N/A'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0]
+      : 'verdict=' + (meta && meta.verdict) + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// 契约 4a：采集成功零内联 → bash 块含显式提示行 `# 本轮无可归属受信内联评论`。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    pullComments: [],
+  });
+  const body = r.comments[0]?.body || '';
+  record('workflow-inline-empty-block-explicit-hint',
+    r.err === null && body.includes('# 本轮无可归属受信内联评论'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'hint=' + body.includes('# 本轮无可归属受信内联评论'));
+}
+// 契约 4a 负控：有受信内联 → 不出提示行。
+{
+  const pullComments = [{ id: 40, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }];
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
+    pullComments,
+  });
+  const body = r.comments[0]?.body || '';
+  record('workflow-inline-present-no-hint',
+    r.err === null && !body.includes('# 本轮无可归属受信内联评论') && body.includes('select('),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'hintAbsent=' + !body.includes('# 本轮无可归属受信内联评论'));
+}
+// 契约 4b：byReview 诊断日志——过滤循环后输出 inlineComments.length 与 byReview 计数（含被过滤原因）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    pullComments: [],
+  });
+  const diag = r.logs.join('\n');
+  record('workflow-byreview-diagnostic-logged',
+    r.err === null && /\[Status Comment\] byReview/.test(diag),
+    'diag=' + diag.split('\n').filter((l) => l.includes('byReview')).join(' | ').slice(0, 200));
+}
+
+// 关联小节（🤝 定版契约）：状态评论渲染本 PR 的关联 issue/PR——编号逐行裸写 + 尾随空格
+//   （GitHub autolink 驱动形态，实测 PR#18 评论 `#16 \n#19 ` 验证），无 Markdown 链接、无徽章；
+//   timeline 反查（cross-referenced source / connected subject 指向本 PR）按 source.issue 是否带
+//   pull_request 字段分 PR/Issue 归类；单向缺省整块不写，全无整节省略，反查失败整节省略（展示面
+//   降级，不捏造）；机读尾块 links 增 linked_issues/linked_prs（仅查到时在场）。
+// 关联正控：PR #17 + Issue #16/#19 → 小节渲染 PR 块 1 行、Issue 块 2 行，每行尾随空格逐字在场。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    linkedItems: [
+      { event: 'cross-referenced', source: { issue: { number: 17, pull_request: { url: 'x' } } } },
+      { event: 'connected', subject: { number: 18, pull_request: { url: 'y' } } },
+      { event: 'cross-referenced', source: { issue: { number: 16 } } },
+      { event: 'connected', subject: { number: 19 } },
+    ],
+  });
+  const body = r.comments[0]?.body || '';
+  const linkSec = body.slice(body.indexOf('#### ') && body.indexOf('icon-link.svg'), body.indexOf('##### ') > 0 ? body.indexOf('##### ') : undefined);
+  const metaMatch = body.match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-linked-section-renders-prs-and-issues',
+    r.err === null &&
+      body.includes('icon-link.svg') && body.includes('关联') &&
+      body.includes('icon-git-pull-request.svg') && body.includes('icon-issue-opened.svg') &&
+      // 一行多编号定版（紧凑形态）：PR 块与 Issue 块各自**单行**承载全部编号、空格分隔、行尾空格；
+      //   逐行形态（#17 \n#18 \n）必须缺席——人类已实测两形态渲染差异并定版单行。
+      body.includes('#17 #18 \n') && body.includes('#16 #19 \n') &&
+      !body.includes('#17 \n') && !body.includes('#16 \n') &&
+      meta && meta.links && Array.isArray(meta.links.linked_prs) && meta.links.linked_prs.includes(17) &&
+      meta.links.linked_issues.includes(16) && meta.links.linked_issues.includes(19),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0]
+      : 'pr=' + body.includes('#17 #18 \n') + ' issue=' + body.includes('#16 #19 \n'));
+}
+// 关联负控一：全无关联 → 整节省略（icon-link.svg 不在场、links 无 linked_* 键）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    linkedItems: [],
+  });
+  const body = r.comments[0]?.body || '';
+  const metaMatch = body.match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-linked-section-omitted-when-none',
+    r.err === null && !body.includes('icon-link.svg') && !(meta && meta.links && (meta.links.linked_issues || meta.links.linked_prs)),
+    'hasSection=' + body.includes('icon-link.svg'));
+}
+// 关联负控二：timeline 反查 5xx → 整节省略（展示面降级，不捏造）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    timelineError: 500,
+  });
+  const body = r.comments[0]?.body || '';
+  record('workflow-linked-section-omitted-on-timeline-error',
+    r.err === null && !body.includes('icon-link.svg'),
+    'hasSection=' + body.includes('icon-link.svg'));
+}
+// 关联正控二（单向）：只关联 Issue（#16）→ 仅 Issue 块，无 PR 块（PR 块锚＝icon 与 **PR**：同行，
+//   区别于评论头部的 `### … PR 审查状态` 对同图标的独立使用）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    linkedItems: [{ event: 'connected', subject: { number: 16 } }],
+  });
+  const body = r.comments[0]?.body || '';
+  const hasIssue = body.includes('icon-issue-opened.svg') && body.includes('#16 \n');
+  const hasPrBlock = /\*\*PR\*\*：/.test(body);
+  record('workflow-linked-section-single-side-issue-only',
+    r.err === null && hasIssue && !hasPrBlock,
+    'issue=' + hasIssue + ' prBlock=' + hasPrBlock);
+}
+// 双保险类型闸正控：events 面的 source 精简形态**不带** pull_request 字段（REST 不保证），
+//   但 issues.get 复验带 → 归类为 PR（进 PR 块而非 Issue 块）。纯 events 面判定必落错的形态。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    linkedItems: [{ event: 'cross-referenced', source: { issue: { number: 17 } } }],
+    issueTypes: [17],
+  });
+  const body = r.comments[0]?.body || '';
+  const metaMatch = body.match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-linked-type-recheck-promotes-pr',
+    r.err === null && meta && meta.links && meta.links.linked_prs && meta.links.linked_prs.includes(17) &&
+      !(meta.links.linked_issues || []).includes(17) &&
+      /\*\*PR\*\*：/.test(body),
+    'meta=' + JSON.stringify(meta && meta.links));
+}
+// 双保险类型闸负控：issues.get 复验也不带 pull_request 字段 → 留在 Issue 组（不误升级为 PR）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    linkedItems: [{ event: 'cross-referenced', source: { issue: { number: 20 } } }],
+  });
+  const body = r.comments[0]?.body || '';
+  const metaMatch = body.match(/<!-- BOT-METADATA: (.*?) -->/s);
+  let meta = null;
+  try { meta = metaMatch ? JSON.parse(metaMatch[1]) : null; } catch { meta = null; }
+  record('workflow-linked-type-recheck-keeps-issue',
+    r.err === null && meta && meta.links && meta.links.linked_issues && meta.links.linked_issues.includes(20) &&
+      !(meta.links.linked_prs || []).includes(20),
+    'meta=' + JSON.stringify(meta && meta.links));
 }
 
 console.log(behaviorFailures === 0 ? 'BOT-LABELER-SELFTEST ALL OK' : 'BOT-LABELER-SELFTEST FAILURES=' + behaviorFailures);

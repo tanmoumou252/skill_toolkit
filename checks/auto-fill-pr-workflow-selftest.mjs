@@ -166,6 +166,36 @@ async function runCase(opts = {}) {
       calls.get += 1; calls.paths.push(p);
       if (p.endsWith('/commits')) return { commits: opts.commits ?? COMMITS };
       if (p.endsWith('/files')) return { files: opts.files ?? FILES };
+      // issue timeline 桩面（closing keyword 反查闸）：/issues/N/timeline 返回 cross-referenced 事件集，
+      //   事件 source.issue.number 指向本 PR（PR_NUMBER=8）才算确认关联；connectedIssue 模拟手动
+      //   Development 关联（connected 事件 subject 指向本 PR）；prNumbers 模拟「#N 实为 PR」形态；
+      //   timelineError 模拟 5xx 反查失败。
+      const tl = /\/issues\/(\d+)\/timeline$/.exec(p);
+      if (tl) {
+        if (opts.timelineError) { const e = new Error('timeline 5xx'); e.status = opts.timelineError; throw e; }
+        const n = Number(tl[1]);
+        const xref = (opts.linkedIssues || []).includes(n)
+          ? [{ event: 'cross-referenced', source: { issue: { number: 8, pull_request: {} } } }] : [];
+        const conn = (opts.connectedIssues || []).includes(n)
+          ? [{ event: 'connected', subject: { number: 8 } }] : [];
+        return [...xref, ...conn];
+      }
+      // issue 存在性/类型桩面：prNumbers 列出的编号带 pull_request 字段（实为 PR，非 issue）。
+      const it = /\/issues\/(\d+)$/.exec(p);
+      if (it) {
+        if (opts.issueLookupError) { const e = new Error('issue lookup 5xx'); e.status = opts.issueLookupError; throw e; }
+        const n = Number(it[1]);
+        return (opts.prNumbers || []).includes(n)
+          ? { number: n, pull_request: { url: 'x' } }
+          : { number: n };
+      }
+      // 佐证 status 桩面（幂等短路闸）：`/commits/<sha>/status` 返回 head 佐证 status 列表——
+      //   与本脚本 gh.get 解包约定一致（顶层 statuses，无 data 包裹；同 /commits 分支形态）。
+      //   headStatuses 形态＝[{state:'success', context:'auto-fill-pr', description:'… head=<40hex>'}]。
+      if (/\/status$/.test(p)) {
+        const list = opts.headStatuses || [];
+        return { state: list[0]?.state || 'pending', statuses: list };
+      }
       prSeen += 1; return prSeen <= 1 ? pr0 : pr1;
     },
     patch: async (p, payload) => { calls.patch += 1; patches.push({ p, payload }); return {}; },
@@ -201,6 +231,18 @@ const skipIs = (r, code) => r.err === null && r.out?.skipCode === code && (r.pat
 // skipWith：码 + 该闸独有理由串。缺了后半段，"另一道闸恰好也返回同一码"就会冒充被测闸生效。
 const skipWith = (r, code, frag) => skipIs(r, code) && String(r.out?.skipReason || '').includes(frag);
 const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.length === 1;
+// bodyFailWith（契约 2 解耦翻转）：正文侧内容闸失败 → 标题照写（payload 恰含 title）、
+//   正文不写（payload 无 body、detail.body=false）、理由串经 NOTE body-not-updated 留痕。
+const bodyFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
+  r.patches[0].payload.title && r.patches[0].payload.body === undefined &&
+  r.out?.updated === true && r.out?.detail?.body === false && r.out?.detail?.title === true &&
+  r.logs.join('\n').includes('body-not-updated') && r.logs.join('\n').includes(frag);
+// titleFailWith（契约 2 解耦翻转）：标题侧校验失败 → 正文照写（payload 恰含 body）、
+//   标题不写（payload 无 title、detail.title=false）、理由串经 NOTE title-not-updated 留痕。
+const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
+  r.patches[0].payload.body && r.patches[0].payload.title === undefined &&
+  r.out?.updated === true && r.out?.detail?.title === false && r.out?.detail?.body === true &&
+  r.logs.join('\n').includes('title-not-updated') && r.logs.join('\n').includes(frag);
 
 // ---------------------------------------------------------------- A. 正向
 {
@@ -239,6 +281,59 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 // 同一个 S 码可由多道闸产出（S6 两处 head 复核、S7 两条通道、S8 四种失败、S9 十余条闸）。
 // 只断 `skipCode` 就是"码对闸错"的假绿面，故每条都断该闸独有的理由串。
 { const r = await runCase({ env: { AUTO_FILL_PR_ENABLED: 'false' } }); record('autofill-skip-s11-disabled', skipWith(r, 'S11', '停用') && r.calls.get === 0, `out=${JSON.stringify(r.out || {})} get=${r.calls.get}`); }
+{ // 幂等短路闸（降频契约）：head 上已存在本运行的佐证 status（context=auto-fill-pr 且
+  //   description 携带的 head 与 env.HEAD_SHA 一致）→ 本轮已处理过，直接 S0 短路——
+  //   1 次 GET status 替代 commits/files/AI/PATCH 全链（ reopened / 重复投递同 head 场景）。
+  //   夹具格式契约（review 契约）：佐证取自生产写入端真实产物——先正常跑一轮 runCase 拿
+  //   first.calls.lastStatus（state/context/description 三元组），再回灌后续 runCase，
+  //   使写入端与读取端格式漂移（如 #1 的 7 位 sha 截短）在测试面直接暴露为红。
+  const SHA40 = 'a'.repeat(40);
+  const first = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+  });
+  const ls = first.calls.lastStatus;
+  const fixtureOk = ls && ls.state === 'success' && ls.context === 'auto-fill-pr' &&
+    new RegExp(`head ${SHA40}\\s*$`).test(String(ls.description || ''));
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: ls.state, context: ls.context, description: ls.description }] : [],
+  });
+  record('autofill-idempotent-shortcircuit-same-head-corroborated',
+    first.err === null && fixtureOk && r.err === null && r.out?.skipCode === 'S0' &&
+      String(r.out?.skipReason || '').includes('佐证') &&
+      r.patches.length === 0 && r.calls.get <= 2,
+    `fixture=${JSON.stringify(ls || null)} out=${JSON.stringify(r.out || {})} get=${r.calls.get}`);
+}
+{ // 短路负控一：佐证 description 携带**别的 head**（stale 佐证）→ 不短路，全链照跑。
+  //   佐证形态同样取自写入端真实产物（与正控同源），仅改写 description 的 head 段。
+  const SHA40 = 'a'.repeat(40); const SHA40B = 'b'.repeat(40);
+  const first = await runCase({ env: { HEAD_SHA: SHA40 }, pr: { head: { sha: SHA40 } } });
+  const ls = first.calls.lastStatus;
+  const staleDesc = ls ? String(ls.description || '').replace(new RegExp(`${SHA40}\\s*$`), SHA40B) : '';
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: ls.state, context: ls.context, description: staleDesc }] : [],
+  });
+  record('autofill-no-shortcircuit-stale-corroboration',
+    first.err === null && Boolean(ls) && r.err === null && !r.out?.skipCode && r.reqText.length > 0,
+    `fixture=${JSON.stringify(staleDesc)} out=${JSON.stringify(r.out || {})} reqLen=${r.reqText.length}`);
+}
+{ // 短路负控二：佐证 state 为 failure（上轮写失败）→ 不短路，重试全链（形态同源自写入端）。
+  const SHA40 = 'a'.repeat(40);
+  const first = await runCase({ env: { HEAD_SHA: SHA40 }, pr: { head: { sha: SHA40 } } });
+  const ls = first.calls.lastStatus;
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: 'failure', context: ls.context, description: ls.description }] : [],
+  });
+  record('autofill-no-shortcircuit-failed-corroboration',
+    first.err === null && Boolean(ls) && r.err === null && !r.out?.skipCode && r.reqText.length > 0,
+    `fixture=${JSON.stringify(ls || null)} out=${JSON.stringify(r.out || {})} reqLen=${r.reqText.length}`);
+}
 { const r = await runCase({ env: { AUTO_FILL_PR_ENABLED: ' FALSE ' } }); record('autofill-skip-s11-case-insensitive', skipWith(r, 'S11', '停用'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ env: { GITHUB_TOKEN: '' } }); record('autofill-skip-s1-missing-token', skipWith(r, 'S1', 'GITHUB_TOKEN'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ env: { AI_MODEL: '' } }); record('autofill-skip-s2-missing-model', skipWith(r, 'S2', 'AI_MODEL'), JSON.stringify(r.out || {})); }
@@ -261,9 +356,47 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n~~~sh\nx = 1' } }); record('autofill-skip-s9-model-unclosed-fence-tilde', skipWith(r, 'S9', '未闭合代码围栏'), JSON.stringify(r.out || {})); }
 { // 不该触发域反向护栏（防过修）：正文内开闭配平的围栏不得被误拒，须照常写一次。
   const r = await runCase({ aiBody: { 概述: '把草稿改造为本仓可用能力：动机说明。\n```python\nx = 1\n```' } }); record('autofill-model-closed-fence-not-denied', wroteOne(r), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: '把正文自动填充工作流补齐' }); record('autofill-skip-s9-title-no-grammar', skipWith(r, 'S9', '文法'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' }); record('autofill-skip-s9-title-multiline', skipWith(r, 'S9', '含换行'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ title: 'feat(nope-module): x' }); record('autofill-skip-s9-scope-not-in-whitelist', skipWith(r, 'S9', '词表白名单'), JSON.stringify(r.out || {})); }
+{ // 契约 2 翻转：标题文法违例 → 标题不写但正文照写（旧「整包 SKIP」语义退役）。
+  const r = await runCase({ title: '把正文自动填充工作流补齐' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-title-no-grammar-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('title-not-updated') && r.logs.join('\n').includes('文法'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：标题含换行（注解伪造形态）→ 标题不写但正文照写；被拒标题原文入日志仍净化。
+  const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' });
+  const p = r.patches[0]?.payload || {};
+  const joined = r.logs.join('\n');
+  record('autofill-title-multiline-body-still-patched-sanitized',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：scope 越表 → 标题不写但正文照写。
+  const r = await runCase({ title: 'feat(nope-module): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-scope-not-in-whitelist-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('词表白名单'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转：未知 type → 标题不写但正文照写。
+  const r = await runCase({ title: 'wonderfeat(ci): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-type-unknown-body-still-patched',
+    r.err === null && r.patches.length === 1 && p.body && p.title === undefined &&
+      r.logs.join('\n').includes('未知 type'),
+    'patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(','));
+}
+{ // 契约 2 翻转（scope env 整表替换家族）：governor ∉ 替换表 → 标题不写但正文照写（旧整包 SKIP 退役）。
+  const r = await runCase({ env: { AI_SCOPE_WHITELIST: 'src,docs' }, title: 'feat(governor): x' });
+  const r0 = await runCase({ title: 'feat(governor): x' });
+  const p = r.patches[0]?.payload || {};
+  record('autofill-scope-env-replaces-default-table',
+    r.patches.length === 1 && p.body && p.title === undefined && wroteOne(r0),
+    'gated patches=' + r.patches.length + ' payloadKeys=' + Object.keys(p).join(',') + ' base=' + JSON.stringify(r0.out || {}));
+}
 { // S9 scope 近似词归一化（PR#17 实测根因）：模型把点前缀目录写成去点近似词（.github→github），
   //   归一化后照常出标题，不再整包 S9 拒；真词表外语（nope-module）仍拒——上一条负控锁住不放宽。
   const r = await runCase({ title: 'fix(github): 修复工作流取值口径' });
@@ -277,15 +410,45 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
     wroteOne(r) && String(r.out?.title || '').startsWith('🐛 fix(github):'),
     `out=${JSON.stringify(r.out || {})});`);
 }
-{ const r = await runCase({ title: 'wonderfeat(ci): x' }); record('autofill-skip-s9-type-unknown', skipWith(r, 'S9', '未知 type'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 概述: '缺了影响面小节。', 影响面与风险: undefined } }); record('autofill-skip-s9-missing-section', skipWith(r, 'S9', '多重集'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 新增 `.github/scripts/auto-fill-pr.mjs`：说明文字足够长以避免其它闸误命中' } }); record('autofill-skip-s9-bullet-no-category', skipWith(r, 'S9', '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【优化】`.github/scripts/auto-fill-pr.mjs`：收敛实现使散文长度充分越过薄内容阈值' } }); record('autofill-skip-s9-category-out-of-vocab', skipWith(r, 'S9', '类别不在词表'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`' } }); record('autofill-skip-s9-bullet-too-thin', skipWith(r, 'S9', '无实质内容'), JSON.stringify(r.out || {})); }
-{ const r = await runCase({ aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } }); record('autofill-skip-s9-fabricated-result-in-overview', skipWith(r, 'S9', '命令输出字面量'), JSON.stringify(r.out || {})); }
+{ const r = await runCase({ aiBody: { 概述: '缺了影响面小节。', 影响面与风险: undefined } }); record('autofill-skip-s9-missing-section', bodyFailWith(r, '多重集'), JSON.stringify(r.out || {})); }
+{ const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 新增 `.github/scripts/auto-fill-pr.mjs`：说明文字足够长以避免其它闸误命中\n- 【新增】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【新增】`checks/package.json`：test 链接入与注册说明' } }); record('autofill-skip-s9-bullet-no-category', bodyFailWith(r, '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {})); }
+{ // 契约 1（类别词表闸删除）：`- 【重构】` 等任意非词表类别放行——只校结构/token/实质，不校取值。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【重构】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill，S1-S11 跳过矩阵与哨兵切分\n- 【优化】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言、r.err 前置与变异锚\n- 【维护】`checks/package.json`：新自测接入默认 test 链' } });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  // 强化断言（review 契约）：仅 wroteOne 无法发现非词表类别未写入正文——须显式校验标题与正文分别
+  //   更新成功，且 PATCH 正文 payload 实含 【重构】/【优化】/【维护】 三类，使退化（正文丢类别）可被测到。
+  record('autofill-non-vocab-category-passes',
+    wroteOne(r) && r.out?.detail?.title === true && r.out?.detail?.body === true &&
+      r.patches[0]?.payload?.title && body.includes('【重构】') && body.includes('【优化】') && body.includes('【维护】'),
+    JSON.stringify(r.out || {}) + ' cats=' + JSON.stringify(['【重构】', '【优化】', '【维护】'].filter((c) => body.includes(c))));
+}
+{ // 结构闸保留：空类别括号 `- 【】` 仍拒（缺 `- 【类别】` 前缀分句报）。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【】`.github/scripts/auto-fill-pr.mjs`：收敛实现使散文长度充分越过薄内容阈值' } });
+  record('autofill-skip-s9-empty-category-brackets', bodyFailWith(r, '缺 `- 【类别】` 前缀'), JSON.stringify(r.out || {}));
+}
+{ // 薄内容闸（契约 2 翻转）：夹具三条 bullet 达覆盖率下限，唯一失配点是第一条散文过薄。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入实现\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-skip-s9-bullet-too-thin', bodyFailWith(r, '无实质内容'), JSON.stringify(r.out || {}));
+}
+{ const r = await runCase({ aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } }); record('autofill-skip-s9-fabricated-result-in-overview', bodyFailWith(r, '命令输出字面量'), JSON.stringify(r.out || {})); }
+{ // 契约 2 翻转：标题校验失败（type 未知）+ 正文合格 → 仍 PATCH body，标题不写。
+  const r = await runCase({ title: 'wonderfeat(ci): x' });
+  record('autofill-decoupled-title-fail-body-still-patched', titleFailWith(r, '未知 type'),
+    `patches=${r.patches.length} out=${JSON.stringify(r.out || {})} payloadKeys=${Object.keys(r.patches[0]?.payload || {}).join(',')}`);
+}
+{ // 契约 2 反向：正文校验失败（bullet 缺前缀）+ 标题合格 → 仍 PATCH title，正文不写。
+  const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 无前缀 bullet：说明文字足够长以避免其它闸误命中\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式实现与跳过矩阵说明\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-decoupled-body-fail-title-still-patched', bodyFailWith(r, '缺 `- 【类别】` 前缀'),
+    `patches=${r.patches.length} out=${JSON.stringify(r.out || {})} payloadKeys=${Object.keys(r.patches[0]?.payload || {}).join(',')}`);
+}
+{ // 契约 2 退化：标题与正文同时失败 → 落 skipCode（S9），什么都不写。
+  const r = await runCase({ title: 'wonderfeat(ci): x', aiBody: { 主要变更: '5 文件\n\n- 无前缀 bullet：说明文字足够长以避免其它闸误命中\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式实现与跳过矩阵说明\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚说明\n- 【集成】`checks/package.json`：test 链接入与注册说明' } });
+  record('autofill-decoupled-both-fail-skips', skipIs(r, 'S9'),
+    `out=${JSON.stringify(r.out || {})}`);
+}
 { // F-1r（Bot W3/探针 P5b）：大小写变体同属伪造输出字面量漏面——禁串闸对大小写不敏感（契约 :190 意图面）
   const r = await runCase({ aiBody: { 概述: '自测已全部跑通：EXIT 0，All OK。' } });
-  record('autofill-skip-s9-fabricated-result-case-variants', skipWith(r, 'S9', '命令输出字面量'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-fabricated-result-case-variants', bodyFailWith(r, '命令输出字面量'), JSON.stringify(r.out || {}));
 }
 { // F-1r 负控：非"0 读数"与无子串命中形态必须放行（防 i 旗标误拒正常描述）
   const r = await runCase({ aiBody: { 概述: '退出状态为 1，自测尚未全部通过，属预期红灯。' } });
@@ -297,11 +460,11 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 // 契约 16：覆盖率下限与识别收窄
 {
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】新增一批工作流与脚本能力，补齐自测与接线（全篇无反引号）' } });
-  record('autofill-skip-s9-zero-code-token', skipWith(r, 'S9', '无反引号代码 token'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-zero-code-token', bodyFailWith(r, '无反引号代码 token'), JSON.stringify(r.out || {}));
 }
 { // 覆盖率下限闸：两条 bullet 都**已满足**前缀/代码 token/散文长度三道前置闸，唯一失配点必须是覆盖率本身。
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`runAutoFill`：注入式入口与跳过矩阵的编排实现\n- 【测试】`loadVariant`：变异锚通道与 ESM 缓存破除机制' } });
-  record('autofill-skip-s9-path-coverage-below-floor', skipWith(r, 'S9', '路径覆盖率不足'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-path-coverage-below-floor', bodyFailWith(r, '路径覆盖率不足'), JSON.stringify(r.out || {}));
 }
 { // §12 正控：真实文件路径（含 `/` + 扩展名）但仓库根本不存在（编造）→ 必报 path-unverified（且仅 note，不拒绝）。
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【文档】`checks/NO_SUCH_FILE_zzz.md`：编造的不存在路径（不在本轮清单且仓库无此文件）' } });
@@ -318,6 +481,96 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-path-unverified-no-false-positive',
     wroteOne(r) && !/path-unverified/.test(notes),
     `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 200)}`);
+}
+
+// ---------------------------------------------------------------- closing keyword 保留/续写（gh 反查闸）
+// 契约：旧 body 围栏外的 #N 引用（含裸编号与 keyword 前缀形态）先经 GET /issues/N 判类型——
+//   带 pull_request 字段的编号实为 PR，跳过（不关别的 PR）；确为 issue 的再经 timeline 反查，
+//   「cross-referenced 事件 source 指向本 PR」或「connected 事件 subject 指向本 PR」
+//   （= 网页上那条 linked a pull request that will close this issue）任一命中即确认关联，
+//   才在头部区末尾续写 `Closes: #N` 行；bot 每轮整段重写头部区，人类写进描述的关联会被冲掉；
+//   续写行由脚本以真实反查事实构造，无模型参与，无确认即不加行（零捏造）。
+{
+  // 正控：旧 body 两个 keyword 引用（大小写/冒号变体）+ timeline 双双确认 → 续写一行 Closes: #12, #13
+  //   落位＝验证节之后、尾块/sentinel 之前（头部区末尾）。
+  const r = await runCase({ existingBody: 'Closes #12\n\rFixes: #13', linkedIssues: [12, 13] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-carried-over',
+    wroteOne(r) && body.includes('Closes: #12, #13') &&
+      body.indexOf('Closes: #12, #13') > body.indexOf('## 验证') &&
+      body.indexOf('Closes: #12, #13') < body.indexOf('auto-fill-pr: synced'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 裸编号提取（实测场景：创建 PR 时手写 #16，body 无 keyword 前缀）→ 反查确认后照常续写
+  const r = await runCase({ existingBody: '相关 issue：#16', linkedIssues: [16] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-bare-ref-carried-over',
+    wroteOne(r) && body.includes('Closes: #16'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 编号实为 PR（GET /issues/N 带 pull_request 字段，如 #18）→ 跳过，绝不产生「关别的 PR」的续写
+  const r = await runCase({ existingBody: 'Closes #12\n#18', linkedIssues: [12], prNumbers: [18] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-pr-number-skipped',
+    wroteOne(r) && body.includes('Closes: #12') && !/#18/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 手动 Development 关联（connected 事件 subject 指向本 PR）＝另一确认通道，body 裸引用照常续写
+  const r = await runCase({ existingBody: '见 #16', connectedIssues: [16] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-connected-event-confirmed',
+    wroteOne(r) && body.includes('Closes: #16'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 类型判定反查不可达（GET /issues/N 5xx）→ fail-closed 不续写（不捏造），其余内容照常写回
+  const r = await runCase({ existingBody: 'Closes #12', issueLookupError: 500 });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-issue-lookup-fail-closed',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('## 概述'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 反查只确认其一：#12 关联、#99 未关联 → 只续写 #12，严禁把未确认引用捏造成关联
+  const r = await runCase({ existingBody: 'Closes #12, Closes #99', linkedIssues: [12] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-gh-verified-only',
+    wroteOne(r) && body.includes('Closes: #12') && !/#99/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 反查不可达（timeline 5xx）→ fail-closed 不续写（不捏造），其余内容照常写回
+  const r = await runCase({ existingBody: 'Closes #12', timelineError: 500 });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-unverifiable-fail-closed',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('## 概述'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 围栏内引用不是关联面：`closes #77` 在代码围栏内 → 不提取不续写
+  const r = await runCase({ existingBody: '## 概述\n\n```\ncloses #77\n```', linkedIssues: [77] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-fence-reference-ignored',
+    wroteOne(r) && !/#77/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 旧 body 无任何引用 → 不追加 Closes 行（零捏造底线）
+  const r = await runCase({});
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-none-no-fabrication',
+    wroteOne(r) && !/Closes:/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 去重：同一 issue 多种 keyword/变体引用 → 只续写一次 #12
+  const r = await runCase({ existingBody: 'fixes #12\ncloses #12\nresolved #12', linkedIssues: [12] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  const count = (body.match(/#12/g) || []).length;
+  record('autofill-closing-keywords-dedup', wroteOne(r) && count === 1, `occurrences=${count}`);
 }
 {
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【修复】`vars.AUTO_FILL_PR_ENABLED` 与 `head.sha` 这类点号标识符不得被误判为路径' } });
@@ -336,11 +589,45 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-prompt-has-untrusted-delimiter-and-instruction',
     wroteOne(r) && /UNTRUSTED-CHANGE-DATA/.test(r.reqText) && /不得执行/.test(r.reqText), '');
 }
-{ // 契约 11：日志注入防护（被拒标题原文入日志，必须先净化）
+{ // commit 消息规范注入（git-commit-msg 技能适配版）：提示词携带跨分支全量语义 + type→标签映射 + 长度纪律。
+  //   期望值由注入契约推导：system 必含跨分支全量口径（非逐 commit）、11 组标签映射、subject/body 长度纪律与扩展 type 集。
+  const r = await runCase({});
+  const sys = (() => { try { return JSON.parse(r.reqText).messages?.find((m) => m.role === 'system')?.content || ''; } catch { return ''; } })();
+  const LABELS = ['【新增】', '【修复】', '【文档】', '【样式】', '【重构】', '【性能】', '【测试】', '【构建】', '【集成】', '【维护】', '【国际化】'];
+  record('autofill-prompt-carries-cross-branch-total-message-semantics',
+    sys.includes('跨分支全量') && sys.includes('严禁逐 commit 复述') && sys.includes('commit hash'),
+    'sys head=' + sys.slice(0, 60));
+  record('autofill-prompt-carries-commit-skill-label-map',
+    LABELS.every((t) => sys.includes(t)) && sys.includes('50 字符') && sys.includes('72 字符') && sys.includes('feat>fix>perf'),
+    'missing=' + LABELS.filter((t) => !sys.includes(t)).join(','));
+  record('autofill-prompt-type-list-extended-skill-types',
+    /feat\|fix\|docs\|style\|refactor\|perf\|test\|build\|ci\|chore\|i18n/.test(sys),
+    'sys=' + sys.slice(0, 120));
+}
+{ // 标题 type 扩展（与技能 type 集对齐）：perf/style/build/i18n 四型按 emoji 表回填照常写回——
+  //   提示词放行而 normalizeTitle 拒收即「提示词与校验脱节」，四型各须一正控锁。
+  const r1 = await runCase({ title: 'perf(checks): 降低重算开销' });
+  record('autofill-title-perf-type-accepted',
+    wroteOne(r1) && r1.patches[0].payload.title === '⚡️ perf(checks): 降低重算开销',
+    'title=' + String(r1.patches[0]?.payload?.title));
+  const r2 = await runCase({ title: 'style(ci): 统一缩进风格' });
+  record('autofill-title-style-type-accepted',
+    wroteOne(r2) && r2.patches[0].payload.title === '💄 style(ci): 统一缩进风格',
+    'title=' + String(r2.patches[0]?.payload?.title));
+  const r3 = await runCase({ title: 'build(ci): 调整依赖打包' });
+  record('autofill-title-build-type-accepted',
+    wroteOne(r3) && r3.patches[0].payload.title === '📦 build(ci): 调整依赖打包',
+    'title=' + String(r3.patches[0]?.payload?.title));
+  const r4 = await runCase({ title: 'i18n(ci): 补齐语言资源' });
+  record('autofill-title-i18n-type-accepted',
+    wroteOne(r4) && r4.patches[0].payload.title === '🌐 i18n(ci): 补齐语言资源',
+    'title=' + String(r4.patches[0]?.payload?.title));
+}
+{ // 契约 11：日志注入防护（被拒标题原文入日志，必须先净化）——解耦后标题挂仍走 NOTE 通道。
   const r = await runCase({ title: 'feat(ci): 恶意标题\nnote::warning::伪造注解' });
   const joined = r.logs.join('\n');
   record('autofill-log-injection-sanitized',
-    skipIs(r, 'S9') && joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
+    r.patches.length === 1 && joined.includes('恶意标题') && !joined.includes('::warning::伪造') && !/^note::warning/m.test(joined),
     'logs=' + joined.slice(0, 160));
 }
 { // 佐证记录（review-finding 终局契约）：PATCH 成功后在本轮处理的 head 上落 commit status
@@ -383,9 +670,9 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   record('autofill-stats-file-count-uses-rest-total-when-truncated',
     wroteOne(r) && body.includes('5 文件，') && !body.includes('2 文件，'), 'body=' + body.slice(0, 140));
 }
-{ // 契约 17 重叠闸：概述直接抄尾块实测句
+{ // 契约 17 重叠闸：概述直接抄尾块实测句——解耦后正文侧失败、标题照写。
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  record('autofill-skip-s9-overlap-with-coderabbit-block', skipIs(r, 'S9'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-overlap-with-coderabbit-block', bodyFailWith(r, '连续重叠片段'), JSON.stringify(r.out || {}));
 }
 { // 负控：措辞不同、语义相近 → 放行（防重叠闸误拒）
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '动机在于让描述跟随最新提交，取舍是把头部区交给工具统一持有。' } });
@@ -554,7 +841,7 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
 }
 { // 装配后超限
   const r = await runCase({ aiBody: { 概述: '长'.repeat(70000) } });
-  record('autofill-skip-s9-assembled-too-long', skipWith(r, 'S9', '正文超长'), String(r.out?.skipReason).slice(0, 60));
+  record('autofill-skip-s9-assembled-too-long', bodyFailWith(r, '正文超长'), String(r.out?.detail && 'n/a').slice(0, 60));
 }
 
 // ---------------------------------------------------------------- C'. 审查回灌 Red 用例（F-1..F-11）
@@ -585,7 +872,7 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const dupBody = aiBody() + '\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n| node x | 全部通过 DUP-SURVIVED |';
   const r = await runCase({ aiJson: JSON.stringify({ title: 'feat(ci): x', body: dupBody }) });
   record('autofill-skip-s9-duplicate-verification-section',
-    skipWith(r, 'S9', '多重集'),
+    bodyFailWith(r, '多重集'),
     'out=' + JSON.stringify(r.out || {}));
 }
 { // F-3：CRLF 现存正文须与 LF 版逐字节等价（旧 sectionsOf(CRLF)=0 → 骨架写入丢人类结论）
@@ -639,9 +926,9 @@ const wroteOne = (r) => r.err === null && r.out?.updated === true && r.patches.l
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK + '\n\n相关入口：`checks/run.mjs`。', aiBody: { 概述: '运行入口是 `checks/run.mjs`，本句其余措辞与尾块毫无共同整句，只为路径重叠负控而写。' } });
   record('autofill-overlap-backtick-path-token-not-counted', wroteOne(r), 'out=' + JSON.stringify(r.out || {}));
 }
-{ // F-7 正控（保留触发域）：整句复制 ≥16 连续汉字/字母数字 → 仍判 S9
+{ // F-7 正控（保留触发域）：整句复制 ≥16 连续汉字/字母数字 → 正文侧仍判 S9 理由（重叠片段）
   const r = await runCase({ existingBody: '我们的旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  record('autofill-skip-s9-overlap-verbatim-copy', skipIs(r, 'S9'), 'out=' + JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-overlap-verbatim-copy', bodyFailWith(r, '连续重叠片段'), 'out=' + JSON.stringify(r.out || {}));
 }
 { // F-11②：paged 触顶（10 页）须 NOTE paged-cap-hit（makePaged 导出前本用例红）
   const req = async () => Array.from({ length: 100 }, (_, i) => i);
@@ -666,7 +953,7 @@ const SHUFFLED_BODY = ['## 验证', '', '| 命令 | 结果 |', '|---|---|', '', 
 }
 { // F-15 退化输入：节名齐全但乱序 → S9（节序消息），不得像 multisetEq 那样放行
   const r = await runCase({ aiJson: JSON.stringify({ title: 'feat(ci): x', body: SHUFFLED_BODY }) });
-  record('autofill-skip-s9-sections-out-of-order', skipWith(r, 'S9', '节序'), JSON.stringify(r.out || {}));
+  record('autofill-skip-s9-sections-out-of-order', bodyFailWith(r, '节序'), JSON.stringify(r.out || {}));
 }
 { // F-16 行为用例（Red 形态）：断言"块标量插值能被检测面检出"——旧单行正则恒 false＝稳定语义红；
   //   步骤 N-1 落检测器后由 R-C4c 把断言体替换为新检测器形态转绿（用例名不变，防改名逃逸）。
@@ -918,25 +1205,25 @@ const sseLinesOf = (full, finish = 'stop') => {
   const r = await runCase({ files: srcFiles, title: 'feat(src): 新增入口' });
   record('autofill-scope-hint-allows-touched-dir', wroteOne(r), JSON.stringify(r.out || {}));
 }
-{ // Rework-4：AI_SCOPE_WHITELIST 整表替换默认词表（剥离本仓方言面）——governor ∈ 默认表 ∉ src,docs ∪ 触及目录 → S9。
-  //   负控：同标题不设 env → ∈ 默认表 → 写入（旧实现同绿＝回归护栏，如实登记）。
+{ // Rework-4：AI_SCOPE_WHITELIST 整表替换默认词表（剥离本仓方言面）——governor ∈ 默认表 ∉ src,docs ∪ 触及目录 → 标题侧不写。
+  //   负控：同标题不设 env → ∈ 默认表 → 全写（回归护栏，如实登记）。
   const r = await runCase({ env: { AI_SCOPE_WHITELIST: 'src,docs' }, title: 'feat(governor): x' });
   const r0 = await runCase({ title: 'feat(governor): x' });
   record('autofill-scope-env-replaces-default-table',
-    skipWith(r, 'S9', '词表白名单') && wroteOne(r0),
+    titleFailWith(r, '词表白名单') && wroteOne(r0),
     JSON.stringify(r.out || {}) + ' base=' + JSON.stringify(r0.out || {}));
 }
-{ // Rework-4（消毒闸）：外来目录名过词法消毒才得入系统提示词表（注入防线——scopeHint 源自攻击者可控的文件路径）。
-  //   恶意名须：不泄入 system 词表句；AI 拿它作 scope → 闸拒 S9。旧实现词表即静态表——天然无泄漏，green-on-arrival
-  //   如实登记（本用例是给新实现防"把未消毒 hint 喂进 prompt"的回潮面）。
+{ // 消毒闸回归（契约 2 翻转）：恶意目录名不泄入 system 词表句；AI 拿它作 scope → 标题不写但正文照写。
   const hostileFiles = [{ filename: '恶意;rm【注入】/x.js', status: 'added', additions: 60, deletions: 0, patch: '@@ -0,0 +1,3 @@\n+x' }, ...FILES];
   const r = await runCase({ files: hostileFiles });
   let sys = '';
   try { sys = JSON.parse(r.reqText).messages[0].content; } catch { /* 桩面失败即红 */ }
   const r2 = await runCase({ files: hostileFiles, title: 'feat(恶意;rm【注入】): x' });
+  const p2 = r2.patches[0]?.payload || {};
   record('autofill-scope-hostile-dir-sanitized-out-of-vocab',
-    wroteOne(r) && !sys.includes('恶意;rm') && skipWith(r2, 'S9', '词表白名单'),
-    'clean=' + wroteOne(r) + ' leak=' + sys.includes('恶意;rm') + ' gated=' + skipWith(r2, 'S9', '词表白名单'));
+    wroteOne(r) && !sys.includes('恶意;rm') &&
+      r2.patches.length === 1 && p2.body && p2.title === undefined,
+    'clean=' + wroteOne(r) + ' leak=' + sys.includes('恶意;rm') + ' gatedPatches=' + r2.patches.length + ' keys=' + Object.keys(p2).join(','));
 }
 
 // ---------------------------------------------------------------- D. 变异锚（loadVariant）
@@ -1007,11 +1294,15 @@ await withVariant('fabricated-result-gate', 'if (RESULT_FORBIDDEN_RE.test', 'if 
   const r = await runCaseWith(run, { aiBody: { 概述: '自测已跑通，exit 0，全部断言 OK。' } });
   return { ok: r.err === null && r.out?.skipCode !== 'S9', detail: JSON.stringify(r.out || {}) };
 });
-// F-7 needle 同步（计划 R-B7 连带义务）：调用点形状已改为 headTailOverlap，needle 须指新形状；
-// 摘闸＝headTailOverlap 恒 false，正控夹具（整句复制）摘闸后不再判 S9 ＝ 原闸真实生效（锚测得到）。
-await withVariant('overlap-gate', 'if (headTailOverlap(headBody, existingTail))', 'if (false && headTailOverlap(headBody, existingTail))', async (run) => {
+// F-7 needle 同步（计划 R-B7 连带义务 + 契约 2 解耦重排）：调用点形状已并入 bodyOutcome 装配面
+//   （`if (existingTail && headTailOverlap(...))`），needle 须指新形状；摘闸＝headTailOverlap 恒 false，
+//   正控夹具（整句复制）摘闸后不再判 bodyError（body 正常写）＝原闸真实生效（锚测得到）。
+await withVariant('overlap-gate', 'if (existingTail && headTailOverlap(headBody, existingTail))', 'if (false && existingTail && headTailOverlap(headBody, existingTail))', async (run) => {
   const r = await runCaseWith(run, { existingBody: '旧头部\n\n' + CR_BLOCK, aiBody: { 概述: '本次改动新增跨平台配置生成、新鲜度检查和平台差异清点，覆盖面很广。' } });
-  return { ok: r.err === null && r.out?.skipCode !== 'S9', detail: JSON.stringify(r.out || {}) };
+  const p = r.patches[0]?.payload || {};
+  // 摘闸后：原被正文重叠闸拒绝的夹具应正常写（payload 含 title+body，无 body-not-updated）。
+  return { ok: r.err === null && p.body && p.title && !r.logs.join('\n').includes('body-not-updated'),
+    detail: 'keys=' + Object.keys(p).join(',') + ' out=' + JSON.stringify(r.out || {}) };
 });
 await withVariant('fence-aware-split', 'if (isInsideFence(i))', 'if (false && isInsideFence(i))', async (run) => {
   const r = await runCaseWith(run, { existingBody: '人类真结论\n\n```markdown\n' + SENTINEL + '\n```\n' });
@@ -1089,7 +1380,11 @@ await withVariant('sse-done-break', 'if (sawDone) break;', 'if (false && sawDone
 await withVariant('scope-hint-gate', "if (allowed.includes(scope)) return scope;", "return null;", async (run) => {
   const srcFiles = [{ filename: 'src/index.js', status: 'added', additions: 60, deletions: 0, patch: '@@ -0,0 +1,3 @@\n+export' }, ...FILES];
   const r = await runCaseWith(run, { files: srcFiles, title: 'feat(src): x' });
-  return { ok: r.err === null && r.out?.skipCode === 'S9', detail: JSON.stringify(r.out || {}) };
+  // 契约 2 解耦后：scope 摘闸 → 标题侧不写（NOTE title-not-updated），正文侧照写——
+  //   旧「整包 S9」判定退役，改断 payload 只含 body。
+  const p = r.patches[0]?.payload || {};
+  return { ok: r.err === null && r.patches.length === 1 && p.body && p.title === undefined,
+    detail: 'patches=' + r.patches.length + ' keys=' + Object.keys(p).join(',') };
 });
 // 摘除 env 整表替换（词表回到内置默认）＝配置 AI_SCOPE_WHITELIST 后 governor 仍放行（锚测得到即 ok）。
 await withVariant('scope-env-table', "fromEnv.length > 0 ? fromEnv : SCOPE_WHITELIST", "SCOPE_WHITELIST", async (run) => {
@@ -1196,9 +1491,9 @@ try {
   // CLI 入口判定必须经 realpath 归一：逐字 URL 比对在 Windows 大小写不敏感 FS 下会静默 no-op。
   check('autofill-cli-guard-uses-realpath', /realpathSync/.test(src) && /process\.platform === 'win32'/.test(src));
   check('autofill-cli-guard-not-bare-url-equality', !/pathToFileURL\(path\.resolve\(process\.argv\[1\]\)\)\.href === import\.meta\.url/.test(src));
-  // S9 家族须可归属：类别缺失与类别越表必须分句报，否则夹具的 skipWith 断言形同虚设。
+  // S9 家族须可归属：类别缺失分句报仍保留（结构闸）；词表闸已删除，旧「类别不在词表」分句不得复活。
   check('autofill-category-gate-messages-distinguishable',
-    /缺 `\- 【类别】` 前缀/.test(src) && /类别不在词表/.test(src));
+    /缺 `\- 【类别】` 前缀/.test(src) && !/类别不在词表/.test(src));
 } catch (e) {
   behaviorFailures += 1; failed.push('structural-anchor-block');
   console.log(`FAIL structural-anchor-block: ${e.message}`);
