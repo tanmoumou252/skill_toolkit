@@ -179,6 +179,50 @@ function VERIF_HEADING_WITH_TABLE() {
   return [VERIF_HEADING, '', VERIF_HEADER, VERIF_SEP, ''].join('\n');
 }
 
+// closing keyword 保留/续写（review 契约）：本 bot 每轮整段重写头部区，人类写进描述的 issue 关联
+//   会被冲掉。续写口径三步（对应实测 issue #16 / PR #18 形态）：
+//   ① 提取＝旧 body 围栏外的 **裸** `#N` 引用（不限 keyword 前缀——创建 PR 时手写的就是裸编号），
+//      跨形态去重；是否真构成关联交给 ② 反查闸裁决，提取面放宽不引入捏造；
+//   ② 反查闸两道：先 `GET /issues/N` 判类型——响应带 `pull_request` 字段即编号实为 PR，跳过
+//      （绝不给「关别的 PR」续写）；确为 issue 的再拉 timeline，`cross-referenced`（source 指向本 PR）
+//      或 `connected`（subject 指向本 PR，= 手动 Development 关联，网页上那条 linked a pull request
+//      that will close this issue）任一命中即确认；任一反查失败（5xx 等）→ fail-closed 整体不续写；
+//   ③ 续写行＝脚本以确认集合构造 `Closes: #N, #M`（固定格式，无模型参与，不捏造——无确认即不加行）；
+//   ④ 注入面＝固定格式行只含数字与既有确认事实，MANUAL_LINE_RE/sentinel 语义不受影响。
+const CLOSING_REF_RE = /#(\d+)\b/g;
+function extractClosingRefs(bodyText, inFenceFlags) {
+  const out = new Set();
+  const lines = String(bodyText || '').split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (inFenceFlags && inFenceFlags[i]) continue; // 围栏内引用不是关联面（与 pr-manual/sentinel 同口径）
+    CLOSING_REF_RE.lastIndex = 0;
+    let m;
+    while ((m = CLOSING_REF_RE.exec(lines[i])) !== null) out.add(Number(m[1]));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+async function verifiedClosingRefs(refs, gh, env) {
+  const confirmed = [];
+  for (const n of refs) {
+    try {
+      // 类型闸：`#N` 未必是 issue——带 pull_request 字段的编号实为 PR，跳过（不关别的 PR）。
+      const it = await gh.get(`repos/${env.REPO}/issues/${n}`);
+      if (it && it.pull_request) continue;
+      const events = await gh.get(`repos/${env.REPO}/issues/${n}/timeline`);
+      const hit = Array.isArray(events) && events.some((e) =>
+        e && (
+          (e.event === 'cross-referenced' && e.source && e.source.issue &&
+            Number(e.source.issue.number) === Number(env.PR_NUMBER)) ||
+          (e.event === 'connected' && e.subject && Number(e.subject.number) === Number(env.PR_NUMBER))
+        ));
+      if (hit) confirmed.push(n);
+    } catch (err) {
+      return { confirmed: [], verified: false, failedIssue: n, failedMsg: sanitize(err && err.message) }; // fail-closed：反查不可达不续写
+    }
+  }
+  return { confirmed, verified: true };
+}
+
 function spliceVerification(body, tableBlock) {
   const secs = sectionsOf(body);
   const verif = secs.find((s) => s.name === '验证');
@@ -550,6 +594,21 @@ export async function runAutoFill(deps) {
   }
   if (!pr.head || pr.head.sha !== env.HEAD_SHA) return report('S6', '取数后 head 与事件 head 不一致');
 
+  // 幂等短路闸（降频契约）：本 head 上已存在本运行的佐证 status（context=auto-fill-pr、state=success
+  //   且 description 携带的 head 与 env.HEAD_SHA 一致）→ 本轮已处理过（reopened / 重复投递同 head），
+  //   直接 S0 短路——1 次 GET 替代 commits/files/AI/PATCH 全链。佐证由上轮成功路径写入（:postStatus），
+  //   state=success 且 head 一致两个条件缺一不可：stale 佐证（别的 head）与 failure 佐证（上轮失败）
+  //   都不短路，全链照跑。status 读取失败 fail-open（不短路，退回全链，与 labeler 消费面口径一致）。
+  try {
+    const st = await gh.get(`repos/${env.REPO}/commits/${env.HEAD_SHA}/status`);
+    const corroborated = (st?.statuses || []).some((s) => {
+      if (!s || s.state !== 'success' || s.context !== 'auto-fill-pr') return false;
+      const m = /head\s*=?\s*([0-9a-f]{40})\s*$/.exec(String(s.description || ''));
+      return Boolean(m) && m[1] === String(env.HEAD_SHA);
+    });
+    if (corroborated) return report('S0', '本 head 已有成功佐证（幂等短路）：reopen/重复投递无需重写');
+  } catch { /* status 读取失败 → fail-open 全链照跑 */ }
+
   const templatePath = String(env.TEMPLATE_PATH || '');
   if (!templatePath.startsWith('.github/') || templatePath.includes('..')) return report('S7', 'TEMPLATE_PATH 越界：' + sanitize(templatePath));
   const template = readFile(templatePath);
@@ -585,6 +644,21 @@ export async function runAutoFill(deps) {
   const scopeHint = [...new Set(files.map((f) => String(f.filename).split('/')[0]) )];
   // 文件数取 changed_files、提交数取裁剪前全量（REST 事实源，对齐 :224 与契约 :307）；截断/裁剪只减入模数组，不减 PR 真实规模
   const statsText = `${pr.changed_files || files.length} 文件，+${pr.additions || 0}/-${pr.deletions || 0}, ${totalCommits} commits`;
+
+  // closing keyword 保留/续写：提取（旧 body 围栏外）→ gh 反查（timeline cross-referenced 指向本 PR）
+  //   → 确认集合构造续写行。反查失败 fail-closed（不续写不告警中断，主交付不阻塞）。
+  //   在 AI 调用前完成——续写行是事实构造，不依赖模型输出。
+  const closingRefs = extractClosingRefs(pr.body, inFence);
+  let closingLine = null;
+  if (closingRefs.length > 0) {
+    const vr = await verifiedClosingRefs(closingRefs, gh, env);
+    if (vr.verified && vr.confirmed.length > 0) {
+      closingLine = 'Closes: ' + vr.confirmed.map((n) => `#${n}`).join(', ');
+      note('closing-keywords-carried-over: ' + vr.confirmed.join(','));
+    } else if (!vr.verified) {
+      note(`closing-keywords-verify-failed issue=${vr.failedIssue}: ${vr.failedMsg}（fail-closed 不续写）`);
+    }
+  }
   const scopes = allowedScopes(env, scopeHint);
   const prompt = buildPrompt(template, { commits, files, patches, scopeHint, scopes, statsText });
   const ai = await callAI({ fetchImpl, env, prompt, note });
@@ -677,6 +751,9 @@ export async function runAutoFill(deps) {
       return tv.length > 0 ? tv : [];
     })();
     let headBody = mergeVerification(statsLine, existingHead, templateVerifCommands);
+    // closing keyword 续写行落位：头部区末尾（验证节之后、尾块之前）——GitHub 只在描述正文解释
+    //   closing keyword，尾块属 CodeRabbit 自治区不混入；无确认关联时 closingLine 为 null 不加行。
+    if (closingLine) headBody = headBody.trimEnd() + '\n\n' + closingLine + '\n';
     let finalBody = finalBodyOf(existingTail ? headBody.trimEnd() + '\n\n' + existingTail + '\n' : headBody.trimEnd() + '\n');
 
     if (existingTail && headTailOverlap(headBody, existingTail)) {
@@ -707,6 +784,8 @@ export async function runAutoFill(deps) {
       const head2 = l2sLines.slice(0, idx2 === -1 ? l2sLines.length : idx2).join('\n');
       const tail2 = idx2 === -1 ? '' : l2sLines.slice(idx2).join('\n');
       headBody = mergeVerification(statsLine, head2, templateVerifCommands);
+      // CAS 重合并路径同样续写 closing keyword（同一事实源，重合并不得丢失关联行）。
+      if (closingLine) headBody = headBody.trimEnd() + '\n\n' + closingLine + '\n';
       finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
       if (tail2 && headTailOverlap(headBody, tail2)) {
         return fail('以最新正文重合并后仍与尾块重叠');
@@ -749,7 +828,9 @@ export async function runAutoFill(deps) {
     await gh.postStatus(env.HEAD_SHA, {
       state: 'success',
       context: 'auto-fill-pr',
-      description: `auto-filled PR #${env.PR_NUMBER} head ${String(env.HEAD_SHA).slice(0, 7)}`,
+      // 佐证 description 携带完整 40 位 sha：读取端 S0 幂等短路闸按 40 位正则回读比对，
+      //   截短会导致写入/读取永不匹配、短路闸失效（review 契约：两端格式必须一致）。
+      description: `auto-filled PR #${env.PR_NUMBER} head ${String(env.HEAD_SHA)}`,
       target_url: String(env.RUN_URL || ''),
     });
   } catch (err) {

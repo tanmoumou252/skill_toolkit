@@ -166,6 +166,36 @@ async function runCase(opts = {}) {
       calls.get += 1; calls.paths.push(p);
       if (p.endsWith('/commits')) return { commits: opts.commits ?? COMMITS };
       if (p.endsWith('/files')) return { files: opts.files ?? FILES };
+      // issue timeline 桩面（closing keyword 反查闸）：/issues/N/timeline 返回 cross-referenced 事件集，
+      //   事件 source.issue.number 指向本 PR（PR_NUMBER=8）才算确认关联；connectedIssue 模拟手动
+      //   Development 关联（connected 事件 subject 指向本 PR）；prNumbers 模拟「#N 实为 PR」形态；
+      //   timelineError 模拟 5xx 反查失败。
+      const tl = /\/issues\/(\d+)\/timeline$/.exec(p);
+      if (tl) {
+        if (opts.timelineError) { const e = new Error('timeline 5xx'); e.status = opts.timelineError; throw e; }
+        const n = Number(tl[1]);
+        const xref = (opts.linkedIssues || []).includes(n)
+          ? [{ event: 'cross-referenced', source: { issue: { number: 8, pull_request: {} } } }] : [];
+        const conn = (opts.connectedIssues || []).includes(n)
+          ? [{ event: 'connected', subject: { number: 8 } }] : [];
+        return [...xref, ...conn];
+      }
+      // issue 存在性/类型桩面：prNumbers 列出的编号带 pull_request 字段（实为 PR，非 issue）。
+      const it = /\/issues\/(\d+)$/.exec(p);
+      if (it) {
+        if (opts.issueLookupError) { const e = new Error('issue lookup 5xx'); e.status = opts.issueLookupError; throw e; }
+        const n = Number(it[1]);
+        return (opts.prNumbers || []).includes(n)
+          ? { number: n, pull_request: { url: 'x' } }
+          : { number: n };
+      }
+      // 佐证 status 桩面（幂等短路闸）：`/commits/<sha>/status` 返回 head 佐证 status 列表——
+      //   与本脚本 gh.get 解包约定一致（顶层 statuses，无 data 包裹；同 /commits 分支形态）。
+      //   headStatuses 形态＝[{state:'success', context:'auto-fill-pr', description:'… head=<40hex>'}]。
+      if (/\/status$/.test(p)) {
+        const list = opts.headStatuses || [];
+        return { state: list[0]?.state || 'pending', statuses: list };
+      }
       prSeen += 1; return prSeen <= 1 ? pr0 : pr1;
     },
     patch: async (p, payload) => { calls.patch += 1; patches.push({ p, payload }); return {}; },
@@ -251,6 +281,59 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
 // 同一个 S 码可由多道闸产出（S6 两处 head 复核、S7 两条通道、S8 四种失败、S9 十余条闸）。
 // 只断 `skipCode` 就是"码对闸错"的假绿面，故每条都断该闸独有的理由串。
 { const r = await runCase({ env: { AUTO_FILL_PR_ENABLED: 'false' } }); record('autofill-skip-s11-disabled', skipWith(r, 'S11', '停用') && r.calls.get === 0, `out=${JSON.stringify(r.out || {})} get=${r.calls.get}`); }
+{ // 幂等短路闸（降频契约）：head 上已存在本运行的佐证 status（context=auto-fill-pr 且
+  //   description 携带的 head 与 env.HEAD_SHA 一致）→ 本轮已处理过，直接 S0 短路——
+  //   1 次 GET status 替代 commits/files/AI/PATCH 全链（ reopened / 重复投递同 head 场景）。
+  //   夹具格式契约（review 契约）：佐证取自生产写入端真实产物——先正常跑一轮 runCase 拿
+  //   first.calls.lastStatus（state/context/description 三元组），再回灌后续 runCase，
+  //   使写入端与读取端格式漂移（如 #1 的 7 位 sha 截短）在测试面直接暴露为红。
+  const SHA40 = 'a'.repeat(40);
+  const first = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+  });
+  const ls = first.calls.lastStatus;
+  const fixtureOk = ls && ls.state === 'success' && ls.context === 'auto-fill-pr' &&
+    new RegExp(`head ${SHA40}\\s*$`).test(String(ls.description || ''));
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: ls.state, context: ls.context, description: ls.description }] : [],
+  });
+  record('autofill-idempotent-shortcircuit-same-head-corroborated',
+    first.err === null && fixtureOk && r.err === null && r.out?.skipCode === 'S0' &&
+      String(r.out?.skipReason || '').includes('佐证') &&
+      r.patches.length === 0 && r.calls.get <= 2,
+    `fixture=${JSON.stringify(ls || null)} out=${JSON.stringify(r.out || {})} get=${r.calls.get}`);
+}
+{ // 短路负控一：佐证 description 携带**别的 head**（stale 佐证）→ 不短路，全链照跑。
+  //   佐证形态同样取自写入端真实产物（与正控同源），仅改写 description 的 head 段。
+  const SHA40 = 'a'.repeat(40); const SHA40B = 'b'.repeat(40);
+  const first = await runCase({ env: { HEAD_SHA: SHA40 }, pr: { head: { sha: SHA40 } } });
+  const ls = first.calls.lastStatus;
+  const staleDesc = ls ? String(ls.description || '').replace(new RegExp(`${SHA40}\\s*$`), SHA40B) : '';
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: ls.state, context: ls.context, description: staleDesc }] : [],
+  });
+  record('autofill-no-shortcircuit-stale-corroboration',
+    first.err === null && Boolean(ls) && r.err === null && !r.out?.skipCode && r.reqText.length > 0,
+    `fixture=${JSON.stringify(staleDesc)} out=${JSON.stringify(r.out || {})} reqLen=${r.reqText.length}`);
+}
+{ // 短路负控二：佐证 state 为 failure（上轮写失败）→ 不短路，重试全链（形态同源自写入端）。
+  const SHA40 = 'a'.repeat(40);
+  const first = await runCase({ env: { HEAD_SHA: SHA40 }, pr: { head: { sha: SHA40 } } });
+  const ls = first.calls.lastStatus;
+  const r = await runCase({
+    env: { HEAD_SHA: SHA40 },
+    pr: { head: { sha: SHA40 } },
+    headStatuses: ls ? [{ state: 'failure', context: ls.context, description: ls.description }] : [],
+  });
+  record('autofill-no-shortcircuit-failed-corroboration',
+    first.err === null && Boolean(ls) && r.err === null && !r.out?.skipCode && r.reqText.length > 0,
+    `fixture=${JSON.stringify(ls || null)} out=${JSON.stringify(r.out || {})} reqLen=${r.reqText.length}`);
+}
 { const r = await runCase({ env: { AUTO_FILL_PR_ENABLED: ' FALSE ' } }); record('autofill-skip-s11-case-insensitive', skipWith(r, 'S11', '停用'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ env: { GITHUB_TOKEN: '' } }); record('autofill-skip-s1-missing-token', skipWith(r, 'S1', 'GITHUB_TOKEN'), JSON.stringify(r.out || {})); }
 { const r = await runCase({ env: { AI_MODEL: '' } }); record('autofill-skip-s2-missing-model', skipWith(r, 'S2', 'AI_MODEL'), JSON.stringify(r.out || {})); }
@@ -398,6 +481,96 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
   record('autofill-path-unverified-no-false-positive',
     wroteOne(r) && !/path-unverified/.test(notes),
     `out=${JSON.stringify(r.out || {})} notes=${notes.slice(0, 200)}`);
+}
+
+// ---------------------------------------------------------------- closing keyword 保留/续写（gh 反查闸）
+// 契约：旧 body 围栏外的 #N 引用（含裸编号与 keyword 前缀形态）先经 GET /issues/N 判类型——
+//   带 pull_request 字段的编号实为 PR，跳过（不关别的 PR）；确为 issue 的再经 timeline 反查，
+//   「cross-referenced 事件 source 指向本 PR」或「connected 事件 subject 指向本 PR」
+//   （= 网页上那条 linked a pull request that will close this issue）任一命中即确认关联，
+//   才在头部区末尾续写 `Closes: #N` 行；bot 每轮整段重写头部区，人类写进描述的关联会被冲掉；
+//   续写行由脚本以真实反查事实构造，无模型参与，无确认即不加行（零捏造）。
+{
+  // 正控：旧 body 两个 keyword 引用（大小写/冒号变体）+ timeline 双双确认 → 续写一行 Closes: #12, #13
+  //   落位＝验证节之后、尾块/sentinel 之前（头部区末尾）。
+  const r = await runCase({ existingBody: 'Closes #12\n\rFixes: #13', linkedIssues: [12, 13] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-carried-over',
+    wroteOne(r) && body.includes('Closes: #12, #13') &&
+      body.indexOf('Closes: #12, #13') > body.indexOf('## 验证') &&
+      body.indexOf('Closes: #12, #13') < body.indexOf('auto-fill-pr: synced'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 裸编号提取（实测场景：创建 PR 时手写 #16，body 无 keyword 前缀）→ 反查确认后照常续写
+  const r = await runCase({ existingBody: '相关 issue：#16', linkedIssues: [16] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-bare-ref-carried-over',
+    wroteOne(r) && body.includes('Closes: #16'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 编号实为 PR（GET /issues/N 带 pull_request 字段，如 #18）→ 跳过，绝不产生「关别的 PR」的续写
+  const r = await runCase({ existingBody: 'Closes #12\n#18', linkedIssues: [12], prNumbers: [18] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-pr-number-skipped',
+    wroteOne(r) && body.includes('Closes: #12') && !/#18/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 手动 Development 关联（connected 事件 subject 指向本 PR）＝另一确认通道，body 裸引用照常续写
+  const r = await runCase({ existingBody: '见 #16', connectedIssues: [16] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-connected-event-confirmed',
+    wroteOne(r) && body.includes('Closes: #16'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 类型判定反查不可达（GET /issues/N 5xx）→ fail-closed 不续写（不捏造），其余内容照常写回
+  const r = await runCase({ existingBody: 'Closes #12', issueLookupError: 500 });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-issue-lookup-fail-closed',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('## 概述'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 反查只确认其一：#12 关联、#99 未关联 → 只续写 #12，严禁把未确认引用捏造成关联
+  const r = await runCase({ existingBody: 'Closes #12, Closes #99', linkedIssues: [12] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-gh-verified-only',
+    wroteOne(r) && body.includes('Closes: #12') && !/#99/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 反查不可达（timeline 5xx）→ fail-closed 不续写（不捏造），其余内容照常写回
+  const r = await runCase({ existingBody: 'Closes #12', timelineError: 500 });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-unverifiable-fail-closed',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('## 概述'),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 围栏内引用不是关联面：`closes #77` 在代码围栏内 → 不提取不续写
+  const r = await runCase({ existingBody: '## 概述\n\n```\ncloses #77\n```', linkedIssues: [77] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-fence-reference-ignored',
+    wroteOne(r) && !/#77/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 旧 body 无任何引用 → 不追加 Closes 行（零捏造底线）
+  const r = await runCase({});
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-keywords-none-no-fabrication',
+    wroteOne(r) && !/Closes:/.test(body),
+    'body tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 去重：同一 issue 多种 keyword/变体引用 → 只续写一次 #12
+  const r = await runCase({ existingBody: 'fixes #12\ncloses #12\nresolved #12', linkedIssues: [12] });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  const count = (body.match(/#12/g) || []).length;
+  record('autofill-closing-keywords-dedup', wroteOne(r) && count === 1, `occurrences=${count}`);
 }
 {
   const r = await runCase({ aiBody: { 主要变更: '5 文件\n\n- 【新增】`.github/scripts/auto-fill-pr.mjs`：注入式 runAutoFill 与跳过矩阵\n- 【测试】`checks/auto-fill-pr-workflow-selftest.mjs`：逐码断言与变异锚矩阵\n- 【集成】`checks/package.json`：新自测接入默认 test 链\n- 【修复】`vars.AUTO_FILL_PR_ENABLED` 与 `head.sha` 这类点号标识符不得被误判为路径' } });

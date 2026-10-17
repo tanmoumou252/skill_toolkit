@@ -50,17 +50,23 @@ jobs:
     # （issue.pull_request 缺席＝普通 issue 顶层评论），在此直接丢弃——不分配 runner、
     # 不跑 resolve-pr，杜绝「任意评论先拉起工作流、进 job 才发现类型不对」的过程浪费。
     # 官方 Bot 登录名单一事实源＝工作流顶部 env（脚本内 BOT_DEFINITIONS 与之同源逐字）。
+    # 触发收敛（上游实质变化才重评，人类定版）：issue_comment 事件里 review 内联评论的
+    # created/edited 也被 GitHub 投递为 issue_comment（实测 run #101：kilo 内联 edited 触发全量
+    # 重评）。顶层摘要评论无 pull_request_url 字段、内联评论有——job-gate 据此排除内联事件，
+    # 杜绝「内联编辑也拉起 resolve-pr+sync-labels」的过程浪费（skipped run 记录仍会产生，但
+    # 零 runner、零 API）。
     if: >
       github.event_name != 'issue_comment' ||
       (github.event.comment.user.type == 'Bot' &&
        contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login) &&
+       github.event.comment.pull_request_url == null &&
        github.event.issue.pull_request != null)
     runs-on: ubuntu-24.04
     outputs:
       number: ${{ steps.resolve.outputs.number }}
     steps:
       - id: resolve
-        if: github.event_name != 'issue_comment' || github.event.comment.user.type == 'Bot'
+        if: github.event_name != 'issue_comment' || (github.event.comment.user.type == 'Bot' && github.event.comment.pull_request_url == null)
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
@@ -79,14 +85,17 @@ jobs:
 
   sync-labels:
     needs: resolve-pr
-    # 双层前置分流：issue_comment 仅在受信 Bot 作者（与 resolve-pr 同一 login 白名单 env）且为
-    # PR 评论时才进入本 job；check_run 仍按名称/app slug 归因。脚本内 Bot 作者闸保留为纵深防御。
+    # 双层前置分流：issue_comment 仅在受信 Bot 作者（与 resolve-pr 同一 login 白名单 env）的
+    # **顶层**摘要评论事件（无 pull_request_url）时才进入本 job——内联评论编辑事件在
+    # resolve-pr 层已被排除，此处再拦一道为纵深防御。check_run 仍按名称/app slug 归因。
+    # 脚本内 Bot 作者闸保留为第三层。
     if: >
       needs.resolve-pr.outputs.number != '' &&
       (github.event_name == 'pull_request_target' ||
        github.event_name == 'pull_request_review' ||
        (github.event_name == 'issue_comment' &&
         github.event.comment.user.type == 'Bot' &&
+        github.event.comment.pull_request_url == null &&
         contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login)) ||
        contains(github.event.check_run.name, 'CodeRabbit') ||
        contains(github.event.check_run.app.slug, 'coderabbit') ||
@@ -140,9 +149,12 @@ jobs:
             const isCommentWake = context.eventName === 'issue_comment';
             const trustedCommentLogins = new Set(Object.values(BOT_DEFINITIONS).flatMap(d => d.logins || []));
             // 空/缺 logins 定义 fail-closed：派生集合不含该 login（不放行未知 actor）。
+            // 内联评论编辑事件也投递为 issue_comment（实测 run #101）：评分管道只吃顶层
+            // marker 评论（4.3），内联正文永不入评——此类事件对重评无输入贡献，直接退出。
             if (isCommentWake &&
                 (context.payload.comment?.user?.type !== 'Bot' ||
-                 !trustedCommentLogins.has(context.payload.comment?.user?.login))) {
+                 !trustedCommentLogins.has(context.payload.comment?.user?.login) ||
+                 context.payload.comment?.pull_request_url != null)) {
               console.log('[PR Check] Untrusted comment author; skipping trusted-writer wake.');
               return;
             }
@@ -478,6 +490,41 @@ jobs:
               // HEAD 徽章走 shields 动态外链：URL 内嵌本轮 short sha 天然唯一（免缓存），不落库、
               //   不写仓库文件（本工作流因此无需 contents 写权）；展示与降级同形，绝不阻塞标签主链路。
               const headBadgeImg = `<img src="https://img.shields.io/badge/HEAD-${shortSha}-0969da?style=flat" height="18" valign="middle">`;
+              // 关联小节（定版契约）：timeline 反查本 PR 的关联 issue/PR——cross-referenced 事件
+              //   source 指向本 PR 或 connected 事件 subject 指向本 PR；按 source/subject.issue 是否带
+              //   pull_request 字段分 PR/Issue 归类。渲染＝编号逐行裸写 + 尾随空格（GitHub autolink
+              //   驱动形态，实测 PR#18 评论 `#16 \n#19 ` 验证），零 Markdown 链接零徽章；单向缺省整块
+              //   不写、全无整节省略、反查失败整节省略（展示面降级，绝不阻塞打标主链路）。
+              let linkedPrs = []; let linkedIssues = [];
+              try {
+                // listEventsForTimeline（GET /issues/{n}/timeline）而非 listEvents（/events）：
+                //   cross-referenced/connected 事件只出现在 timeline 端点，/events 永远查不到
+                //   （octokit 官方端点名，review 契约；selftest 桩面同名对齐）。
+                const linkedEvents = await github.paginate(github.rest.issues.listEventsForTimeline, { owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber });
+                const prSet = new Set(); const issueSet = new Set();
+                for (const e of linkedEvents || []) {
+                  const src = e?.event === 'cross-referenced' ? e.source?.issue
+                    : (e?.event === 'connected' ? e.subject : null);
+                  const n = Number(src?.number);
+                  if (!Number.isInteger(n) || n === prNumber) continue;
+                  // 双保险类型闸：events API 的 source/subject 精简形态可能不带 pull_request 字段
+                  //   （GraphQL 必带、REST 不保证），逐编号 GET /issues/N 复验——带 pull_request
+                  //   字段即实为 PR；复验失败按 events 面判定兜底（降级不误删）。
+                  let isPr = Boolean(src.pull_request);
+                  if (!isPr) {
+                    try {
+                      const it = await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n });
+                      isPr = Boolean(it?.data?.pull_request);
+                    } catch { /* 复验不可达 → 沿用 events 面判定 */ }
+                  }
+                  if (isPr) prSet.add(n); else issueSet.add(n);
+                }
+                linkedPrs = [...prSet].sort((a, b) => a - b);
+                linkedIssues = [...issueSet].sort((a, b) => a - b);
+              } catch (err) {
+                linkedPrs = []; linkedIssues = [];
+                console.log(`[Status Comment] Linked items fetch failed (display-only, section omitted): ${err?.status || err?.message || err}`);
+              }
               const renderBody = (url) => {
                 const lines = [
                   STATUS_COMMENT_MARKER,
@@ -512,6 +559,19 @@ jobs:
                 lines.push(`| ${ICON('pencil', 14)} **PR 标题** | ${titleRowBadge} | 由 auto-fill 维护，对齐 head \`${shortSha}\` |`);
                 lines.push(`| ${ICON('file', 14)} **PR 描述** | ${titleRowBadge} | ${autofillNote} |`);
                 lines.push('', '<br>', '');
+                // 关联小节渲染：单向缺省整块不写、全无整节省略（linkedPrs/linkedIssues 均空时
+                //   icon-link.svg 不在场即整节省略的断言锚）；编号逐行裸写 + 尾随空格。
+                if (linkedPrs.length || linkedIssues.length) {
+                  lines.push(`#### ${ICON('link', 14)} 关联`, '');
+                  if (linkedPrs.length) {
+                    // 一行多编号：`#17 #18 ` 同行空格分隔（紧凑形态，人类定版）。
+                    lines.push(`${ICON('git-pull-request', 14)} **PR**：`, linkedPrs.map((n) => `#${n} `).join(''), '');
+                  }
+                  if (linkedIssues.length) {
+                    lines.push(`${ICON('issue-opened', 14)} **Issue**：`, linkedIssues.map((n) => `#${n} `).join(''), '');
+                  }
+                  lines.push('<br>', '');
+                }
                 lines.push(`##### ${ICON('link-external', 14)} 本评论链接：`, '', '```', url || `${repoUrl}/pull/${prNumber}`, '```', '');
                 lines.push(`##### ${ICON('code', 14)} 本轮内联评论抓取（复制整块发给 agent）：`, '');
                 if (!Array.isArray(inlineComments)) {
@@ -532,7 +592,13 @@ jobs:
                   risk_score: riskScore,
                   bots: Object.fromEntries(Object.entries(botStatuses).map(([k, s]) => [k, s.state])),
                   evidence: Object.fromEntries(Object.entries(botStatuses).map(([k, s]) => [k, s.evidence || 'none'])),
-                  links: { self: url, evidence: evidenceUrl },
+                  links: {
+                    self: url, evidence: evidenceUrl,
+                    // 关联机读面：仅查到时在场（空数组整键缺席，消费方按缺省=无关联读）。
+                    ...(linkedPrs.length || linkedIssues.length
+                      ? { linked_prs: linkedPrs, linked_issues: linkedIssues }
+                      : {}),
+                  },
                   autofill: { title: autofillState, body: autofillState },
                   comment_url: url,
                 };
