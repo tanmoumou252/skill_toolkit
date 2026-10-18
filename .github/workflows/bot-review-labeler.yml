@@ -993,8 +993,13 @@ jobs:
             //   （file_limit/manual_required）」；required 齐评但可选 bot 尚未落定（absent 无载体）→
             //   review:pending（诚实等待，非核准），其后续事件重评自然升级。EXPECTED_BOTS 只含 required 时
             //   allExpectedResolved ≡ allBotsRated，行为零变化。
+            // 内联回灌收紧（PR#21 CodeRabbit Major）：in_progress/absent 态即使评级非 null 也不算落定——
+            //   4.3b 顶层评论消费无 head 绑定，absent/in_progress bot 的评级可能来自旧 head 的顶层评论
+            //   （`Merge Risk: Low` 穿透核准门冒充本轮裁决）；本轮载体的评级只信任 head 绑定的 review 与
+            //   completed check run，in_progress/absent 恰说明本轮载体未落定，pending 等待重评。
             const allExpectedResolved = expectedKeys.every(key =>
-              ratingByBot[key] !== null || ['file_limit', 'manual_required'].includes(botStatuses[key]?.state));
+              !['in_progress', 'absent'].includes(botStatuses[key]?.state) &&
+              (ratingByBot[key] !== null || ['file_limit', 'manual_required'].includes(botStatuses[key]?.state)));
             let finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;
             const partialRating = !allBotsRated && hasParseableRating;
             let verdict = 'risk';

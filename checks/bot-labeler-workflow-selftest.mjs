@@ -2056,6 +2056,32 @@ function record(name, ok, detail) {
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
       ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
+// C2 内联回灌：未落定 CodeRabbit 的旧顶层评论评级不得穿透核准门。
+//   4.3b 顶层评论消费无 head 绑定（既有设计）——in_progress/absent 的 CodeRabbit 存在旧
+//   `Merge Risk: Low` 顶层评论时 crScore=1 非 null；旧 allExpectedResolved 只查评级非空
+//   → approved（旧评论评级冒充本轮裁决）。in_progress 与 absent 两态均须 pending。
+{
+  const crTop = { id: 95, body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: Low', user: { type: 'Bot', login: 'coderabbitai[bot]' } };
+  const inProg = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** No Issues Found' }],
+    comments: [crTop],
+    checkRuns: [{ name: 'CodeRabbit Review', status: 'in_progress', conclusion: null,
+      app: { slug: 'coderabbitai', id: 347564 }, output: { title: 'scanning', summary: '', text: '' } }],
+    pullComments: [],
+  });
+  const absent = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** No Issues Found' }],
+    comments: [crTop],
+    pullComments: [],
+  });
+  record('workflow-unsettled-coderabbit-stale-top-comment-stays-pending',
+    inProg.err === null && absent.err === null &&
+      inProg.labelsAdded.flat().includes('review:pending') && !inProg.labelsAdded.flat().includes('review:approved') &&
+      absent.labelsAdded.flat().includes('review:pending') && !absent.labelsAdded.flat().includes('review:approved'),
+    'inprog=' + JSON.stringify(inProg.labelsAdded.flat()) + ' absent=' + JSON.stringify(absent.labelsAdded.flat()));
+}
 
 // ================================================================
 // C-A/C-B/契约 4（20261017-autofill-labeler-fix）：顶层摘要评论采集面 + verdict 兜底 +

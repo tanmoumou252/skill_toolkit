@@ -239,12 +239,22 @@ const KEYWORD_COVERED_RE = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s*:?\s*#
 function maskNonDeclarationText(bodyText) {
   const text = String(bodyText || '');
   const chars = [...text];
+  // 关闭检测必须对照原始文本（本字符序列已被本函数占位——读 chars 永不命中 `-->`，
+  //   注释将吞掉其后全文，注释后的真实声明面被误遮罩为未覆盖 → 确认集补写双写共存）。
+  //   索引基必须与 chars 一致：[...text] 展开为码点数组，astral emoji（如 🤖）占 1 个码点位
+  //   但占 2 个 UTF-16 代码单元——直接 text[i-1] 按代码单元取值会在含 astral 字符的行上偏移，
+  //   `-->` 漏检（内联回灌实证）。故按码点切原始文本得到 codepoints，与 chars 逐位对齐。
+  const codepoints = [...text];
   const blank = (i) => { if (chars[i] !== '\n' && chars[i] !== '\r') chars[i] = ' '; };
   let inHtmlComment = false;
   let inInlineCode = false;
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i];
-    if (inHtmlComment) { blank(i); if (ch === '>' && chars[i - 1] === '-' && chars[i - 2] === '-') inHtmlComment = false; continue; }
+    if (inHtmlComment) {
+      blank(i);
+      if (ch === '>' && codepoints[i - 1] === '-' && codepoints[i - 2] === '-') inHtmlComment = false;
+      continue;
+    }
     if (inInlineCode) { blank(i); if (ch === '`') inInlineCode = false; continue; }
     if (ch === '<' && chars[i + 1] === '!' && chars[i + 2] === '-' && chars[i + 3] === '-') {
       inHtmlComment = true; blank(i); blank(i + 1); blank(i + 2); blank(i + 3); i += 3; continue;

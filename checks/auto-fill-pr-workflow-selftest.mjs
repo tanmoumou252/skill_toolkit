@@ -637,6 +637,37 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
     'tail=' + JSON.stringify(body.slice(-160)));
 }
 {
+  // 注释关闭感知契约（PR#21 内联回灌）：HTML 注释有界——`-->` 后的文本恢复为声明面。
+  //   缺陷形：占位实现把关闭检测也建立在已占位字符上（`-->` 被先吃成空格，永不命中）
+  //   → 注释后全文被吞 → 注释后的真实声明 `fixes #17` 不入覆盖集 → 确认集补写
+  //   `Closes: #17` 与人类声明双写共存（契约 1 要消除的形态复发）。
+  //   判别面：注释内 `fixes #16` 在提取面（裸 #N 候选）照常入候选并确认，但不算覆盖——
+  //   若遮罩永不终止，#16 与 #17 双双不入覆盖集 → 恰写出 `Closes: #16, closes #17`；
+  //   正确实现只写 `Closes: #16`（#17 已被注释后真实声明覆盖）。旧实现必红。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n<!-- fixes #16 --> 引用；真实声明 fixes #17',
+    closingIssues: [16, 17],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-comment-close-terminates-masking',
+    wroteOne(r) && body.includes('Closes: #16') && !/Closes: #16, closes #17/.test(body) && !/Closes: #17/.test(body),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // astral 码点偏移回归（内联回灌追加）：chars=[...text] 是码点数组（astral emoji 占 1 码点位），
+  //   而关闭检测的 text[i-1]/text[i-2] 是 UTF-16 代码单元索引——注释前含 astral emoji 时两套索引
+  //   错位 1，`-->` 检测偏移、注释吞掉其后一个声明字符。夹具：🤖（U+1F916，2 代码单元）在注释前。
+  //   期望：#17（注释后真实声明）照常算覆盖不续写；#16（注释内）不算覆盖照常续写。
+  const r = await runCase({
+    existingBody: '## 概述\n\n🤖 修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n🤖 <!-- fixes #16 --> 引用；真实声明 fixes #17',
+    closingIssues: [16, 17],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-comment-close-astral-offset',
+    wroteOne(r) && body.includes('Closes: #16') && !/Closes: #16, closes #17/.test(body) && !/Closes: #17/.test(body),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
   // NOTE 口径契约（PR 审查 M2 回灌）：三 NOTE 三态——确认集直写形态退役后：
   //   ① 全被人类 keyword 覆盖 → closing-keywords-all-covered-by-human（零行可观测）；
   //   ② 部分覆盖 → closing-keywords-carried-over 记差集（仅 #19，被覆盖 #16 不在列）；
