@@ -50,17 +50,23 @@ jobs:
     # （issue.pull_request 缺席＝普通 issue 顶层评论），在此直接丢弃——不分配 runner、
     # 不跑 resolve-pr，杜绝「任意评论先拉起工作流、进 job 才发现类型不对」的过程浪费。
     # 官方 Bot 登录名单一事实源＝工作流顶部 env（脚本内 BOT_DEFINITIONS 与之同源逐字）。
+    # 触发收敛（上游实质变化才重评，人类定版）：issue_comment 事件里 review 内联评论的
+    # created/edited 也被 GitHub 投递为 issue_comment（实测 run #101：kilo 内联 edited 触发全量
+    # 重评）。顶层摘要评论无 pull_request_url 字段、内联评论有——job-gate 据此排除内联事件，
+    # 杜绝「内联编辑也拉起 resolve-pr+sync-labels」的过程浪费（skipped run 记录仍会产生，但
+    # 零 runner、零 API）。
     if: >
       github.event_name != 'issue_comment' ||
       (github.event.comment.user.type == 'Bot' &&
        contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login) &&
+       github.event.comment.pull_request_url == null &&
        github.event.issue.pull_request != null)
     runs-on: ubuntu-24.04
     outputs:
       number: ${{ steps.resolve.outputs.number }}
     steps:
       - id: resolve
-        if: github.event_name != 'issue_comment' || github.event.comment.user.type == 'Bot'
+        if: github.event_name != 'issue_comment' || (github.event.comment.user.type == 'Bot' && github.event.comment.pull_request_url == null)
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
@@ -79,14 +85,17 @@ jobs:
 
   sync-labels:
     needs: resolve-pr
-    # 双层前置分流：issue_comment 仅在受信 Bot 作者（与 resolve-pr 同一 login 白名单 env）且为
-    # PR 评论时才进入本 job；check_run 仍按名称/app slug 归因。脚本内 Bot 作者闸保留为纵深防御。
+    # 双层前置分流：issue_comment 仅在受信 Bot 作者（与 resolve-pr 同一 login 白名单 env）的
+    # **顶层**摘要评论事件（无 pull_request_url）时才进入本 job——内联评论编辑事件在
+    # resolve-pr 层已被排除，此处再拦一道为纵深防御。check_run 仍按名称/app slug 归因。
+    # 脚本内 Bot 作者闸保留为第三层。
     if: >
       needs.resolve-pr.outputs.number != '' &&
       (github.event_name == 'pull_request_target' ||
        github.event_name == 'pull_request_review' ||
        (github.event_name == 'issue_comment' &&
         github.event.comment.user.type == 'Bot' &&
+        github.event.comment.pull_request_url == null &&
         contains('coderabbitai[bot],kilo-code-bot[bot]', github.event.comment.user.login)) ||
        contains(github.event.check_run.name, 'CodeRabbit') ||
        contains(github.event.check_run.app.slug, 'coderabbit') ||
@@ -140,9 +149,12 @@ jobs:
             const isCommentWake = context.eventName === 'issue_comment';
             const trustedCommentLogins = new Set(Object.values(BOT_DEFINITIONS).flatMap(d => d.logins || []));
             // 空/缺 logins 定义 fail-closed：派生集合不含该 login（不放行未知 actor）。
+            // 内联评论编辑事件也投递为 issue_comment（实测 run #101）：评分管道只吃顶层
+            // marker 评论（4.3），内联正文永不入评——此类事件对重评无输入贡献，直接退出。
             if (isCommentWake &&
                 (context.payload.comment?.user?.type !== 'Bot' ||
-                 !trustedCommentLogins.has(context.payload.comment?.user?.login))) {
+                 !trustedCommentLogins.has(context.payload.comment?.user?.login) ||
+                 context.payload.comment?.pull_request_url != null)) {
               console.log('[PR Check] Untrusted comment author; skipping trusted-writer wake.');
               return;
             }
@@ -310,7 +322,7 @@ jobs:
               '风险评级-高-d93f0b-flat.svg', '风险评级-中-d97706-flat.svg', '风险评级-低-2da44e-flat.svg',
               '本轮结论-等待审查结果-fbca04-flat.svg', '本轮结论-无可用审查来源-8c959f-flat.svg',
               '本轮结论-全部必需_Bot_已核准-2da44e-flat.svg', '本轮结论-存在风险发现-d93f0b-flat.svg',
-              '本轮结论-部分_Bot_已评级-fbca04-flat.svg', '风险等级-低-2da44e-flat.svg', '风险等级-中-d97706-flat.svg',
+              '本轮结论-部分_Bot_已评级-fbca04-flat.svg', '本轮结论-无评级-fbca04-flat.svg', '风险等级-低-2da44e-flat.svg', '风险等级-中-d97706-flat.svg',
               '风险等级-高-d93f0b-flat.svg', '风险等级-严重-dc3545-flat.svg',
               '已更新-teal-flat.svg', '已生成_但head过期-purp-flat.svg', '未生成-blueviolet-flat.svg', '失败-crimson-flat.svg',
             ]);
@@ -387,14 +399,18 @@ jobs:
                 //   的内联评论 commit_id 改写到新 head，但其所属 review 的 commit_id 仍是旧 head——
                 //   按 review.commit_id 过滤会把这些「仍挂在本轮 diff 上」的评论误判为历史评论丢弃）。
                 const byReview = new Map();
+                // 契约 4 诊断（run 93/95 实证诊断面漏风）：输出采集总量、过滤后计数与被过滤原因三分计数，
+                //   下次事件 run logs 即可定位 5 条评论被哪道闸挡掉或 listComments 未返回。纯诊断，不改闸门。
+                const filterMiss = { commitId: 0, identity: 0, rid: 0 };
                 for (const c of inlineComments) {
-                  if (typeof c?.commit_id !== 'string' || c.commit_id !== currentHeadSha) continue;
-                  if (c.user?.type !== 'Bot' || !trustedLogins.has(c.user?.login)) continue;
+                  if (typeof c?.commit_id !== 'string' || c.commit_id !== currentHeadSha) { filterMiss.commitId += 1; continue; }
+                  if (c.user?.type !== 'Bot' || !trustedLogins.has(c.user?.login)) { filterMiss.identity += 1; continue; }
                   const rid = c?.pull_request_review_id;
-                  if (typeof rid !== 'number') continue;
+                  if (typeof rid !== 'number') { filterMiss.rid += 1; continue; }
                   if (!byReview.has(rid)) byReview.set(rid, new Set());
                   byReview.get(rid).add(c.user.login);
                 }
+                console.log(`[Status Comment] byReview: fetched=${inlineComments.length} matchedReviews=${byReview.size} filtered(commit_id=${filterMiss.commitId}, identity=${filterMiss.identity}, rid=${filterMiss.rid})`);
                 const commentsBase = `repos/${context.repo.owner}/${context.repo.repo}/pulls/${prNumber}/comments?per_page=100`;
                 // review-finding 修订：无受信内联时不再输出 `!= null` 兜底命令——它会把任意历史/无关内联
                 //   全部拉给 agent；受信 review id 逐条输出，命令内同时筛 review id、commit_id 与受信 Bot
@@ -474,6 +490,41 @@ jobs:
               // HEAD 徽章走 shields 动态外链：URL 内嵌本轮 short sha 天然唯一（免缓存），不落库、
               //   不写仓库文件（本工作流因此无需 contents 写权）；展示与降级同形，绝不阻塞标签主链路。
               const headBadgeImg = `<img src="https://img.shields.io/badge/HEAD-${shortSha}-0969da?style=flat" height="18" valign="middle">`;
+              // 关联小节（定版契约）：timeline 反查本 PR 的关联 issue/PR——cross-referenced 事件
+              //   source 指向本 PR 或 connected 事件 subject 指向本 PR；按 source/subject.issue 是否带
+              //   pull_request 字段分 PR/Issue 归类。渲染＝编号逐行裸写 + 尾随空格（GitHub autolink
+              //   驱动形态，实测 PR#18 评论 `#16 \n#19 ` 验证），零 Markdown 链接零徽章；单向缺省整块
+              //   不写、全无整节省略、反查失败整节省略（展示面降级，绝不阻塞打标主链路）。
+              let linkedPrs = []; let linkedIssues = [];
+              try {
+                // listEventsForTimeline（GET /issues/{n}/timeline）而非 listEvents（/events）：
+                //   cross-referenced/connected 事件只出现在 timeline 端点，/events 永远查不到
+                //   （octokit 官方端点名，review 契约；selftest 桩面同名对齐）。
+                const linkedEvents = await github.paginate(github.rest.issues.listEventsForTimeline, { owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber });
+                const prSet = new Set(); const issueSet = new Set();
+                for (const e of linkedEvents || []) {
+                  const src = e?.event === 'cross-referenced' ? e.source?.issue
+                    : (e?.event === 'connected' ? e.subject : null);
+                  const n = Number(src?.number);
+                  if (!Number.isInteger(n) || n === prNumber) continue;
+                  // 双保险类型闸：events API 的 source/subject 精简形态可能不带 pull_request 字段
+                  //   （GraphQL 必带、REST 不保证），逐编号 GET /issues/N 复验——带 pull_request
+                  //   字段即实为 PR；复验失败按 events 面判定兜底（降级不误删）。
+                  let isPr = Boolean(src.pull_request);
+                  if (!isPr) {
+                    try {
+                      const it = await github.rest.issues.get({ owner: context.repo.owner, repo: context.repo.repo, issue_number: n });
+                      isPr = Boolean(it?.data?.pull_request);
+                    } catch { /* 复验不可达 → 沿用 events 面判定 */ }
+                  }
+                  if (isPr) prSet.add(n); else issueSet.add(n);
+                }
+                linkedPrs = [...prSet].sort((a, b) => a - b);
+                linkedIssues = [...issueSet].sort((a, b) => a - b);
+              } catch (err) {
+                linkedPrs = []; linkedIssues = [];
+                console.log(`[Status Comment] Linked items fetch failed (display-only, section omitted): ${err?.status || err?.message || err}`);
+              }
               const renderBody = (url) => {
                 const lines = [
                   STATUS_COMMENT_MARKER,
@@ -486,10 +537,16 @@ jobs:
                   const meta = BOT_STATE_META[status.state] || { label: status.state, badge: `状态-${status.state}-8c959f`, note: '' };
                   const resultBadge = BADGE(meta.badge, 'flat', 18);
                   const linked = evidenceUrl[key] ? badgeWrap(evidenceUrl[key], resultBadge) : resultBadge;
-                  lines.push(`| ${AVATAR(BOT_AVATARS[key] || '')} **${key === 'coderabbit' ? 'CodeRabbit' : 'Kilo Code'}** | ${linked} | — | ${meta.note || '—'} |`);
+                  const riskCell = riskScore == null
+                    ? (verdict === 'no-rating' ? 'N/A' : '—')
+                    : (BOT_RISK_LABELS[riskScore] ? BADGE(BOT_RISK_LABELS[riskScore], 'flat', 18) : '—');
+                  lines.push(`| ${AVATAR(BOT_AVATARS[key] || '')} **${key === 'coderabbit' ? 'CodeRabbit' : 'Kilo Code'}** | ${linked} | ${riskCell} | ${meta.note || '—'} |`);
                 }
                 lines.push('', '<br>', '');
-                const verdictMeta = BOT_VERDICT_META[verdict] || { badge: `本轮结论-${verdict}-8c959f`, risk: null };
+                // C-B：no-rating 为显式「无评级」态（风险量化 N/A），区别于 pending（等待）与 risk（有风险发现）。
+                const verdictMeta = verdict === 'no-rating'
+                  ? { badge: '本轮结论-无评级-fbca04', risk: null }
+                  : (BOT_VERDICT_META[verdict] || { badge: `本轮结论-${verdict}-8c959f`, risk: null });
                 const verdictBadges = [BADGE(verdictMeta.badge, 'flat', 18)];
                 const riskBadge = BOT_RISK_LABELS[riskScore] || null;
                 if (riskBadge) verdictBadges.push(BADGE(riskBadge, 'flat', 18));
@@ -502,12 +559,31 @@ jobs:
                 lines.push(`| ${ICON('pencil', 14)} **PR 标题** | ${titleRowBadge} | 由 auto-fill 维护，对齐 head \`${shortSha}\` |`);
                 lines.push(`| ${ICON('file', 14)} **PR 描述** | ${titleRowBadge} | ${autofillNote} |`);
                 lines.push('', '<br>', '');
+                // 关联小节渲染：单向缺省整块不写、全无整节省略（linkedPrs/linkedIssues 均空时
+                //   icon-link.svg 不在场即整节省略的断言锚）；编号逐行裸写 + 尾随空格。
+                if (linkedPrs.length || linkedIssues.length) {
+                  lines.push(`#### ${ICON('link', 14)} 关联`, '');
+                  if (linkedPrs.length) {
+                    // 一行多编号：`#17 #18 ` 同行空格分隔（紧凑形态，人类定版）。
+                    lines.push(`${ICON('git-pull-request', 14)} **PR**：`, linkedPrs.map((n) => `#${n} `).join(''), '');
+                  }
+                  if (linkedIssues.length) {
+                    lines.push(`${ICON('issue-opened', 14)} **Issue**：`, linkedIssues.map((n) => `#${n} `).join(''), '');
+                  }
+                  lines.push('<br>', '');
+                }
                 lines.push(`##### ${ICON('link-external', 14)} 本评论链接：`, '', '```', url || `${repoUrl}/pull/${prNumber}`, '```', '');
                 lines.push(`##### ${ICON('code', 14)} 本轮内联评论抓取（复制整块发给 agent）：`, '');
                 if (!Array.isArray(inlineComments)) {
                   lines.push('> 内联评论采集失败（仅展示面降级，不影响打标与裁决）', '');
                 }
-                lines.push('```bash', ...(() => { const out = []; fetchCommands.forEach((cmd, i) => { if (i > 0) out.push(''); out.push(cmd); }); return out; })(), '```');
+                lines.push('```bash', ...(() => {
+                  const out = [];
+                  // 契约 4：采集成功但零受信内联 → 显式提示行（保持可复制性），区别于空 ```bash 块的漏风形态。
+                  if (Array.isArray(inlineComments) && fetchCommands.length === 0) out.push('# 本轮无可归属受信内联评论');
+                  fetchCommands.forEach((cmd, i) => { if (i > 0) out.push(''); out.push(cmd); });
+                  return out;
+                })(), '```');
                 // BOT-METADATA 机读尾块（§0 隐藏面）：HTML 注释包裹，渲染面不可见、API body 机读；
                 // \u003c/\u003e 全转义（E-5 闭环）：--> 含 >，转义后序列不可存活；JSON.parse 无损还原。
                 const metadata = {
@@ -516,7 +592,13 @@ jobs:
                   risk_score: riskScore,
                   bots: Object.fromEntries(Object.entries(botStatuses).map(([k, s]) => [k, s.state])),
                   evidence: Object.fromEntries(Object.entries(botStatuses).map(([k, s]) => [k, s.evidence || 'none'])),
-                  links: { self: url, evidence: evidenceUrl },
+                  links: {
+                    self: url, evidence: evidenceUrl,
+                    // 关联机读面：仅查到时在场（空数组整键缺席，消费方按缺省=无关联读）。
+                    ...(linkedPrs.length || linkedIssues.length
+                      ? { linked_prs: linkedPrs, linked_issues: linkedIssues }
+                      : {}),
+                  },
                   autofill: { title: autofillState, body: autofillState },
                   comment_url: url,
                 };
@@ -768,11 +850,44 @@ jobs:
               if (isBotReview(rev.user, 'kilocode')) kiloCodeText += `\n${rev.body || ''}`;
             }
 
-            // 4.3 顶层 issue 评论不再消费（fail-closed）：顶层评论无 commit_id 绑定、无法归属到
-            //   current head，且唯一可用的归因下界（head commit 的 committer/author date）是
-            //   PR 作者可伪造的元数据，不可信；REST 亦无 synchronize 事件、committed 事件无服务器
-            //   created_at。按审查意见取兜底：取不到可信下界即不消费未绑定 head 的顶层评论。
-            //   评级只采信 head 绑定且身份鉴权的 review 正文（4.2）与 check run output（4.1）。
+            // 4.3 顶层 issue 评论消费收窄开口（C-A，20261017 计划）：仅消费带对应 bot marker 的
+            //   顶层摘要评论——身份闸（type=Bot + BOT_DEFINITIONS.logins 逐字命中）与 marker 双闸，
+            //   无 marker 或 login 不符的顶层评论仍不消费（fail-closed 立场收窄不破）。
+            //   根因：两个 bot 的真实风险字段（CodeRabbit Merge Risk / Kilo 计数表）只发在顶层
+            //   issue 评论，旧口径整体排除导致评分双 null。marker 常量：
+            //     CodeRabbit = `summarize by coderabbit.ai`（PR #18 实测 issuecomment 6231963193）
+            //     Kilo       = `<!-- kilo-review -->`（PR #18 实测 issuecomment 6232162632）
+            //   采集失败（REST 异常）→ 本轮跳过该面（下一事件自愈），不阻塞裁决主链路。
+            //   实装位置在 4.4 之前（crScore/kiloScore 解析消费这些文本）。
+            let kiloCarrierTexts = [];
+
+            // --- 4.3b 顶层摘要评论受信消费（C-A 实装）---
+            const TOP_LEVEL_MARKERS = { coderabbit: 'summarize by coderabbit.ai', kilocode: '<!-- kilo-review -->' };
+            let topComments = null;
+            try {
+              topComments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber, per_page: 100
+              });
+            } catch (err) {
+              console.log(`[Scoring] Top-level comment fetch failed (skipped this round, heals next event): ${err?.status || err?.message || err}`);
+            }
+            if (Array.isArray(topComments)) {
+              for (const [key, marker] of Object.entries(TOP_LEVEL_MARKERS)) {
+                // 取最新：listComments 分页按创建时间升序返回，find 取最早命中——多份摘要并存时把
+                //   旧轮风险级当本轮消费（跨轮 stale）。filter 全部命中后取数组末位＝最近创建份；
+                //   单命中（原地编辑常态）与原 find 同一份、行为零变化；身份+marker 双闸原样保留。
+                const hits = topComments.filter(c =>
+                  c.user?.type === 'Bot' &&
+                  (BOT_DEFINITIONS[key]?.logins || []).includes(c.user.login) &&
+                  typeof c.body === 'string' && c.body.includes(marker));
+                const hit = hits[hits.length - 1];
+                if (hit) {
+                  const text = `\n${hit.body}`;
+                  if (key === 'coderabbit') codeRabbitText += text;
+                  else kiloCarrierTexts.push(hit.body);
+                }
+              }
+            }
 
             // --- 4.4 CodeRabbit 官方 Merge Readiness 提取 (支持 Emoji 与 Markdown 标记) ---
             let crScore = null; // null: 本轮未解析出评级；1: Ready, 2: Caution, 3: Risky, 4: Blocked
@@ -782,8 +897,21 @@ jobs:
             //   逐档判定按 blocked>risky>caution>ready 严序取用；等级识别格式与 crScore 语义不变。
             //   Rework-6：交替式按最长前缀优先——「Merge Readiness band: Blocked」短语形里连接词 band 必须被
             //   前缀整体消费，否则捕获组落在 'band'（间隙类不含字母，回退不能越过词界）→ 真 Blocked 被静默吞掉。
-            const crBands = [...codeRabbitText.matchAll(/(?:merge\s*readiness\s*band|readiness\s*band|merge\s*readiness)[^a-zA-Z\r\n]{0,20}([a-zA-Z]+)/gi)].map(m => m[1].toLowerCase());
+            const crBands = [...codeRabbitText.matchAll(/(?:merge\s*readiness\s*band|readiness\s*band|merge\s*readiness)[^a-zA-Z\r\n]{0,8}([a-zA-Z]+)/gi)].map(m => m[1].toLowerCase());
             const crBandHas = (band) => crBands.includes(band);
+
+            // C-A Merge Risk 摘要形态（PR #18 实测：`<summary><strong>Merge Risk:</strong>
+            //   <strong>🟡 Moderate</strong></summary>`；文档已知形态 Low/Moderate/High/Blocked 等）。
+            //   级别词映射与 Kilo severity 语义对齐：low→1 / moderate|caution→2 / high|risky→3 / critical|blocked→4。
+            //   未知级别词（如 🟣 Unknown）不捕获、不报错，静默落 null（fail-closed）。
+            //   `**Change:**`（Other/Ready）仅作 secondary，不单独定级。
+            // 同行匹配 + 风险级别词词边界：`[^<\r\n]*?` 把捕获限在同一行（不得跨行吃后续正文），
+            //   词前 `\b` 避免级别词被前导子串拼出（如 'low' 误命中 'follow'），词后 `\b` 避免未知
+            //   级别词后正文里的子串被当级别（如 '🟣 Unknown\n…high…' 误命中 'high'）。未知级别词
+            //   仍不捕获、落 null（fail-closed 不变）。
+            const crMergeRisks = [...codeRabbitText.matchAll(/Merge\s*Risk:?\s*(?:<\/strong>\s*)?(?:<strong>\s*)?(?:[^<\r\n]*?\b)?(low|moderate|high|blocked|critical|risky|caution|ready)\b/gi)].map(m => m[1].toLowerCase());
+            const crRiskRank = { low: 1, ready: 1, caution: 2, moderate: 2, risky: 3, high: 3, critical: 4, blocked: 4 };
+            const crMergeRiskScore = crMergeRisks.length > 0 ? Math.max(...crMergeRisks.map(w => crRiskRank[w])) : null;
 
             if (crBandHas('blocked') || /\bseverity:\s*critical\b/i.test(codeRabbitText)) {
               crScore = 4;
@@ -794,6 +922,10 @@ jobs:
             } else if (crBandHas('ready')) {
               crScore = 1;
             }
+            // 跨形态取严合并：band 链与 Merge Risk 同 :909 crRiskRank 1-4 刻度，同文并存时
+            //   Merge Risk 不得被更轻的 band 吞掉（ready+High 应取 3）；非 null 时取 max。
+            //   risk null → band 链结果原样保持；band null + risk 非 null → 取 risk（与原兜底分支等价）。
+            if (crMergeRiskScore !== null) crScore = crScore === null ? crMergeRiskScore : Math.max(crScore, crMergeRiskScore);
 
             // --- 4.5 Kilo Code 真实等级提取 (严格对齐 Blocker / Warning / Suggestion) ---
             // K 系列契约（Bot 意见）：优先解析 Kilo 官方 Overview 计数表形态（PR8 实测，comment
@@ -803,12 +935,13 @@ jobs:
             // 载体分解析（review-finding 契约）：kiloCodeText 聚合多载体（check run output + review
             //   正文），全文混合解析会让旧载体的计数表（全零→1）遮蔽另一载体的真实发现——
             //   按载体分别解析各自得分后取最高（与 4.4 CodeRabbit 汇总多 band 最严原则同构）。
-            const kiloCarrierTexts = targetRuns
+            const kiloCarrierTextsAggregated = targetRuns
               .filter(run => /kilo/i.test(run.name) || /kilo/i.test(run.app?.slug || ''))
               .map(run => `${run.output?.title || ''}\n${run.output?.summary || ''}\n${run.output?.text || ''}`);
             for (const rev of reviews.filter(r => r.commit_id === currentHeadSha && r.state !== 'DISMISSED')) {
-              if (isBotReview(rev.user, 'kilocode')) kiloCarrierTexts.push(rev.body || '');
+              if (isBotReview(rev.user, 'kilocode')) kiloCarrierTextsAggregated.push(rev.body || '');
             }
+            kiloCarrierTexts.push(...kiloCarrierTextsAggregated);
             const kiloScoreOf = (text) => {
               const rows = [...text.matchAll(/^\|\s*(CRITICAL|BLOCKER|WARNING|MAJOR|HIGH|SUGGESTION|MINOR|LOW|INFO)\s*\|\s*(\d+)\s*\|/gim)]
                 .map(m => ({ sev: m[1].toUpperCase(), count: Number(m[2]) }));
@@ -841,7 +974,7 @@ jobs:
             // 正向门：每个 required bot 都解析出评级才写 ai-reviewed/风险标签；可选 bot 缺席记入
             //   状态评论但不阻塞（决策 1）。finalScore 取所有已解析 bot（含可选 bot）的最严分。
             const allBotsRated = requiredKeys.length > 0 && requiredKeys.every(key => ratingByBot[key] !== null);
-            const finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;
+            let finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;
             const partialRating = !allBotsRated && hasParseableRating;
             let verdict = 'risk';
             const allRiskLabels = ['risk:critical', 'risk:high', 'risk:medium', 'risk:low'];
@@ -878,10 +1011,19 @@ jobs:
               console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Partial ratings or failed check / CHANGES_REQUESTED. Marking review:needs-work.`);
               verdict = 'partial';
             } else {
-              // 无可解析评级不是“无 verdict”：保留/新增显式 needs-work，禁止静默清空旧裁决。
-              toAdd.add('review:needs-work');
-              console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => No parseable rating; preserving an explicit review:needs-work verdict.`);
-              verdict = 'risk';
+              // C-B 兜底（20261017 计划）：放宽采集面后仍无任何评级 → 显式「无评级」态 verdict=no-rating，
+              //   不再硬写 risk / 无条件加 review:needs-work（纯无评级不伪造成风险发现）。
+              //   needs-work 仅由 hasCheckFailure / CHANGES_REQUESTED 单独决定。
+              const hasChangesRequestedNoRating = reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED');
+              if (hasCheckFailure || hasChangesRequestedNoRating) {
+                toAdd.add('review:needs-work');
+                console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => No parseable rating with check failure / CHANGES_REQUESTED; marking review:needs-work.`);
+                verdict = 'risk';
+              } else {
+                console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => No parseable rating; verdict falls back to no-rating (N/A).`);
+                verdict = 'no-rating';
+              }
+              finalScore = null;
             }
 
             // ========================================================

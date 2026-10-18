@@ -7,27 +7,28 @@ slots: [pr_reviewer_type]
 
 ## 补充规程（Execution Hygiene Supplements）
 
-以下四条规程从实战故障中提炼，与四大铁律叠加适用，优先级低于铁律但高于一般技能条款。
+Five rules distilled from field incidents; they stack on the iron laws (precedence: below the laws, above ordinary skill clauses).
 
-1. **派发前工作区卫生检查（Pre-Dispatch Workspace Hygiene）**：
-   - 在调用 `task` 分派 `{{pr_reviewer_type}}` 之前，必须先运行 `git status --short -uall` 检查工作区状态；
-   - 若检出不在主计划 `Files` 声明中的未提交改动（`??` 或 ` M` 或 `M `），必须在证据日志中逐条列出这些文件，并向人类报告污染风险；
-   - 不得自行执行 `git stash`、`git checkout` 等清理命令（受 Git 只读铁律约束），仅输出清理命令原文交人类在宿主终端执行；
-   - 若人类尚未隔离污染，严禁直接派发 Reviewer：暂停派发、向人类呈报阻塞，待人类隔离后重新派发。
+1. **Pre-Dispatch Workspace Hygiene**:
+   - before dispatching `{{pr_reviewer_type}}` via `task`, run `git status --short -uall`;
+   - any uncommitted change (`??` / ` M` / `M `) outside the plan's declared `Files` must be listed item by item in the evidence log and reported to the human as contamination risk;
+   - never clean up yourself (`git stash`, `git checkout` are barred by the Git read-only law) — print the commands verbatim for the human to run in the host terminal;
+   - while contamination is not isolated, dispatching the Reviewer is forbidden: pause, report the blocker, re-dispatch after the human isolates it.
 
-2. **证据日志追加前回读（Evidence Log Read-Before-Append）**：
-   - 向已有的 test-evidence 文件追加 rework 记录或补充证据前，必须先以宿主官方自带读取工具读取该文件确认当前尾部内容；
-   - 编辑操作的旧字符串/匹配内容必须逐字取自文件实际内容，严禁凭记忆构造；文件落盘按实例能力分流：有宿主原生编辑/写入工具的实例一律走宿主官方自带编辑/写入工具，绑定受控写通道的子代理一律走其规程批准的受控写通道（受控写通道以实例自身平台规程的登记表为唯一事实源，逐平台各异，不跨平台套用他端通道名）；共同禁令＝严禁以终端重定向（`echo`/`cat` 配合输出改向符）写文件；
-   - 若读取返回内容与预期不符，以实际内容为准重新构造编辑参数。
+2. **Evidence Log Read-Before-Append**:
+   - before appending rework records to an existing test-evidence file, read it with the host's built-in read tool and confirm the current tail;
+    - edit old-string/match content must come verbatim from actual file content, never from memory; file writes route by instance capability (the instance's own platform registry is the single source of truth; never borrow another platform's channel names); universal ban: no terminal redirection (`echo`/`cat` with output redirect) for file writes;
+    - if read-back differs from expectation, rebuild edit parameters from the actual content.
 
-3. **计划指令与审查意见冲突裁决（Plan-vs-Review Conflict Resolution）**：
-   - 当 PR-Reviewer 的修改建议与主计划 Replacement 块直接矛盾时，按以下优先级裁决：
-     ① 代码库客观事实（接口签名、工具基线、平台能力）为最高准绳，适用 Fact Supremacy 自主纠偏（见四大铁律第 1 条）；
-     ② Reviewer 建议若附有可核验的代码/文档证据（真实 `路径:行号`），先核验证据真实性：证据属实且成立时采纳并记录；证据经核验不成立时，保持计划原意并在证据日志写明抗辩理由；
-     ③ Reviewer 建议若仅为无证据的主观偏好（文档取舍、措辞风格），不得无条件顺从，以技术依据与项目既定约束（篇幅上限、禁 Emoji 等）自行判断，并把判断理由记录于证据日志；
-      ④ 双方各有合理依据、无法技术定性的，呈报人类裁决，不得擅自定案；
-   - 裁决结果与理由必须记录在证据日志的 Rework 段落中。
+3. **Cross-Reference Anchor Discipline**: sectioned docs with a revision lifecycle (plans, reports, runbooks) cross-reference by section/anchor name, never by line number — line numbers drift as soon as a section lands.
 
-4. **测试保真度与夹具反假绿审计（Test Fidelity & Anti-Green-Wash Audit）**：
-   - **核心公理：测试能跑通（Exit 0）≠ 测试本身是正确的。** 测试用例与夹具自身可能存在形态偏差、位置错误、断言过宽或浅层模拟，从而在被测代码存在真实漏洞时依然跑绿（如 M2 自测夹具错写在顶层而漏检嵌套违规，或符号链接仅测目录联接而漏测目标文件本身）；
-   - **逆向审查义务**：Reviewer（含 Plan 与 PR 审查）在核验测试通过时，必须对测试用例与测试夹具自身的保真度（Fixture Fidelity）执行逆向审查——验证测试是否真正模拟并覆盖了最深、最危险的真实缺陷形态；严禁仅凭 Exit Code 0 即盲目轻信放行。
+4. **Plan-vs-Review Conflict Resolution**: when a PR-Reviewer suggestion directly contradicts a plan Replacement block, decide by:
+   ① repo objective facts (interface signatures, tool baselines, platform capabilities) as the supreme standard — apply Fact Supremacy self-correction (Iron Law 1);
+   ② reviewer suggestions carrying verifiable evidence (real `路径:行号`): verify first — evidence sound ⇒ adopt and record; evidence refuted ⇒ keep the plan's intent and write the rebuttal into the evidence log;
+   ③ preference-only suggestions without evidence (doc taste, wording style): never obey unconditionally — judge by technical grounds and project constraints (length caps, no-Emoji etc.), recording the reasoning in the evidence log;
+   ④ genuinely balanced conflicts with no technical verdict: escalate to the human, never settle unilaterally;
+   - verdicts and reasons must appear in the evidence log's Rework section.
+
+5. **Test Fidelity & Anti-Green-Wash Audit**:
+   - axiom: tests passing (Exit 0) ≠ tests correct — cases/fixtures may carry shape drift, wrong placement, over-broad assertions or shallow mocks, and still go green while the code under test stays broken;
+   - reverse-review duty: every reviewer (Plan and PR) verifying a passing test must audit the fidelity of the test and its fixtures themselves — confirm they simulate the deepest, most dangerous real defect shape; never rubber-stamp on Exit Code 0 alone.

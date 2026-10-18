@@ -36,6 +36,9 @@ export const ATTACK_ROW_ANCHORS = [
 // 两枚标记严格性必须对称，容忍列表符与加粗装饰。
 export const OFFLINE_LINE_RE = /^(?:-[ \t]*)?(?:\*\*)?PROBE=OFFLINE(?:\*\*)?[ \t]*(?:[:：].*)?$/;
 export const ECHO_LINE_RE = /^(?:-[ \t]*)?(?:\*\*)?ECHO-RISK(?:\*\*)?[ \t]*(?:[:：].*)?$/;
+// zero-finding-escalated 标记行（⑨ 条终局契约的机读位）：严格性与上述两枚同族——围栏外行首判定，
+//   散文句内/行内代码引用字面量不构成升级宣告，否则 104e 矛盾闸可被任意提及误触（假红）或被复述空转（假绿）。
+export const ZERO_FINDING_ESCALATED_LINE_RE = /^(?:-[ \t]*)?(?:\*\*)?ZERO_FINDING_ESCALATED(?:\*\*)?[ \t]*(?:[:：].*)?$/;
 // 实弹回执：反引号命令字面量与退出码在 40 字符内共现（与计划侧「探针回执」判据同口径）。
 export const PROBE_RECEIPT_RE = /`[^`]+`[\s\S]{0,40}?(?:exit\s*(?:code)?|退出码)[\s:：=]*-?\d+|(?:exit\s*(?:code)?|退出码)[\s:：=]*-?\d+[\s\S]{0,40}?`[^`]+`/i;
 // E 清单编号：E1 / E-1 / E-13 / E-r3-2 等形态。带 g 旗标，仅供 String.match 取全集，
@@ -260,8 +263,14 @@ function lastAnchoredLine(text, re) {
 
 // pass-line-out-of-domain-gate：围栏外行首 `^<键>=` 整行、但取值不在值域闭集（不命中对应 *_LINE_RE）
 // ⇒ 记录行号。值域收窄后此类行不命中锚定、末次取值退回旧合法行，值语义闸绿、结构闸又被旧行满足
-// ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域：仅围栏外行首前缀整行；
-// 散文提及/行内代码引用/围栏内示例不触发（与前缀正则 ^X= 的行首锚定及 lineView 围栏掩蔽同口径）。
+// ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域（姊妹闸扩面，与 VERDICT
+//   闸 104g 同批同口径）：围栏外判定行行首——行首空白（缩进）、Markdown 加粗/斜体装饰（*_，键名前
+//   开启与键名后闭合均入闸且数量不设上限，如 **KEY**: 与 ****KEY:）、全角冒号改形（KEY：）与
+//   大小写变体（key=）均入闸；blockquote（>）、
+//   列表符（-）、标题（#）、表格（|）、行内代码（反引号）承载的旧值引用属合法非锚定形态，不触发
+//   （负控制由 selftest 104b-g 钉死）。
+// 散文提及/行内代码引用/围栏内示例不触发（lineView 围栏掩蔽同口径）。
+const PASS_STRAY_PREFIX_RE = (key) => new RegExp('^[ \\t]*[*_]*[ \\t]*' + key + '[ \\t]*[*_]*[ \\t]*[:=：]', 'i');
 function strayPassLineNumbers(text, prefixRe, lineRe) {
   const { lines, fenced } = lineView(text);
   const out = [];
@@ -284,7 +293,7 @@ export function checkSemanticPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：值域外行闸先于缺行早退执行——正是「无锚定命中即 return」让值域外
   //   修正行静默失效；缺行本身仍归结构闸存在性职责，此处不重复计数。
-  for (const n of strayPassLineNumbers(reportText, /^SEMANTIC_PASS=/, SEMANTIC_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('SEMANTIC_PASS'), SEMANTIC_PASS_LINE_RE)) {
     v.push({ msg: 'SEMANTIC_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
@@ -305,7 +314,7 @@ export function checkSemanticPassVerdict(reportText, v) {
 export function checkTruthPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：同 checkSemanticPassVerdict，值域外行闸先于缺行早退执行。
-  for (const n of strayPassLineNumbers(reportText, /^TRUTH_PASS=/, TRUTH_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('TRUTH_PASS'), TRUTH_PASS_LINE_RE)) {
     v.push({ msg: 'TRUTH_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const tp = lastAnchoredLine(reportText, TRUTH_PASS_LINE_RE);
@@ -323,7 +332,7 @@ export function checkShadowPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：同上，值域外行闸先于缺行早退执行（本函数经 checkReportFormat
   //   恒执行路径消费影子文本，故影子侧 SHADOW_PASS 值域外行同样咬合）。
-  for (const n of strayPassLineNumbers(reportText, /^SHADOW_PASS=/, SHADOW_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('SHADOW_PASS'), SHADOW_PASS_LINE_RE)) {
     v.push({ msg: 'SHADOW_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const sp = lastAnchoredLine(reportText, SHADOW_PASS_LINE_RE);
@@ -331,6 +340,24 @@ export function checkShadowPassVerdict(reportText, v) {
   const verdictHit = lastAnchoredLine(reportText, VERDICT_ANY_LINE_RE);
   if (verdictHit && verdictHit.m[1] === 'GO' && sp.m[1] !== 'done') {
     v.push({ msg: 'SHADOW_PASS=' + sp.m[1] + ' 非 done 却与 VERDICT: GO 并存：影子侧义务未全部履行严禁出具 GO（shadow-pass-partial-no-go）' });
+  }
+}
+
+// verdict-line-out-of-domain-gate：pass-line-out-of-domain-gate 同族收口，补齐 `^VERDICT:` 前缀的闸面缺口——
+//   此前闸族只覆盖 SEMANTIC_PASS/TRUTH_PASS/SHADOW_PASS 三枚机读行，围栏外独立整行以 `VERDICT:` 开头但
+//   不命中 VERDICT_LINE_RE（三值闭集之外的取值，或行尾续写 `:说明`——VERDICT_LINE_RE 无可选说明组）的行
+//   即判定行失配：末次取值退回被推翻的旧行（旧判定可能仍是 GO），失配修正行本身零红灯＝ERRATA 勘误静默
+//   失效的 fail-open 家族在 VERDICT 位仅存的一枚缺口。登记行号判红后，失配行被红灯强制重写为逐字命中
+//   锚定的形态，不存在「以非法行静默保留旧 GO」。触发域（104g 扩面）：围栏外判定行行首——行首空白（缩进）、
+//   Markdown 加粗/斜体装饰（*_）、全角冒号（VERDICT：）与大小写变体（verdict:）均入闸，杜绝失配修正行
+//   以装饰形态静默失效；blockquote（>）、列表符（-）、标题（#）、表格（|）、行内代码（反引号）承载的
+//   旧判定行引用属 ERRATA 合法非锚定形态，不触发（排除面由 selftest 104g 负控制钉死）。shadow 与 PR
+//   两侧同闸消费（shadow 报告与 PR 复审报告均有 ERRATA 修正通道）。
+const VERDICT_STRAY_PREFIX_RE = PASS_STRAY_PREFIX_RE('verdict');
+export function checkVerdictStray(reportText, v) {
+  if (reportText === null || reportText === undefined) return;
+  for (const n of strayPassLineNumbers(reportText, VERDICT_STRAY_PREFIX_RE, VERDICT_LINE_RE)) {
+    v.push({ msg: 'VERDICT: 第 ' + n + ' 行取值不在三值闭集或行尾失配（GO|NO-GO|ESCALATE_TO_HUMAN，行尾仅容忍空格/制表符）：失配判定行不生效，末次取值退回旧行——严禁以失配行静默保留旧判定（含旧 GO），勘误必须重写为逐字命中锚定的修正行（verdict-line-out-of-domain-gate）' });
   }
 }
 
@@ -350,15 +377,15 @@ export function countAttackRows(reportText) {
 
 // 职责切分（勿合并）：本函数只消费 shadow 复审报告，四路校验行级互斥不重叠，合并即对 shadow 侧产生假红——
 //   ① 报告格式行（ATTACKS= / PENETRATIONS= / VERDICT: / SHADOW_PASS=）：存在性，逐行锚定；
-//   ② 攻击配额与实弹姿态：台账实数对账、击穿入 E 清单、零攻击 GO 分级处置（执法类计划禁止＝
-//      zero-attack-go-forbidden，非执法类保留 ECHO-RISK 明示）、零实弹 GO（ATTACKS>0）仍须 ECHO-RISK 标注；
+//   ② 攻击配额与实弹姿态：台账实数对账、击穿入 E 清单、零攻击 GO 一律禁止（zero-attack-go-forbidden，
+//      任何计划统一适用）、零实弹 GO（ATTACKS>0）仍须 ECHO-RISK 标注；
 //   ③ SEMANTIC_PASS **不校验**——shadow 报告合法缺该行，其存在性归 pr-review 结构闸
 //      PR_REVIEW_GATE_RES、取值语义归 checkSemanticPassVerdict 与 checkTruthPassVerdict（PR 侧）；
 //   ④ SHADOW_PASS 存在性归 ①（恒执行路径，故非执法类计划亦被咬），取值语义归 checkShadowPassVerdict。
 //   SHADOW_PASS 与 SEMANTIC_PASS 的行级互斥即本函数与 PR 结构闸的分界：前者只属影子侧、后者只属 PR 侧。
-// ctx.isSec（可选，缺省 false＝非执法类裁决面）：由唯一调用方 attackLedger 从被审计划 Files 节 ∩
-//   ENFORCEMENT_FILES 计算并贯通（复用 enfInFence/enfInRaw，与台账入闸条件同式）；直调面（selftest rv
-//   等仅报告文本场景）缺省按非执法类裁决。格式面（行存在性/实数对账/围栏掩蔽）与 ctx 无关恒执行。
+// ctx（可选参数，历史遗留）：零攻击 GO 分级裁决面已统一（任何计划一律禁止），本函数不再消费
+//   ctx.isSec 区分执法/非执法——参数保留仅为调用方签名稳定，直调面（selftest rv 等仅报告文本场景）
+//   不传 ctx 亦不受影响。格式面（行存在性/实数对账/围栏掩蔽）与 ctx 无关恒执行。
 export function checkReportFormat(reportText, v, ctx = { isSec: false }) {
   if (reportText === null || reportText === undefined) return;
   // ⓪ 未闭合围栏使其后内容整段被掩蔽（含尾部真格式行）⇒ 判定不可信，直接判红（fail-closed）。
@@ -403,13 +430,19 @@ export function checkReportFormat(reportText, v, ctx = { isSec: false }) {
     const seqs = rows.map((r) => r.seq);
     if (new Set(seqs).size !== seqs.length) v.push({ msg: '攻击行序号重复：计数可灌水' });
     if (nAtk === 0 && isGo) {
-      // zero-attack-go-forbidden（分级裁决面）：执法类计划（ctx.isSec，由 attackLedger 按计划 Files 节
-      //   ∩ ENFORCEMENT_FILES 计算）零攻击 GO 直接禁止——ECHO-RISK 不构成豁免，必须改出
-      //   ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN；非执法类计划保留既有
-      //   ECHO-RISK 明示语义（独立成行 ECHO-RISK 的零攻击 GO 放行，缺标注仍红）。
-      if (ctx.isSec) v.push({ msg: '零攻击（ATTACKS=0）与 GO 并存被禁止（zero-attack-go-forbidden）：必须改出 ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN，ECHO-RISK 不豁免' });
-      else if (!echo) v.push({ msg: '零攻击 GO 未标注 ECHO-RISK（回声放行必须明示人类）' });
+      // zero-attack-go-forbidden（统一裁决面）：任何计划零攻击 GO 一律禁止——不再按执法/非执法
+      //   分级豁免（删除按执法文件类别区分的例外），ECHO-RISK 不构成零攻击 GO 的结案通道，必须
+      //   改出 ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN（与 ⑨「零发现不豁免」口径一致）。
+      v.push({ msg: '零攻击（ATTACKS=0）与 GO 并存被禁止（zero-attack-go-forbidden）：必须改出 ZERO_FINDING_ESCALATED 行并改判 VERDICT: ESCALATE_TO_HUMAN（任何计划统一适用，非执法类亦不豁免）' });
     }
+  }
+  // zero-finding-escalated-no-go 闸（⑨ 条「不得以『无发现』直接结案 GO」的机械闭环位）：围栏外独立成行
+  //   ZERO_FINDING_ESCALATED＝报告自宣「换角度再攻仍零发现，升级人工」，与末次判定 GO 并存即终局契约自相
+  //   矛盾。① 条只覆盖 ATTACKS=0×GO，攻击数>0 而发现数为 0 的出标记再 GO 形态此前零红灯——本闸补该盲区。
+  //   标记与 NO-GO/ESCALATE_TO_HUMAN 并存为合法形态（负控制 104e）。零攻击 GO 已统一禁止，
+  //   不存在非执法类 ECHO-RISK×GO 通道。
+  if (isGo && hasMarkerLine(reportText, ZERO_FINDING_ESCALATED_LINE_RE)) {
+    v.push({ msg: 'ZERO_FINDING_ESCALATED 与 VERDICT: GO 并存：零发现升级宣告与放行结论不得同报告共存（zero-finding-escalated-no-go），必须改判 ESCALATE_TO_HUMAN 并呈报人类' });
   }
   // ② 击穿必须入 E 清单，且计数不得自相矛盾。
   if (nAtk !== null && nPen !== null && nPen > nAtk) v.push({ msg: 'PENETRATIONS=' + nPen + ' 大于 ATTACKS=' + nAtk + '：计数自相矛盾' });
@@ -428,6 +461,9 @@ export function checkReportFormat(reportText, v, ctx = { isSec: false }) {
   checkSemanticPassVerdict(reportText, v);
   // shadow-pass-partial-no-go 闸：影子侧完整性行同构交叉校验（同上，只判值语义）。
   checkShadowPassVerdict(reportText, v);
+  // verdict-line-out-of-domain-gate：判定行失配存在性闸（值域闸族在 VERDICT 位的补口，见函数头注释）。
+  //   置于末次判定交叉校验之后：本闸判「失配行的存在」，与上述三闸判「合法行的值矛盾」职责互斥不重叠。
+  checkVerdictStray(reportText, v);
 }
 
 // —— 决策点强校验 ①：报告链序机械判定（纯函数，仅消费文件名数组，不做任何 fs/exec） ——
@@ -527,6 +563,9 @@ export function attackLedger(planText, opts = {}) {
     checkSemanticPassVerdict(opts.prReviewReportText, v);
     // PR 复审报告的真相源四问机读行同构交叉校验（同上，只判值语义）。
     checkTruthPassVerdict(opts.prReviewReportText, v);
+    // PR 侧 ERRATA「失配 VERDICT 修正行」机械闭环（g105 硬要求的对账落点）：围栏外行首 `^VERDICT:` 整行
+    //   不命中三值闭集即判红，杜绝失配行静默退回旧 GO 的假绿面（verdict-line-out-of-domain-gate）。
+    checkVerdictStray(opts.prReviewReportText, v);
   }
   return v;
 }

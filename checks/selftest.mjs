@@ -12,7 +12,7 @@ const scanEntryDirNames = typeof invariants.scanEntryDirNames === 'function' ? i
 const allInvariantIds = typeof invariants.allInvariantIds === 'function' ? invariants.allInvariantIds : () => [];
 import { attackLedger, checkReportFormat, checkChainOrder, checkReportStructureGate, foldRoundFromFilename, countAttackRows, ATTACK_CLASSES, ENFORCEMENT_FILES, FILES_HEAD_RE, isPlanFilename, hasLedgerSection } from './attack-ledger.mjs';
 import * as ledgerNs from './attack-ledger.mjs';
-import { PLATFORMS, CLAUSES, DERIVED_CLAUSES, GATES } from './registry.mjs';
+import { PLATFORMS, CLAUSES, DERIVED_CLAUSES, GATES, SIZE_BUDGET, SIZE_BUDGET_CEILING } from './registry.mjs';
 // 清点器以命名空间导入存取：红灯阶段该模块仅为空桩（零导出），命名导入会因「缺导出」在
 // ESM 链接期抛 SyntaxError 假红；命名空间导入把缺失延迟到守卫抛出
 // TypeError: inventory is not a function（四维真红 [PASS-RED] 目标契约缺失）。
@@ -232,9 +232,9 @@ check('ledger-fenced-contract-example-ignored', attackLedger('# p\n## Files\n| M
 // 29-48) 报告侧攻击配额机器对账（配额去自声明 / 击穿入 E 清单 / 实弹姿态可核 / 标记行锚定 / 末次取值 / 未闭合围栏）
 // 空桩阶段（countAttackRows 返回 []、checkReportFormat 未补强、登记表未含对账器）必 FAIL：
 //   30-38、40-46、48 共 17 条属 [PASS-RED] 断言比对失败；29、39、47 为负控制类（空桩即 PASS），不得据其判定红灯充足。
-const RECEIPT = '自检：`npm test --prefix checks/ledger`（退出码 0）';
-const atkRow = (n, indent) => (indent || '') + '- 攻击行: 序号=' + n + ' | 类别=外衣化 | 靶点=checks/attack-ledger.mjs:102 | 构造=c' + n + ' | 探针=`npm test --prefix checks` Exit 0 | 判定=拦截';
-const quietRow = (n, indent) => atkRow(n, indent).replace('`npm test --prefix checks` Exit 0', '静态推演');
+const RECEIPT = '自检：`node verify.mjs`（退出码 0）';
+const atkRow = (n, indent) => (indent || '') + '- 攻击行: 序号=' + n + ' | 类别=外衣化 | 靶点=checks/attack-ledger.mjs:102 | 构造=c' + n + ' | 探针=`node verify.mjs` Exit 0 | 判定=拦截';
+const quietRow = (n, indent) => atkRow(n, indent).replace('`node verify.mjs` Exit 0', '静态推演');
 const REPORT_OK = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n');
 const F34 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```', '', RECEIPT, 'ATTACKS=4', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n');
 const F44 = [atkRow(1), atkRow(2), '', '```md', atkRow(3), atkRow(4), '```'].join('\n');
@@ -276,11 +276,11 @@ check('ledger-plan-spoofed-field-in-fence-not-counted', attackLedger('# p\n## Fi
 // 38 零实弹 GO 必须标 ECHO-RISK
 check('ledger-report-offline-go-echo-required', rvSome([atkRow(1), atkRow(2), '', 'PROBE=OFFLINE', 'ATTACKS=2', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), '零实弹'));
 // 39（负控制）散文引用两标记字面量不得构成姿态声明（误伤对照）
-check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；零实弹 GO 须标注 ECHO-RISK（零攻击 GO 的处置按计划分级）。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
+check('ledger-report-prose-marker-not-posture', rv(['# r', '', '建议：待验命令不在白名单时标注 `PROBE=OFFLINE`；零实弹 GO 须标注 ECHO-RISK（零攻击 GO 一律禁止）。', '', atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
 // 40 格式行末次取值：前塞裸行遮蔽尾部真值
-check('ledger-report-format-line-last-wins', rvSome(['# r', '', 'ATTACKS=9', '', '## 格式行', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
-// 41 ECHO-RISK 散文撞词不足以免标
-check('ledger-report-echo-prose-mention-insufficient', rvSome(['# r', '', '按契约「零攻击 GO 必须另行标注 ECHO-RISK」，本报告合规。', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
+check('ledger-report-format-line-last-wins', rvSome(['# r', '', 'ATTACKS=9', '', '## 格式行', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'zero-attack-go-forbidden'));
+// 41 零攻击 GO 一律禁止（散文提及 ECHO-RISK 不构成豁免）
+check('ledger-report-echo-prose-mention-insufficient', rvSome(['# r', '', '本报告零攻击但已另行标注 ECHO-RISK，应视为合规。', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'zero-attack-go-forbidden'));
 // 42 对账器自身入登记表
 check('ledger-enforcement-registry-covers-auditor', ENFORCEMENT_FILES.includes('checks/attack-ledger.mjs'));
 // 43 仅涉对账器的计划同样触发台账义务
@@ -290,8 +290,8 @@ const counted = countAttackRows(F44);
 check('ledger-count-attack-rows-fence-masked', counted.length === 2 && counted.every((r) => r.anchor === 'line-row'), 'rows=' + counted.length);
 // 45 缩进 0-3 空格的合规登记行必须计入（声明 3 / 缩进真行 2 ⇒ 报"实数 2"而非"自声明"）
 check('ledger-report-indented-rows-counted', rvSome(F45, '与攻击行实数 2 不一致'));
-// 46 行首解释句不得冒充 ECHO-RISK 标注（装饰前缀 + 无冒号引导的后缀）
-check('ledger-report-marker-explanation-not-counted', rvSome(['# r', '', '- **ECHO-RISK** 语义说明：本标记仅在零攻击时使用', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'ECHO-RISK'));
+// 46 行首解释句不得冒充 ECHO-RISK 标注（装饰前缀 + 无冒号引导的后缀）；零攻击 GO 一律禁止
+check('ledger-report-marker-explanation-not-counted', rvSome(['# r', '', '- **ECHO-RISK** 语义说明：本标记仅在零实弹时使用', '', RECEIPT, 'ATTACKS=0', 'PENETRATIONS=0', 'VERDICT: GO'].join('\n'), 'zero-attack-go-forbidden'));
 // 47（负控制）带列表符/加粗/冒号说明的标记行仍然有效（严格化不得误伤合法装饰形态）
 check('ledger-report-decorated-marker-counted', rv([atkRow(1), atkRow(2), '', '- **PROBE=OFFLINE**：本代理无沙箱权限', '', '- ECHO-RISK：纸面放行已明示', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', 'VERDICT: GO'].join('\n')).length === 0);
 // 48 未闭合围栏使其后内容整段不可信 ⇒ 直接判红
@@ -326,11 +326,11 @@ check('assert-chain-fold-multi-marker',
   && checkChainOrder(['a-r1-r3-pr-review.md'], 'a').some((x) => x.msg.includes('断档')));
 // 55-57 结构闸：合规零违反（负控制）+ 影子/PR 缺段必咬 + 报告缺失
 const SHADOW_OK = ['# 影子复审报告', '', '### E 清单', '', '差集为 0（镜像对账表）', '', '复跑比对无偏差', '', '### 终局裁决', '', 'SHADOW_PASS=done', 'GO', ''].join('\n');
-const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', 'TRUTH_PASS=done', 'VERDICT: GO', ''].join('\n');
+const PR_OK = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`node verify.mjs` 退出码 0', '', '已运行核实', '', 'SEMANTIC_PASS=done', 'TRUTH_PASS=done', 'VERDICT: GO', ''].join('\n');
 const gv = (t, k) => { const v = []; checkReportStructureGate(t, k, v); return v; };
 check('assert-structure-gate-clean-ok', gv(SHADOW_OK, 'shadow').length === 0 && gv(PR_OK, 'pr-review').length === 0);
 check('assert-structure-gate-shadow', gv(SHADOW_OK.replace('差集为 0（镜像对账表）', ''), 'shadow').some((x) => x.msg.includes('结构闸缺失')));
-check('assert-structure-gate-pr-review', gv(PR_OK.replace('实跑证据表：`npm test --prefix checks` 退出码 0', '').replace('已运行核实', ''), 'pr-review').some((x) => x.msg.includes('结构闸缺失')));
+check('assert-structure-gate-pr-review', gv(PR_OK.replace('实跑证据表：`node verify.mjs` 退出码 0', '').replace('已运行核实', ''), 'pr-review').some((x) => x.msg.includes('结构闸缺失')));
 // 58 报告未落盘（物理在场不成立）
 check('assert-structure-gate-missing-report', (() => { const v = []; checkReportStructureGate('', 'shadow', v); return v.some((x) => x.msg.includes('未落盘')); })());
 // 59 闭合围栏内关键词冒充结构闸 ⇒ 不得放行（structure-gate-outside-fence 闸）
@@ -424,7 +424,7 @@ check('assert-latest-enforcement-no-ledger-selected',
   ]).f === 'a.md');
 // 66 PR 复审报告机读行结构闸（pr-report-semantic-pass-gate）：三端 pr-reviewer 规程硬要求
 //   SEMANTIC_PASS=done|partial 行；缺行必咬、含行零违反（partial 禁 GO 不得停留在散文面）。
-const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`npm test --prefix checks` 退出码 0', '', '已运行核实', '', 'TRUTH_PASS=done', ''].join('\n');
+const PR_NO_SEM = ['# PR 复审报告', '', 'E 清单：无', '', '实跑证据表：`node verify.mjs` 退出码 0', '', '已运行核实', '', 'TRUTH_PASS=done', ''].join('\n');
 check('assert-pr-report-semantic-pass-gate',
   gv(PR_NO_SEM, 'pr-review').some((x) => x.msg.includes('结构闸缺失')) && gv(PR_OK, 'pr-review').length === 0);
 
@@ -772,6 +772,74 @@ check('assert-semantic-pass-out-of-domain-stray-line-detected',
   attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_SEM }).some((x) => x.msg.includes('SEMANTIC_PASS') && x.msg.includes('值域外')));
 check('assert-shadow-pass-out-of-domain-stray-line-detected',
   rv(SHADOW_STRAY).some((x) => x.msg.includes('SHADOW_PASS') && x.msg.includes('值域外')));
+// 104b-g 三 *_PASS 闸前缀扩面（pass-line-out-of-domain-gate 触发域，与 104g VERDICT 同批收口）：仅 ^KEY= 行首
+//   锚定漏掉缩进、加粗装饰、全角冒号（KEY：）与大小写变体——混存形态下值域外修正行静默失效同族。判据：
+//   三闸各携一个装饰/全角变体夹具必含本闸违规；负控制——合法行逐字命中锚定不判红、blockquote 引用不判红。
+const PR_STRAY_TRUTH_BOLD = PR_STRAY_TRUTH.replace('TRUTH_PASS=partial', '**TRUTH_PASS=partial**');
+const PR_STRAY_SEM_FULLWIDTH = PR_STRAY_SEM.replace('SEMANTIC_PASS=partial', 'SEMANTIC_PASS：partial');
+const SHADOW_STRAY_INDENT = REPORT_OK + '\n  shadow_pass=partial';
+const PR_QUOTE_PASS_REF = PR_OK.replace('## 主要变更', '## 主要变更\n> 旧值引用：TRUTH_PASS=done');
+check('assert-truth-pass-stray-line-bold-decorated-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_BOLD }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+check('assert-semantic-pass-stray-line-fullwidth-colon-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_SEM_FULLWIDTH }).some((x) => x.msg.includes('SEMANTIC_PASS') && x.msg.includes('值域外')));
+check('assert-shadow-pass-stray-line-indent-lowercase-detected',
+  rv(SHADOW_STRAY_INDENT).some((x) => x.msg.includes('SHADOW_PASS') && x.msg.includes('值域外')));
+check('assert-pass-stray-prefix-excludes-legal-refs',
+  attackLedger(auditorPlan, { prReviewReportText: PR_QUOTE_PASS_REF }).filter((x) => x.msg.includes('值域外')).length === 0
+  && attackLedger(auditorPlan, { prReviewReportText: PR_OK }).filter((x) => x.msg.includes('值域外')).length === 0);
+
+// 104e 零发现升级终局契约机械闭环（zero-finding-escalated-no-go）：围栏外独立成行 ZERO_FINDING_ESCALATED＝
+//   报告自宣「再攻仍零发现、升级人工」，与末次判定 VERDICT: GO 并存即自相矛盾——此前机器盲区（① 条只咬
+//   ATTACKS=0×GO，攻击数>0 而发现数为 0 出标记再 GO 零红灯）。判据：ZF_GO 必含本闸违规；ZF_ESC（改判
+//   ESCALATE_TO_HUMAN）零命中（负控制，标记与升级判定并存为合法形态）。红绿账目：闸登记前 ZF_GO 零命中⇒本断言必红。
+const ZF_GO = [atkRow(1), atkRow(2), '', RECEIPT, 'ATTACKS=2', 'PENETRATIONS=0', 'SHADOW_PASS=done', '- ZERO_FINDING_ESCALATED', 'VERDICT: GO'].join('\n');
+const ZF_ESC = ZF_GO.replace('VERDICT: GO', 'VERDICT: ESCALATE_TO_HUMAN');
+check('assert-zero-finding-escalated-go-conflict',
+  rv(ZF_GO).some((x) => x.msg.includes('zero-finding-escalated-no-go'))
+  && rv(ZF_ESC).filter((x) => x.msg.includes('zero-finding-escalated-no-go')).length === 0);
+// 104f ERRATA 判定行失配机械闭环（verdict-line-out-of-domain-gate）：值域外机读行闸族只覆盖三枚 *_PASS 行，
+//   ^VERDICT: 前缀为唯一缺口——围栏外独立整行 `VERDICT: GONE` 之类不命中三值闭集时末次取值退回旧 GO，
+//   失配修正行零红灯＝勘误静默失效假绿家族。判据：PR 报告携失配 VERDICT 行必含本闸违规；PR_OK（合法单行）
+//   零命中（负控制）。红绿账目：闸登记前失配形态零命中⇒本断言必红。
+const PR_STRAY_VERDICT = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\nVERDICT: GONE');
+check('assert-verdict-out-of-domain-stray-line-detected',
+  prWired(PR_STRAY_VERDICT).some((x) => x.msg.includes('verdict-line-out-of-domain-gate'))
+  && prWired(PR_OK).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0);
+// 104g ERRATA 失配判定行前缀扩面（verdict-line-out-of-domain-gate 触发域）：仅 ^VERDICT: 行首锚定漏掉
+//   缩进、Markdown 加粗装饰、全角冒号与大小写变体——混存形态下（报告已含合法判定行）失配修正行静默失效
+//   与 104f 同族。判据：全角冒号修正行与加粗修正行必含本闸违规；负控制三连——合法行逐字命中锚定不判红、
+//   blockquote 引用（ERRATA 合法非锚定形态）不判红、行内代码引用不判红。
+const PR_STRAY_VERDICT_FULLWIDTH = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\nVERDICT：NO-GO');
+const PR_STRAY_VERDICT_BOLD = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n**VERDICT: NO-GO**');
+// 104g-2 闭合装饰扩面：键名后闭合装饰（**VERDICT: NO-GO** 与 **TRUTH_PASS**: partial）——仅键前装饰
+//   锚定漏掉键名后闭合装饰，勘误修正行以闭合装饰形态静默失效同族。闭合装饰形态本身不构成合法机读行
+//   （*_LINE_RE 契约要求行首裸键），闸判红强制重写为逐字锚定形态＝fail-closed；机读行合法形态的
+//   零违规负控制由 PR_OK（裸键行）承载。
+const PR_STRAY_VERDICT_BOLD_CLOSED = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n**VERDICT: NO-GO**');
+const PR_STRAY_TRUTH_BOLD_CLOSED = PR_OK.replace('TRUTH_PASS=done', '**TRUTH_PASS**: partial');
+check('assert-verdict-stray-line-closing-bold-detected',
+  prWired(PR_STRAY_VERDICT_BOLD_CLOSED).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-truth-pass-stray-line-closing-bold-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_BOLD_CLOSED }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+// 104g-3 装饰数量无上限扩面：{0,4} 数量上限漏掉 5+ 连续装饰（*****VERDICT: / ****TRUTH_PASS:），
+//   失配修正行以超量装饰形态静默失效同族。判据：5 个前导/后置装饰变体必含本闸违规。
+const PR_STRAY_VERDICT_PENTA = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n*****VERDICT: NO-GO');
+const PR_STRAY_TRUTH_PENTA = PR_OK.replace('TRUTH_PASS=done', '****TRUTH_PASS: partial');
+check('assert-verdict-stray-line-penta-decorated-detected',
+  prWired(PR_STRAY_VERDICT_PENTA).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-truth-pass-stray-line-penta-decorated-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_PENTA }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+const PR_QUOTE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n> 旧判定引用：VERDICT: GO');
+const PR_INLINE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n旧判定行原值 `VERDICT: GO` 已被推翻。');
+check('assert-verdict-stray-line-fullwidth-colon-detected',
+  prWired(PR_STRAY_VERDICT_FULLWIDTH).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-verdict-stray-line-bold-decorated-detected',
+  prWired(PR_STRAY_VERDICT_BOLD).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-verdict-stray-prefix-excludes-legal-refs',
+  prWired(PR_QUOTE_REF).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0
+  && prWired(PR_INLINE_REF).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0
+  && prWired(PR_OK).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0);
 
 // 105 registry 原子锚点：四问职责正文/结果表标题/计划作者义务正文被删除必须判红（子串必含条款逐条登记）。
 // 红绿账目（登记前 clause id 不存在 ⇒ detected 必 FAIL＝真红；负控制空桩即 PASS）。
@@ -1270,12 +1338,12 @@ check('assert-latest-candidates-collect-tmpdir',
         && r2.candidates.length === 0 && r2.faults.length === 1 && r2.faults[0].includes('计划目录不可读');
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   })());
-// 分级回归锁·非执法类（by-design 正控语义保留，落刀前后恒绿，不计红灯）：非执法类计划（Files 不含
-// ENFORCEMENT_FILES）零攻击 GO 带独立成行 ECHO-RISK 放行、缺标注仍红（期望值由分级契约推导）。
-check('ledger-report-nonsec-zero-go-echo-annotated-ok',
-  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done\nECHO-RISK' }).length === 0);
-check('ledger-report-nonsec-zero-go-echo-required',
-  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done' }).some((v) => v.msg.includes('ECHO-RISK')));
+// 分级回归锁·非执法类（统一裁决面回归）：非执法类计划（Files 不含 ENFORCEMENT_FILES）零攻击 GO
+// 一律禁止——带 ECHO-RISK 亦不豁免、缺标注同判（期望值由统一零攻击契约推导，非执法类不再走 ECHO-RISK 结案）。
+check('ledger-report-nonsec-zero-go-echo-annotated-forbidden',
+  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done\nECHO-RISK' }).some((v) => v.msg.includes('zero-attack-go-forbidden')));
+check('ledger-report-nonsec-zero-go-forbidden',
+  attackLedger('# p\n## Files\n| Modify | `README.md` | x |\n', { reportText: 'ATTACKS=0\nPENETRATIONS=0\nVERDICT: GO\nSHADOW_PASS=done' }).some((v) => v.msg.includes('zero-attack-go-forbidden')));
 
 // 新鲜度闸 id 正向在场断言：generated-product-stale 必须进入 allInvariantIds()（run.mjs 输出出现
 // OK 行），杜绝「实现在场、登记缺席」的绿色盲区。
@@ -1597,29 +1665,36 @@ check('selftest-inv-shared-atomic-writer-wired', (() => {
 // 必须在场且承载锚文本（CLAUSES/DERIVED 按 text，GATES 按 parts 逐片段）；豁免集动态取自
 // 活跃装配块 id 集（当前仅 direct-dispatch-header 仍在 spec/blocks 装配、无归档义务）。
 // 归档文件名映射：闸块归档名带 gate- 前缀（gate-plan-gate.md 等，盘面实测），条款块不带。
-// 派生条款对账（§14 长期项落地）：fromAnchor 派生的条目必须满足 ① registry 不再字面持有该串
-//   （双写残留＝派生未生效）、② text 取自运行时读取的锚块且等于锚库在场子串、③ 派生串仍是
-//   spec/blocks 装配面在场子串（渲染产物子串契约的源头上游）。锚库改措辞时 ③ 失配即红——
-//   红点落在本断言（含失配子串明文），比旧双写时代的吞锚闸拒产更早、更可定位。
+// 派生条款对账（§14 长期项落地，fromAnchor 扩展后泛化为遍历全部调用点）：每个 fromAnchor 派生
+//   条目必须满足 ① registry 不再以字面 text 形态双写该串（双写残留＝派生未生效）、② 派生串取自
+//   运行时读取的锚块且等于锚库在场子串、③ 派生串仍是 spec/blocks 装配面在场子串（渲染产物子串
+//   契约的源头上游）。锚库改措辞时 ③ 失配即红——红点落在本断言（含失配子串明文），比旧双写时代
+//   的吞锚闸拒产更早、更可定位。fromAnchor 调用点从 registry 源码正则抓取（非硬编码 id 清单），
+//   新增派生条目自动纳入，无需改本断言。
 check('anchor-clause-text-derived-single-source',
   (() => {
     const libDir = path.join(SPEC_ROOT, 'spec', 'anchor-library');
-    const anchor = fs.readFileSync(path.join(libDir, 'review-severity-axiom.md'), 'utf8');
     const blocksDir = path.join(SPEC_ROOT, 'spec', 'blocks');
     const blocksText = fs.readdirSync(blocksDir).filter((f) => f.endsWith('.md'))
       .map((f) => fs.readFileSync(path.join(blocksDir, f), 'utf8')).join('\n');
-    // ① registry 源码不再字面写死该子串（fromAnchor 调用形态在场即证明非双写）
     const regSrc = fs.readFileSync(path.join(SPEC_ROOT, 'checks', 'registry.mjs'), 'utf8');
-    const derivedCall = /text:\s*fromAnchor\('review-severity-axiom',\s*'([^']+)'\)/.exec(regSrc);
-    if (!derivedCall) return false;
-    const sub = derivedCall[1];
-    // ② 派生串确在锚库正文
-    if (!anchor.includes(sub)) return false;
-    // ③ 派生串在装配面上游（spec/blocks）在场——产物子串契约的上游保证
-    if (!blocksText.includes(sub)) return false;
-    // ④ 同一子串不得再以 CLAUSES 字面 text 形态重复登记（双写残留检测）
-    const literalDup = new RegExp(`text:\\s*'${sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'\\s*,\\s*\\n\\s*expect:`).test(regSrc);
-    return !literalDup;
+    // 遍历全部 fromAnchor 调用点：text: fromAnchor('<id>', '<sub>')
+    const calls = [...regSrc.matchAll(/text:\s*fromAnchor\('([a-z-]+)',\s*'([^']+)'\)/g)];
+    if (calls.length === 0) return false; // 无任何派生调用＝断言失效（防正则漂移假绿）
+    for (const call of calls) {
+      const id = call[1];
+      const sub = call[2];
+      let anchor;
+      try { anchor = fs.readFileSync(path.join(libDir, id + '.md'), 'utf8'); } catch { return false; }
+      // ② 派生串确在锚库正文
+      if (!anchor.includes(sub)) return false;
+      // ③ 派生串在装配面上游（spec/blocks）在场——产物子串契约的上游保证
+      if (!blocksText.includes(sub)) return false;
+      // ④ 同一子串不得再以 CLAUSES 字面 text 形态重复登记（双写残留检测）
+      const literalDup = new RegExp(`text:\\s*'${sub.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'\\s*,\\s*\\n\\s*expect:`).test(regSrc);
+      if (literalDup) return false;
+    }
+    return true;
   })());
 check('anchor-library-registry-no-drift',
   (() => {
@@ -1673,6 +1748,47 @@ check('assert-scoped-write-surface-rel-single-source',
     return boundInBody && gRelCalls === 1 && !oldForm && nakedCalls === 0
       && wStart > -1 && eStart > wStart && writeGate >= 1 && editGate >= 1;
   })());
+
+// 108 臃肿闸门·字节棘轮（Wave 1）三族断言：超限检出 / 合规空桩 / 棘轮单调。
+// 检测器以命名空间 + typeof 守卫存取：红灯阶段 productSizeFailures 未导出时，命名导入会 ESM 链接期
+//   SyntaxError 假红（[REJECT-FAKE]）；守卫延迟为 TypeError（[PASS-RED] 目标契约缺失）。实现落盘后直取真函数。
+const psize = typeof invariants.productSizeFailures === 'function'
+  ? invariants.productSizeFailures
+  : () => { throw new TypeError('productSizeFailures is not a function'); };
+// —— 族1 超限检出（正控制：超限必咬；装机上限为历史最高点，现状 36-47KB 全超）——
+// 显式传 exempt={}：本族断言锁「类别默认上限」语义，不得被 per-file 豁免表稀释（2026-10-16 口径 B 注册后修复，闸逻辑未动）。
+check('product-size-budget-agent-over-detected',
+  psize([{ path: 'kilocode/agents/pr-reviewer-sp.md', text: 'x'.repeat(SIZE_BUDGET['platform-agent'] + 1) }], SIZE_BUDGET, {})
+    .some((v) => v.id === 'product-size-budget' && v.path === 'kilocode/agents/pr-reviewer-sp.md'));
+check('product-size-budget-agents-md-over-detected',
+  psize([{ path: 'zcode/AGENTS.md', text: 'x'.repeat(SIZE_BUDGET['platform-governance'] + 1) }], SIZE_BUDGET, {})
+    .some((v) => v.id === 'product-size-budget' && v.path === 'zcode/AGENTS.md'));
+// 恰等于上限不触发（边界负控制：仅 > 判红，== 放行——钉死严格不等号；同锁类别默认上限，显式 exempt={}）
+check('product-size-budget-exactly-cap-not-flagged',
+  !psize([{ path: 'kilocode/agents/pr-reviewer-sp.md', text: 'x'.repeat(SIZE_BUDGET['platform-agent']) }], SIZE_BUDGET, {})
+    .some((v) => v.id === 'product-size-budget' && v.path === 'kilocode/agents/pr-reviewer-sp.md'));
+// —— 族2 合规空桩（负控制：合规产物不误伤，空桩阶段亦 PASS，不据其判红灯充足）——
+check('product-size-budget-compliant-not-flagged',
+  !has([{ path: 'kilocode/agents/pr-reviewer-sp.md', text: 'x'.repeat(2000) }], 'product-size-budget', 'kilocode/agents/pr-reviewer-sp.md')
+  && !has([{ path: 'zcode/AGENTS.md', text: 'x'.repeat(2000) }], 'product-size-budget', 'zcode/AGENTS.md'));
+// 非预算类别恒不触发：skill 类无上限，即便字节巨大也不判臃肿闸（不该触发域，防误伤面扩散）
+check('product-size-budget-skill-class-out-of-scope',
+  !has([{ path: 'skills/demo/SKILL.md', text: [...skillFm, 'x'.repeat(30000), ''].join('\n') }], 'product-size-budget', 'skills/demo/SKILL.md'));
+// —— 族3 棘轮单调（减法不可逆的三层机器守卫）——
+// 3a 源码声明在场：registry.mjs 必须含「上限只降不升」纪律注释（删声明即红＝棘轮纪律落空的守卫）。
+check('product-size-budget-ratchet-comment-present',
+  fs.readFileSync(path.join(SPEC_ROOT, 'checks', 'registry.mjs'), 'utf8').includes('上限只降不升'));
+// 3b 检出"上限被抬高"形态：SIZE_BUDGET 任一键必须 ≤ 天花板（装机值＝永久最高点）且键集 ⊆ 天花板键集。
+//   装机时两表相等→绿；未来把某键抬高于天花板→本断言转红（天花板为不可变事实源，抬高即违反棘轮）。
+check('product-size-budget-ratchet-no-cap-raised',
+  Object.keys(SIZE_BUDGET).length > 0
+  && Object.keys(SIZE_BUDGET).every((k) => k in SIZE_BUDGET_CEILING)
+  && Object.keys(SIZE_BUDGET).every((k) => SIZE_BUDGET[k] <= SIZE_BUDGET_CEILING[k]));
+// 3c 压低方向敏感（Wave 5「收至实测值」的可验证语义）：把某类上限人为调低后，超限产物即检出、未超者放行——
+//   证明检测器随上限下移而收紧（下移方向自由），而非钉死装机值；与 3b（上抬即红）构成完整单调对。
+check('product-size-budget-ratchet-lowering-tightens',
+  psize([{ path: 'zcode/AGENTS.md', text: 'x'.repeat(6000) }], { 'platform-governance': 5000 }, {}).length === 1
+  && psize([{ path: 'zcode/AGENTS.md', text: 'x'.repeat(4000) }], { 'platform-governance': 5000 }, {}).length === 0);
 
 console.log(failures === 0 ? 'CHECKS-SELFTEST ALL OK' : 'CHECKS-SELFTEST FAILURES=' + failures);
 process.exit(failures === 0 ? 0 : 1);
