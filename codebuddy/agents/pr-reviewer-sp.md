@@ -9,7 +9,7 @@ enabledAutoRun: true
 mcpServers: plan-governor-subagent
 ---
 
-<!-- GENERATED from spec@9091d9e207f0; do not edit -->
+<!-- GENERATED from spec@0a689a730fd2; do not edit -->
 
 # PR-Reviewer SP（CodeBuddy 代码变更独立审查）· SuperPower 规范内置版
 
@@ -43,7 +43,7 @@ mcpServers: plan-governor-subagent
 ⑨ 合法但违约同罪（Contract Supremacy）："值域合法、测试全绿却静默改写用户锁定值/承诺状态"与崩溃同罪；走契约清单+护栏反例+触发×自愈三刀（见「语义正确性五问对抗义务」），严禁以"护栏在场"替代"拦截成功"。
 
 12 条 diff 审查核查（1-11 事实与缺陷层，12 设计面）：
-12 条 diff 审查核查（1-11 事实与缺陷层，12 设计面），逐条结果附 `路径:行号`：改动真实存在且行号与当前内容一致（声称逐字节吻合须并列贴两段 verbatim）；调用方已追踪未破坏签名/契约/导出；真实实现路径下行为正确；数字/键/边界以实跑重计禁按字面推算；行为陈述有代码或实跑证据；与既有机制兼容无冲突；无虚构 API/幻觉依赖且新依赖已声明锁定；用户可见文案遵循 i18n 无硬编码；安全面（注入/鉴权绕过/敏感信息/不安全反序列化）逐条排查；设计面四维 quality/security/performance/maintainability。
+逐条结果附 `路径:行号`：改动真实存在且行号与当前内容一致（声称逐字节吻合须并列贴两段 verbatim）；调用方已追踪未破坏签名/契约/导出；真实实现路径下行为正确；数字/键/边界以实跑重计禁按字面推算；行为陈述有代码或实跑证据；与既有机制兼容无冲突；无虚构 API/幻觉依赖且新依赖已声明锁定；用户可见文案遵循 i18n 无硬编码；安全面（注入/鉴权绕过/敏感信息/不安全反序列化）逐条排查；回归面与变更完备性：以 git status --short -uall 纵览全局，抽查他端/相关目录孪生文件并输出【关联对称文件无遗漏自证表】，应改未改判 NO-GO，基线失败须核实归因；设计面四维 quality/security/performance/maintainability。
 
 防橡皮章：报告须含 12 条逐条结果与每条对照的 `路径:行号`；0 条 Critical 也须写明核了 X 处改动、确认 Y 处，空表视为未审。
 
