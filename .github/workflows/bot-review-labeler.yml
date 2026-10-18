@@ -303,13 +303,9 @@ jobs:
               manual_required: { label: '需人工触发',    badge: '状态-需人工触发-d97706',    note: '需人工触发审查' },
             };
             const BOT_RISK_LABELS = { 4: '风险评级-高-d93f0b', 3: '风险评级-中-d97706', 2: '风险评级-中-d97706', 1: '风险评级-低-2da44e' };
-            const BOT_VERDICT_META = {
-              pending:     { badge: '本轮结论-等待审查结果-fbca04', risk: null },
-              unavailable: { badge: '本轮结论-无可用审查来源-8c959f', risk: null },
-              complete:    { badge: '本轮结论-全部必需_Bot_已核准-2da44e', risk: '风险等级-低-2da44e' },
-              risk:        { badge: '本轮结论-存在风险发现-d93f0b', risk: null },
-              partial:     { badge: '本轮结论-部分_Bot_已评级-fbca04', risk: null },
-            };
+            // 结论徽章整排退役（人类裁决 2026-10-18）：跨 bot 汇总唯一事实源＝PR 标签
+            //   （review:approved/needs-work/pending/unavailable），逐 bot 明细唯一事实源＝表格列；
+            //   旧结论徽章常量（唯一消费点即被删的结论徽章段）随之删除。
             const AUTOFILL_META = {
               synced: { badge: '已更新-teal', note: (sha) => `对齐 head \`${sha}\`` },
               stale:  { badge: '已生成_但head过期-purp', note: () => '下次 synchronize 自动重填' },
@@ -320,10 +316,6 @@ jobs:
               '状态-缺席-8c959f-flat.svg', '状态-跳过审查-8c959f-flat.svg', '状态-审查中-d97706-flat.svg',
               '状态-审查完成-2da44e-flat.svg', '状态-审查失败-crimson-flat.svg', '状态-需人工触发-d97706-flat.svg',
               '风险评级-高-d93f0b-flat.svg', '风险评级-中-d97706-flat.svg', '风险评级-低-2da44e-flat.svg',
-              '本轮结论-等待审查结果-fbca04-flat.svg', '本轮结论-无可用审查来源-8c959f-flat.svg',
-              '本轮结论-全部必需_Bot_已核准-2da44e-flat.svg', '本轮结论-存在风险发现-d93f0b-flat.svg',
-              '本轮结论-部分_Bot_已评级-fbca04-flat.svg', '本轮结论-无评级-fbca04-flat.svg', '风险等级-低-2da44e-flat.svg', '风险等级-中-d97706-flat.svg',
-              '风险等级-高-d93f0b-flat.svg', '风险等级-严重-dc3545-flat.svg',
               '已更新-teal-flat.svg', '已生成_但head过期-purp-flat.svg', '未生成-blueviolet-flat.svg', '失败-crimson-flat.svg',
             ]);
             // 徽章/图标资产本仓固化（外链零依赖）：静态枚举集一次性生成入库（checks/build-status-badges.mjs，
@@ -344,7 +336,7 @@ jobs:
             const BOT_AVATARS = Object.fromEntries(Object.entries(BOT_DEFINITIONS)
               .filter(([, d]) => Number.isInteger(d.appId) && d.appId > 0)
               .map(([k, d]) => [k, d.appId]));
-            async function writeStatusComment(botStatuses, verdict, riskScore = null) {
+            async function writeStatusComment(botStatuses, verdict, riskScore = null, perBotRatings = {}) {
               // 定位前置（E-1 闭环）：ownComment 单一 selfUrl 事实源，组装前完成。定位失败（仅 transient，
               //   issues:write 已含读面故无 403 面）降级为本轮跳过状态评论：绝不 duplicate marker 评论、
               //   绝不崩溃已落标签的主链路，下次事件重试自愈。
@@ -390,35 +382,57 @@ jobs:
                 console.log(`[Status Comment] Inline comments fetch failed (display-only, non-blocking): ${err?.status || err?.message || err}`);
               }
               const fetchCommands = [];
+              let matchedInline = [];
+              let inlineSeverities = new Map();
               if (!Array.isArray(inlineComments)) {
                 // 降级提示行（E-4）：采集失败必须对人类可见，区别于"本轮无内联"。
               } else {
                 const trustedLogins = new Set(Object.values(BOT_DEFINITIONS).flatMap(d => d.logins || []));
-                // byReview: rid -> 该 review 的受信 Bot logins（命令内身份筛选与采集闸同源）。
-                // 本轮边界闸：评论自身 commit_id 已重锚到当前 head（GitHub 在 head 推进时会把「行仍存活」
-                //   的内联评论 commit_id 改写到新 head，但其所属 review 的 commit_id 仍是旧 head——
-                //   按 review.commit_id 过滤会把这些「仍挂在本轮 diff 上」的评论误判为历史评论丢弃）。
-                const byReview = new Map();
-                // 契约 4 诊断（run 93/95 实证诊断面漏风）：输出采集总量、过滤后计数与被过滤原因三分计数，
-                //   下次事件 run logs 即可定位 5 条评论被哪道闸挡掉或 listComments 未返回。纯诊断，不改闸门。
-                const filterMiss = { commitId: 0, identity: 0, rid: 0 };
+                // 契约 4（PR#21 实测根因修正）：轮次归属键＝评论 pull_request_review_id ∈ headReviewIds
+                //   （review 级 commit_id 稳定就绪；评论级 commit_id 由 GitHub 异步重锚，run 39131456470
+                //   实测 filtered(commit_id=1) 恒挡命中）。review id 创建即写死、不可变 → 免疫重锚竞态，
+                //   且天然排除上一轮评论（不同 review id 不进本轮 headReviewIds）。身份闸 trustedLogins 保留。
+                const headReviewIds = new Set(headReviews
+                  .filter(r => r.user?.type === 'Bot' && trustedLogins.has(r.user?.login))
+                  .map(r => r.id));
+                const filterMiss = { rid: 0, identity: 0 };
                 for (const c of inlineComments) {
-                  if (typeof c?.commit_id !== 'string' || c.commit_id !== currentHeadSha) { filterMiss.commitId += 1; continue; }
-                  if (c.user?.type !== 'Bot' || !trustedLogins.has(c.user?.login)) { filterMiss.identity += 1; continue; }
                   const rid = c?.pull_request_review_id;
-                  if (typeof rid !== 'number') { filterMiss.rid += 1; continue; }
-                  if (!byReview.has(rid)) byReview.set(rid, new Set());
-                  byReview.get(rid).add(c.user.login);
+                  if (typeof rid !== 'number' || !headReviewIds.has(rid)) { filterMiss.rid += 1; continue; }
+                  if (c.user?.type !== 'Bot' || !trustedLogins.has(c.user?.login)) { filterMiss.identity += 1; continue; }
+                  matchedInline.push(c);
                 }
-                console.log(`[Status Comment] byReview: fetched=${inlineComments.length} matchedReviews=${byReview.size} filtered(commit_id=${filterMiss.commitId}, identity=${filterMiss.identity}, rid=${filterMiss.rid})`);
-                const commentsBase = `repos/${context.repo.owner}/${context.repo.repo}/pulls/${prNumber}/comments?per_page=100`;
-                // review-finding 修订：无受信内联时不再输出 `!= null` 兜底命令——它会把任意历史/无关内联
-                //   全部拉给 agent；受信 review id 逐条输出，命令内同时筛 review id、commit_id 与受信 Bot
-                //   login（防他人 review 的同名内联混入、防同 review 的历史陈旧评论混入）。
-                for (const [rid, logins] of byReview) {
-                  const loginJq = [...logins].map(l => `.user.login == "${l}"`).join(' or ');
-                  // --paginate：内联评论超 100 条时单页截断会漏页，agent 按命令拉取须全量。
-                  fetchCommands.push(`gh api "${commentsBase}" --paginate --jq '.[] | select(.pull_request_review_id == ${rid} and .commit_id == "${currentHeadSha}" and (${loginJq})) | {path, line, body}'`);
+                console.log(`[Status Comment] matchedInline: fetched=${inlineComments.length} matchedInline=${matchedInline.length} filtered(rid=${filterMiss.rid}, identity=${filterMiss.identity})`);
+                // 逐条命令（契约 4 人类裁决）：每条命中评论单独一行，按 created_at 升序（原创建顺序）；
+                //   id 来自 API 整数响应、经 Number.isSafeInteger 校验后拼入（非评论 body 可控面，零注入）；
+                //   命令形态不含 $/反引号（受控通道结构闸兼容），--jq 过滤段只含单引号字面量。
+                const severityOf = (bodyText) => {
+                  const m = /Blocker|Major|Minor|Suggestion/i.exec(String(bodyText || ''));
+                  return m ? m[0] : null;
+                };
+                matchedInline.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+                // severity 单次提取（计数头与逐行注释同口径，禁第二套锚定正则——E3 教训：
+                //   行首锚定会对真实 markdown body（severity 词非行首）系统性低估）。
+                const severities = new Map(matchedInline.map(c => [c, severityOf(c.body)]));
+                inlineSeverities = severities;
+                for (const c of matchedInline) {
+                  if (!Number.isSafeInteger(c.id) || c.id <= 0) continue;
+                  const sev = severities.get(c);
+                  // path 净化（预 PR 审查回灌·注入面）：c.path 是不可信 API 数据——换行可突破
+                  //   `# ` 行注释与 ```bash 围栏（围栏提前闭合 + 伪命令落围栏外），反引号可破坏
+                  //   Markdown 代码围栏语义。故强制 String() 后剥离 \r\n 与反引号再拼入注释段；
+                  //   c.line 仅经安全整数校验后才使用（NaN/对象/超安全整数一律留空，退化不注入）。
+                  const safePath = String(c.path == null ? '' : c.path).replace(/[\r\n`]/g, '');
+                  const safeLine = Number.isSafeInteger(c.line) ? c.line : '';
+                  const pathLine = `${safePath}:${safeLine}`;
+                  const commentMark = sev ? ` · ${sev}` : '';
+                  fetchCommands.push(`gh api repos/${context.repo.owner}/${context.repo.repo}/pulls/comments/${c.id} --jq '{path, line, body}'   # ${pathLine}${commentMark}`);
+                }
+                // 真·兜底（降级面，非主路径）：采集成功但零命中 → login 白名单全量命令（白名单在 jq 内，
+                //   防退化全量无过滤）；兜底命令输出 id/pull_request_review_id 供人工归属复核。
+                if (fetchCommands.length === 0) {
+                  const loginJq = [...trustedLogins].map(l => `.user.login == "${l}"`).join(' or ');
+                  fetchCommands.push(`gh api "repos/${context.repo.owner}/${context.repo.repo}/pulls/${prNumber}/comments?per_page=100" --paginate --jq '.[] | select(${loginJq}) | {id, pull_request_review_id, path, line, body}'`);
                 }
               }
               // auto-fill 三态解析（§0.1，review-finding 修订）：body 里的 sentinel 标记是
@@ -537,21 +551,18 @@ jobs:
                   const meta = BOT_STATE_META[status.state] || { label: status.state, badge: `状态-${status.state}-8c959f`, note: '' };
                   const resultBadge = BADGE(meta.badge, 'flat', 18);
                   const linked = evidenceUrl[key] ? badgeWrap(evidenceUrl[key], resultBadge) : resultBadge;
-                  const riskCell = riskScore == null
-                    ? (verdict === 'no-rating' ? 'N/A' : '—')
-                    : (BOT_RISK_LABELS[riskScore] ? BADGE(BOT_RISK_LABELS[riskScore], 'flat', 18) : '—');
+                  // 风险量化列逐 bot（契约 2 人类裁决）：各 bot 显示自身评级徽章；未评级时
+                  //   absent/file_limit/manual_required（本轮确定无评级载体）→ N/A，其余未评级态 → —。
+                  //   全局 riskScore 不再连坐每行（PR#21 缺陷：所有行同显全局汇总分）。
+                  const botRating = perBotRatings[key] !== undefined ? perBotRatings[key] : null;
+                  const riskCell = botRating !== null && BOT_RISK_LABELS[botRating]
+                    ? BADGE(BOT_RISK_LABELS[botRating], 'flat', 18)
+                    : (['absent', 'file_limit', 'manual_required'].includes(status.state) ? 'N/A' : '—');
                   lines.push(`| ${AVATAR(BOT_AVATARS[key] || '')} **${key === 'coderabbit' ? 'CodeRabbit' : 'Kilo Code'}** | ${linked} | ${riskCell} | ${meta.note || '—'} |`);
                 }
                 lines.push('', '<br>', '');
-                // C-B：no-rating 为显式「无评级」态（风险量化 N/A），区别于 pending（等待）与 risk（有风险发现）。
-                const verdictMeta = verdict === 'no-rating'
-                  ? { badge: '本轮结论-无评级-fbca04', risk: null }
-                  : (BOT_VERDICT_META[verdict] || { badge: `本轮结论-${verdict}-8c959f`, risk: null });
-                const verdictBadges = [BADGE(verdictMeta.badge, 'flat', 18)];
-                const riskBadge = BOT_RISK_LABELS[riskScore] || null;
-                if (riskBadge) verdictBadges.push(BADGE(riskBadge, 'flat', 18));
-                if (verdictMeta.risk) verdictBadges.push(BADGE(verdictMeta.risk, 'flat', 18));
-                lines.push(...verdictBadges, '');
+                // 结论区徽章整排退役（契约 2）：本段仅表格——跨 bot 汇总唯一事实源＝PR 标签，
+                //   逐 bot 明细唯一事实源＝上表列；verdict 仍写 BOT-METADATA 机读尾块（展示/机读分离）。
                 lines.push(`#### ${ICON('tasklist', 14)} PR 描述填充进度`, '');
                 lines.push('| 组件 | 状态 | 附注 |', '| :--- | :--- | :--- |');
                 const autofillBadge = BADGE(AUTOFILL_META[autofillState].badge, 'flat', 18);
@@ -573,17 +584,21 @@ jobs:
                   lines.push('<br>', '');
                 }
                 lines.push(`##### ${ICON('link-external', 14)} 本评论链接：`, '', '```', url || `${repoUrl}/pull/${prNumber}`, '```', '');
-                lines.push(`##### ${ICON('code', 14)} 本轮内联评论抓取（复制整块发给 agent）：`, '');
+                // 计数头（契约 4）：需改＝Blocker+Major、建议＝Minor+Suggestion，未匹配不计入两侧。
+                //   口径与逐行 severityOf 同源（severities Map 单次提取），禁行首锚定（E3 教训）；
+                //   采集失败（非数组）不显示计数。
+                const needFixCount = [...inlineSeverities.values()].filter((s) => s && /Blocker|Major/i.test(s)).length;
+                const suggestionCount = [...inlineSeverities.values()].filter((s) => s && /Minor|Suggestion/i.test(s)).length;
+                const countHead = Array.isArray(inlineComments)
+                  ? `本轮内联评论抓取 [${needFixCount} 条需改 · ${suggestionCount} 条建议]（逐条，复制整块发给 agent）：`
+                  : `本轮内联评论抓取（逐条，复制整块发给 agent）：`;
+                lines.push(`##### ${ICON('code', 14)} ${countHead}`, '');
                 if (!Array.isArray(inlineComments)) {
                   lines.push('> 内联评论采集失败（仅展示面降级，不影响打标与裁决）', '');
+                } else if (matchedInline.length === 0) {
+                  lines.push('# 本轮无可归属受信内联评论（附兜底全量抓取命令）', '');
                 }
-                lines.push('```bash', ...(() => {
-                  const out = [];
-                  // 契约 4：采集成功但零受信内联 → 显式提示行（保持可复制性），区别于空 ```bash 块的漏风形态。
-                  if (Array.isArray(inlineComments) && fetchCommands.length === 0) out.push('# 本轮无可归属受信内联评论');
-                  fetchCommands.forEach((cmd, i) => { if (i > 0) out.push(''); out.push(cmd); });
-                  return out;
-                })(), '```');
+                lines.push('```bash', ...fetchCommands, '```');
                 // BOT-METADATA 机读尾块（§0 隐藏面）：HTML 注释包裹，渲染面不可见、API body 机读；
                 // \u003c/\u003e 全转义（E-5 闭环）：--> 含 >，转义后序列不可存活；JSON.parse 无损还原。
                 const metadata = {
@@ -974,6 +989,12 @@ jobs:
             // 正向门：每个 required bot 都解析出评级才写 ai-reviewed/风险标签；可选 bot 缺席记入
             //   状态评论但不阻塞（决策 1）。finalScore 取所有已解析 bot（含可选 bot）的最严分。
             const allBotsRated = requiredKeys.length > 0 && requiredKeys.every(key => ratingByBot[key] !== null);
+            // 契约 3（人类裁决 2026-10-18）：approved 门收紧——每个 expected bot 须「已评级或确定性缺席
+            //   （file_limit/manual_required）」；required 齐评但可选 bot 尚未落定（absent 无载体）→
+            //   review:pending（诚实等待，非核准），其后续事件重评自然升级。EXPECTED_BOTS 只含 required 时
+            //   allExpectedResolved ≡ allBotsRated，行为零变化。
+            const allExpectedResolved = expectedKeys.every(key =>
+              ratingByBot[key] !== null || ['file_limit', 'manual_required'].includes(botStatuses[key]?.state));
             let finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;
             const partialRating = !allBotsRated && hasParseableRating;
             let verdict = 'risk';
@@ -998,7 +1019,7 @@ jobs:
               const hasChangesRequested = reviews.some(r => r.commit_id === currentHeadSha && r.state === 'CHANGES_REQUESTED');
               const targetStatusLabel = (hasCheckFailure || hasChangesRequested || finalScore >= 3)
                 ? 'review:needs-work'
-                : 'review:approved';
+                : (allBotsRated && allExpectedResolved ? 'review:approved' : 'review:pending');
 
               console.log(`[Verdict] Head: ${currentHeadSha.slice(0, 7)} => Risk: ${targetRiskLabel}, Status: ${targetStatusLabel} (CR: ${crScore}, Kilo: ${kiloScore})`);
               toAdd.add('ai-reviewed');
@@ -1080,4 +1101,6 @@ jobs:
 
             // 裁决分支同步状态评论（D 契约）：汇总逐 bot 状态、缺席原因与本轮裁决/风险分，
             //   定位与二次编辑规则同等待遇分支；评论内容不回流评分管道。
-            await writeStatusComment(botStatuses, verdict, finalScore);
+            //   仅裁决分支传 perBotRatings（ratingByBot 定义于 4.6、裁决分支内）；等待分支（:809 区）
+            //   不传（TDZ：ratingByBot 该处尚不存在），缺省 {} 落 N/A/— 即等待语义。
+            await writeStatusComment(botStatuses, verdict, finalScore, ratingByBot);

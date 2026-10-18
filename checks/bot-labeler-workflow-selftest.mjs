@@ -490,6 +490,43 @@ check('workflow-status-comment-octicon-icons-no-emoji',
     genNames.size > 0 && labelerNames.size > 0 && onlyGen.length === 0 && onlyLabeler.length === 0,
     'onlyGenerator=' + JSON.stringify(onlyGen) + ' onlyLabeler=' + JSON.stringify(onlyLabeler));
 }
+// 契约 2（人类裁决 2026-10-18）：结论区徽章整排退役 + 风险量化列逐 bot。
+//   期望值由计划契约 2/3 推导，非抄录当前实现。
+const wscStart = text.indexOf('async function writeStatusComment');
+const wscEnd = text.indexOf('// 3. 栅栏汇合');
+const wscBody = wscStart !== -1 && wscEnd > wscStart ? text.slice(wscStart, wscEnd) : '';
+check('workflow-conclusion-badges-retired',
+  wscBody !== '' &&
+    !wscBody.includes('verdictBadges') &&
+    !text.includes('BOT_VERDICT_META') &&
+    !wscBody.includes('verdictMeta.risk') &&
+    !wscBody.includes('BOT_RISK_LABELS[riskScore]') &&
+    !text.includes('本轮结论-') && !text.includes('风险等级-'),
+  'wsc=' + wscBody.length + ' hasVerdictBadges=' + wscBody.includes('verdictBadges'));
+check('workflow-risk-cell-per-bot',
+  wscBody.includes('perBotRatings['),
+  'hasPerBot=' + wscBody.includes('perBotRatings['));
+// 契约 3：review:approved 门收紧——裁决分支含 allExpectedResolved 且判定串内含之。
+{
+  const verdictStart = text.indexOf('4.6 裁决汇总');
+  const verdictBody = verdictStart !== -1 ? text.slice(verdictStart) : '';
+  const gateBlock = (verdictBody.match(/const targetStatusLabel = [\s\S]*?review:pending'/) || [''])[0];
+  check('workflow-approved-gate-all-expected',
+    verdictBody.includes('const allExpectedResolved') && gateBlock.includes('allExpectedResolved'),
+    'gate=' + gateBlock.replace(/\s+/g, ' ').slice(0, 160));
+}
+// 契约 2 资产退役：磁盘 svg 存在性（结论 6 枚 + 风险等级 4 枚全无；风险评级 3 + 状态 6 全在）。
+const badgeDir = path.join(root, '.github', 'assets', 'badges');
+check('workflow-conclusion-badge-assets-retired-on-disk',
+  ['本轮结论-等待审查结果-fbca04', '本轮结论-无可用审查来源-8c959f', '本轮结论-全部必需_Bot_已核准-2da44e',
+    '本轮结论-存在风险发现-d93f0b', '本轮结论-部分_Bot_已评级-fbca04', '本轮结论-无评级-fbca04',
+    '风险等级-低-2da44e', '风险等级-中-d97706', '风险等级-高-d93f0b', '风险等级-严重-dc3545',
+  ].every((n) => !fs.existsSync(path.join(badgeDir, `${n}-flat.svg`))) &&
+    ['风险评级-高-d93f0b', '风险评级-中-d97706', '风险评级-低-2da44e',
+      '状态-缺席-8c959f', '状态-跳过审查-8c959f', '状态-审查中-d97706',
+      '状态-审查完成-2da44e', '状态-审查失败-crimson', '状态-需人工触发-d97706',
+    ].every((n) => fs.existsSync(path.join(badgeDir, `${n}-flat.svg`))),
+  'dir=' + badgeDir);
 // S3 内联采集区段隔离：pulls.listComments 仅出现在 writeStatusComment 区段（4.1 节头之前）。
 check('workflow-inline-comments-fetched-in-status-comment-only',
   text.includes('github.rest.pulls.listComments') &&
@@ -1294,9 +1331,9 @@ function record(name, ok, detail) {
     'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
 
-// 18. E1 观察项修正契约：可选 bot 的 in_progress 不阻塞 barrier——必需 bot 已终态时
-//     直接出裁决；可选 bot 的 in_progress 状态仅记入状态评论。期望值溯源：行为契约 1/2
-//     （required 门控收窄），非抄录当前实现（当前实现首支无门控，可选 in_progress 误阻塞）。
+// 18. E1 观察项修正契约（契约 3 收紧后更新）：可选 bot 的 in_progress 不阻塞 barrier 出裁决，
+//     但其「未落定」（既非已评级也非确定性缺席）→ review:pending（诚实等待，非核准，契约 3 退化语义）。
+//     状态评论照旧如实显示 coderabbit: in_progress。
 {
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
@@ -1309,8 +1346,8 @@ function record(name, ok, detail) {
     }],
   });
   record('workflow-optional-bot-inprogress-does-not-block-required-verdict',
-    r.err === null && r.labelsAdded.flat().includes('review:approved') &&
-      !r.labelsAdded.flat().includes('review:pending') &&
+    r.err === null && !r.labelsAdded.flat().includes('review:approved') &&
+      r.labelsAdded.flat().includes('review:pending') &&
       !r.labelsAdded.flat().includes('review:needs-work') &&
       (r.comments[0]?.body || '').includes('"coderabbit":"in_progress"'),
     'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
@@ -1476,65 +1513,121 @@ function record(name, ok, detail) {
       (r.comments[0]?.body || '').includes('"bots":{"coderabbit":"file_limit"'),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' head=' + String(r.comments[0]?.body).split('\n')[1]);
 }
-// D2 内联命令块分组：2 条同 review id + 1 条无主 + 1 条人类内联 → 恰 1 行 select(==551)。
+// D2 逐条命令契约（契约 4 人类裁决）：2 条同 review id 受信内联 + 1 条无主 + 1 条人类内联 →
+//   逐条两行 `pulls/comments/<id>` 命令（人类/无主不入），按 created_at 升序，标题计数头
+//   `[N 条需改 · M 条建议]`，每行尾 `# path:line · severity` 注释；兜底全量命令缺席。
 {
   const pullComments = [
-    { id: 1, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 10, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 2, pull_request_review_id: 551, commit_id: 'HEAD', path: 'b.js', line: 20, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 3, pull_request_review_id: null, commit_id: 'HEAD', path: 'c.js', line: 30, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
-    { id: 4, pull_request_review_id: 551, commit_id: 'HEAD', path: 'd.js', line: 40, user: { type: 'User', login: 'human' } },
+    { id: 1, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 10, body: 'Minor: n', created_at: '2026-10-18T10:00:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 2, pull_request_review_id: 551, commit_id: 'HEAD', path: 'b.js', line: 20, body: 'Major: m', created_at: '2026-10-18T10:01:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 3, pull_request_review_id: null, commit_id: 'HEAD', path: 'c.js', line: 30, body: 'Minor: q', created_at: '2026-10-18T10:02:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+    { id: 4, pull_request_review_id: 551, commit_id: 'HEAD', path: 'd.js', line: 40, body: 'Minor: r', created_at: '2026-10-18T10:03:00Z', user: { type: 'User', login: 'human' } },
   ];
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
     pullComments,
   });
   const body = r.comments[0]?.body || '';
-  record('workflow-inline-fetch-command-grouped-by-review-id',
+  record('workflow-inline-per-comment-commands',
     r.err === null && r.calls.pullsListComments > 0 &&
-      body.includes('--paginate') &&
-      body.includes('select(.pull_request_review_id == 551 and .commit_id == "HEAD" and (.user.login == "kilo-code-bot[bot]"))') &&
-      body.includes('{path, line, body}') &&
-      !body.includes('select(.pull_request_review_id == null)') &&
-      (body.match(/select\(/g) || []).length === 1,
-    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' cmds=' + (body.match(/select\(/g) || []).length);
+      body.includes('本轮内联评论抓取 [1 条需改 · 1 条建议]') &&
+      body.includes('gh api repos/o/r/pulls/comments/1 --jq') &&
+      body.includes('gh api repos/o/r/pulls/comments/2 --jq') &&
+      !body.includes('pulls/comments/3') && !body.includes('pulls/comments/4') &&
+      body.indexOf('pulls/comments/1') < body.indexOf('pulls/comments/2') &&
+      body.includes('# a.js:10 · Minor') && body.includes('# b.js:20 · Major') &&
+      !body.includes('select(.user.login =='),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' cmds=' + (body.match(/pulls\/comments\//g) || []).length);
 }
-// D2b 无受信 head review 内联 → 命令块为空（review-finding 契约：不再输出 != null 兜底命令，
-//   防历史/无关内联整批拉给 agent）。
+// D2b 无受信 head review 内联 → 命中计数头 [0 条需改 · 0 条建议] + 提示行 + login 白名单兜底全量命令
+//   （契约 4 真·兜底面：兜底命令必含 select(.user.login 白名单，防退化全量无过滤）。
 {
   const r = await barrierCase({ reviews: [{ ...COMMENTED, id: 552, body: 'SUGGESTION: ok' }], pullComments: [] });
   const body = r.comments[0]?.body || '';
-  record('workflow-inline-empty-yields-no-command',
-    r.err === null && !body.includes('select(.pull_request_review_id != null)') &&
-      !body.includes('select(.pull_request_review_id ==') &&
-      body.includes('```bash'),
+  const bashBlock = (body.split('```bash')[1] || '').split('```')[0] || '';
+  record('workflow-inline-zero-hit-fallback-command-present',
+    r.err === null && body.includes('# 本轮无可归属受信内联评论') &&
+      body.includes('[0 条需改 · 0 条建议]') &&
+      bashBlock.includes('select(.user.login ==') &&
+      !bashBlock.includes('$') && !bashBlock.includes('`'),
     'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
-      ' cmds=' + (body.match(/select\(/g) || []).length);
+      ' fallback=' + bashBlock.includes('select(.user.login =='));
 }
-// D2c 陈旧边界：评论自身 commit_id 非当前 head（历史/已过期内联）不入命令——只输出挂在本轮 diff 上的评论。
+// D2c 归属键契约（实测根因修正）：评论级 commit_id 是异步重锚的不稳面——评论 commit_id 设为非 head
+//   值（'OLD'）但 pull_request_review_id 命中 headReviews（id=552，commit_id=HEAD）→ 仍归属成功。
+//   旧实现按评论 c.commit_id===currentHeadSha 过滤会丢弃它（红）；证明边界是 review id 非评论 commit_id。
 {
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, id: 552, body: 'SUGGESTION: ok' }],
-    pullComments: [{ id: 20, pull_request_review_id: 552, commit_id: 'OLD', path: 'z.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
+    pullComments: [{ id: 20, pull_request_review_id: 552, commit_id: 'OLD', path: 'z.js', line: 1, body: 'Major: x', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
   });
   const body = r.comments[0]?.body || '';
-  record('workflow-inline-command-excludes-stale-commit-id',
-    r.err === null && !body.includes('select(.pull_request_review_id ==') &&
-      (body.match(/select\(/g) || []).length === 0,
-    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+  record('workflow-inline-attribution-by-review-id-not-comment-commit-id',
+    r.err === null && body.includes('pulls/comments/20') &&
+      body.includes('z.js:1'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' hasCmd=' + body.includes('pulls/comments/20'));
 }
-// D2d 重锚纳入：评论自身 commit_id 已重锚到当前 head，但其所属 review 的 commit_id 仍是旧 head
-//   （review id 不在 headReviews）——必须仍被纳入命令（Bug 2 回归：按 review commit_id 过滤会误丢）。
+// D2d 跨轮排除契约：评论所属 review id 不在 headReviews（上一轮 review id=999，本轮 headReviews=552）
+//   → 不入逐条命令——旧实现按评论级 commit_id 重锚纳入会产生串轮泄漏。期望值由契约 4 推导。
 {
   const r = await barrierCase({
     reviews: [{ ...COMMENTED, id: 552, body: 'SUGGESTION: ok' }],
-    pullComments: [{ id: 30, pull_request_review_id: 999, commit_id: 'HEAD', path: 'z.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
+    pullComments: [{ id: 30, pull_request_review_id: 999, commit_id: 'HEAD', path: 'z.js', line: 1, body: 'Minor: y', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }],
   });
   const body = r.comments[0]?.body || '';
-  record('workflow-inline-command-includes-reanchored-review-id',
-    r.err === null && body.includes('select(.pull_request_review_id == 999') &&
-      body.includes('.commit_id == "HEAD"') &&
-      (body.match(/select\(/g) || []).length === 1,
-    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null'));
+  record('workflow-inline-excludes-stale-review-id',
+    r.err === null && !body.includes('pulls/comments/30'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' leaked=' + body.includes('pulls/comments/30'));
+}
+// E3 回灌：真实 markdown body 形态（severity 词非行首）——计数头与逐行注释必须同口径：
+//   emoji/加粗前缀 + `severity: Major` 的 body → 计数头 [1 条需改 · 0 条建议]、行注 `· Major`，
+//   同屏一致（旧 countOf 行首锚定实现下计数头恒 0 → 必红）。
+{
+  const pullComments = [
+    { id: 60, pull_request_review_id: 551, commit_id: 'HEAD', path: 'e.js', line: 5, body: '🤖 **Possible Issue** — severity: Major', created_at: '2026-10-18T10:00:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+  ];
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
+    pullComments,
+  });
+  const body = r.comments[0]?.body || '';
+  record('workflow-inline-count-head-matches-line-note-on-markdown-body',
+    r.err === null && body.includes('[1 条需改 · 0 条建议]') &&
+      body.includes('# e.js:5 · Major') &&
+      body.indexOf('1 条需改') < body.indexOf('# e.js:5 · Major'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' head=' + body.includes('[1 条需改 · 0 条建议]') + ' note=' + body.includes('# e.js:5 · Major'));
+}
+// E4 回灌（预 PR 审查）：未信 `c.path` 净化契约——评论 path 含换行与反引号（不可信 API 数据）
+//   不得突破 `# ` 行注释或 ```bash 围栏：逐条命令行的 `# path:line · severity` 注释段必须单行、
+//   零反引号；命令本体（gh api …）不受影响。未净化实现下 path 注入 `\n\`\`\`\ngh api evil` 形态
+//   会闭合围栏并注入伪命令 → 必红。
+{
+  const hostilePath = 'pkg/a.js\n```\ngh api evil-endpoint';
+  const pullComments = [
+    { id: 70, pull_request_review_id: 551, commit_id: 'HEAD', path: hostilePath, line: 9, body: 'Major: m', created_at: '2026-10-18T10:00:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } },
+  ];
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
+    pullComments,
+  });
+  const body = r.comments[0]?.body || '';
+  // 安全形态判据（而非字符串缺席）：净化后 hostile 内容作为普通路径文本在场也**不可突破**。
+  //   基线说明：状态评论含两处围栏——「本评论链接」节 1 开 1 闭 + 内联 bash 块 1 开 1 闭，
+  //   故 fence 恒等于 4；未净化实现 path 内的 ``` 会多贡献 2 段 → fence=6。
+  //   附加判据：gh api 命令行恰 1 条（无围栏外伪命令）、指向真实评论 id 端点、
+  //   注释段单行（evil 折叠进行内）。未净化实现 fence=6 + 伪命令落围栏外 → 必红。
+  const fenceCount = (body.match(/```/g) || []).length;
+  const ghLines = body.split('\n').filter((l) => l.trim().startsWith('gh api'));
+  record('workflow-inline-path-sanitized-in-comment',
+    r.err === null && fenceCount === 4 && ghLines.length === 1 &&
+      ghLines[0].includes('pulls/comments/70') && ghLines[0].includes('# pkg/a.jsgh api evil-endpoint:9'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') + ' fence=' + fenceCount + ' gh=' + ghLines.length);
 }
 // D3 首轮即收敛：create 轮立即用 createComment 返回的 html_url 重渲染并 updateComment 回填
 //   （不再依赖第二轮 update 才修正——首轮评论即携带真实 #issuecomment-… 链接）。
@@ -1634,6 +1727,9 @@ function record(name, ok, detail) {
 //   篡改点移入评分区可达作用域：直接在 codeRabbitText 聚合行拼接常量攻击串（证明夹具对
 //   "评分区混入评论正文"敏感——干净实现不含该串故 approved，篡改体拉爆评级被捕获）。
 {
+  // 契约 4（改版口径）：内联 body 不回流评分管道的突变验证——clean 夹具的 CR 载体走 review 正文
+  //   'Merge Risk: Low'（非内联），attack 只存在于内联 body；篡改体把内联拼进评分文本 → needs-work，
+  //   干净实现内联零回流 → 但 CR 未评（optional absent）→ 契约 3 落 review:pending（非 approved）。
   const ATTACK = 'Merge Readiness band: Blocked';
   // 夹具侧防求值：${textBlob} 以 \${ 转义写入篡改串，仅在被执行脚本内展开。
   const tampered = extractSyncLabelsScript(text).replace(
@@ -1656,7 +1752,9 @@ function record(name, ok, detail) {
   const clean = await runWorkflow(common);
   record('workflow-inline-bodies-never-feed-scoring',
     r.labelsAdded.flat().includes('review:approved') === false &&
-      clean.labelsAdded.flat().includes('review:approved') === true,
+      r.labelsAdded.flat().includes('review:needs-work') === true &&
+      clean.labelsAdded.flat().includes('review:approved') === false &&
+      clean.labelsAdded.flat().includes('review:needs-work') === false,
     'tampered=' + JSON.stringify(r.labelsAdded.flat()) + ' clean=' + JSON.stringify(clean.labelsAdded.flat()));
 }
 // D8 进度表三态：auto-fill sentinel 标记 head 匹配 → 已更新（teal）；不匹配 → 已生成_但head过期（purp）；无标记 → 未生成（blueviolet）。
@@ -1885,6 +1983,81 @@ function record(name, ok, detail) {
 }
 
 // ================================================================
+// 契约 2/3（PR#21 缺陷重构，人类裁决 2026-10-18）：review:approved 门收紧 + 逐 bot 风险列 +
+//   结论区徽章整排退役。期望值由计划契约 2/3 推导，非抄录当前实现。
+// ================================================================
+
+// PR#21 场景：Kilo(required) 评完（Status: No Issues Found → score 1），CodeRabbit(optional) 无任何
+//   载体（absent，尚可能后出评论）→ allBotsRated 真但 allExpectedResolved 假 → review:pending（非
+//   approved，诚实等待）；ai-reviewed + risk:low 照常；Kilo 行风险量化=风险评级-低徽章、CodeRabbit
+//   行=N/A；结论区无任何徽章。旧实现（allBotsRated 即 approved + 三徽章）→ 必红。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** No Issues Found' }],
+    pullComments: [],
+  });
+  const body = r.comments[0]?.body || '';
+  const kiloRow = body.split('\n').find((l) => l.includes('**Kilo Code**')) || '';
+  const crRow = body.split('\n').find((l) => l.includes('**CodeRabbit**')) || '';
+  record('workflow-pr21-scenario-pending-until-optional-rated',
+    r.err === null && r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:approved') &&
+      r.labelsAdded.flat().includes('ai-reviewed') && r.labelsAdded.flat().includes('risk:low') &&
+      kiloRow.includes('风险评级-低') && crRow.includes('N/A') &&
+      !body.includes('本轮结论-') && !body.includes('风险等级-'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' labels=' + JSON.stringify(r.labelsAdded.flat()) +
+      ' kilo=' + kiloRow.slice(0, 80) + ' cr=' + crRow.slice(0, 80));
+}
+// 升级正控：Kilo + CodeRabbit 双双评级（CR review 'Merge Risk: Low'）→ allExpectedResolved 真 →
+//   review:approved；结论区仍无徽章。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [
+      { ...COMMENTED, body: '**Status:** No Issues Found' },
+      { commit_id: 'HEAD', state: 'COMMENTED', user: { type: 'Bot', login: 'coderabbitai[bot]' }, body: 'Merge Risk: Low' },
+    ],
+    pullComments: [],
+  });
+  record('workflow-all-rated-upgrades-approved',
+    r.err === null && r.labelsAdded.flat().includes('review:approved') &&
+      !r.labelsAdded.flat().includes('review:pending') &&
+      !(r.comments[0]?.body || '').includes('本轮结论-') && !(r.comments[0]?.body || '').includes('风险等级-'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// 确定性缺席正控：CodeRabbit changed_files=101 → file_limit（确定性缺席）→ allExpectedResolved 真 →
+//   review:approved；CodeRabbit 行风险量化=N/A（absent 态语义）。
+{
+  const r = await barrierCase({
+    changedFiles: 101, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** No Issues Found' }],
+    pullComments: [],
+  });
+  const crRow = (r.comments[0]?.body || '').split('\n').find((l) => l.includes('**CodeRabbit**')) || '';
+  record('workflow-optional-terminal-unavailable-still-approved',
+    r.err === null && r.labelsAdded.flat().includes('review:approved') &&
+      !r.labelsAdded.flat().includes('review:pending') && crRow.includes('N/A'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' labels=' + JSON.stringify(r.labelsAdded.flat()) + ' cr=' + crRow.slice(0, 80));
+}
+// needs-work 优先：Kilo CRITICAL（finalScore>=3）+ CodeRabbit 未评 → review:needs-work（不落 pending）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** 2 Issues Found\n| Severity | Count |\n|---|---|\n| CRITICAL | 2 |' }],
+    pullComments: [],
+  });
+  record('workflow-needs-work-priority-over-pending',
+    r.err === null && r.labelsAdded.flat().includes('review:needs-work') &&
+      !r.labelsAdded.flat().includes('review:pending') && !r.labelsAdded.flat().includes('review:approved'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+
+// ================================================================
 // C-A/C-B/契约 4（20261017-autofill-labeler-fix）：顶层摘要评论采集面 + verdict 兜底 +
 //   空块提示行 + byReview 诊断日志。期望值由计划契约 3/4 推导，非抄录实现。
 // ================================================================
@@ -2077,21 +2250,11 @@ function record(name, ok, detail) {
     r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0]
       : 'verdict=' + (meta && meta.verdict) + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
-// 契约 4a：采集成功零内联 → bash 块含显式提示行 `# 本轮无可归属受信内联评论`。
+// 契约 4a（改版=逐条形态）：采集成功零内联 → 计数头 [0 条需改 · 0 条建议] + 显式提示行 + 兜底命令
+//   （由 workflow-inline-zero-hit-fallback-command-present 锁定，此处不重复）。
+// 契约 4a 负控：有受信内联 → 不出提示行、无兜底全量命令（逐条命令在场）。
 {
-  const r = await barrierCase({
-    changedFiles: 1, stars: 100,
-    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
-    pullComments: [],
-  });
-  const body = r.comments[0]?.body || '';
-  record('workflow-inline-empty-block-explicit-hint',
-    r.err === null && body.includes('# 本轮无可归属受信内联评论'),
-    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'hint=' + body.includes('# 本轮无可归属受信内联评论'));
-}
-// 契约 4a 负控：有受信内联 → 不出提示行。
-{
-  const pullComments = [{ id: 40, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 1, user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }];
+  const pullComments = [{ id: 40, pull_request_review_id: 551, commit_id: 'HEAD', path: 'a.js', line: 1, body: 'Minor: n', created_at: '2026-10-18T10:00:00Z', user: { type: 'Bot', login: 'kilo-code-bot[bot]' } }];
   const r = await barrierCase({
     changedFiles: 1, stars: 100,
     reviews: [{ ...COMMENTED, id: 551, body: 'SUGGESTION: ok' }],
@@ -2099,10 +2262,11 @@ function record(name, ok, detail) {
   });
   const body = r.comments[0]?.body || '';
   record('workflow-inline-present-no-hint',
-    r.err === null && !body.includes('# 本轮无可归属受信内联评论') && body.includes('select('),
+    r.err === null && !body.includes('# 本轮无可归属受信内联评论') &&
+      body.includes('pulls/comments/40') && !body.includes('select(.user.login =='),
     r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'hintAbsent=' + !body.includes('# 本轮无可归属受信内联评论'));
 }
-// 契约 4b：byReview 诊断日志——过滤循环后输出 inlineComments.length 与 byReview 计数（含被过滤原因）。
+// 契约 4b（改版口径）：matchedInline 诊断日志——输出采集总量、命中数与被过滤原因计数。
 {
   const r = await barrierCase({
     changedFiles: 1, stars: 100,
@@ -2111,8 +2275,8 @@ function record(name, ok, detail) {
   });
   const diag = r.logs.join('\n');
   record('workflow-byreview-diagnostic-logged',
-    r.err === null && /\[Status Comment\] byReview/.test(diag),
-    'diag=' + diag.split('\n').filter((l) => l.includes('byReview')).join(' | ').slice(0, 200));
+    r.err === null && /\[Status Comment\] matchedInline/.test(diag),
+    'diag=' + diag.split('\n').filter((l) => l.includes('matchedInline')).join(' | ').slice(0, 200));
 }
 
 // 关联小节（🤝 定版契约）：状态评论渲染本 PR 的关联 issue/PR——编号逐行裸写 + 尾随空格

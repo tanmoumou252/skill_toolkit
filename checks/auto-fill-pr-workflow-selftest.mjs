@@ -494,6 +494,8 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
   //   `Closes: #12, closes #13`——逐编号各带一个 closing keyword（GitHub 多编号语法要求
   //   「Use full syntax for each issue」：`Closes: #12, #13` 只有 #12 被解析为合并即关闭，
   //   #13 退化成普通提及＝脚本承诺的关闭关联未兑现）。落位＝验证节之后、尾块/sentinel 之前。
+  //   覆盖差集契约下的语义：人类 keyword 行不在「验证」节 prose 面、重写中丢失 → 覆盖集不含该编号
+  //   （契约 1 退化语义第 3 条「意图不丢失」）→ 确认集照常补写，恰 1 行。
   const r = await runCase({ existingBody: 'Closes #12\n\rFixes: #13', closingIssues: [12, 13] });
   const body = String(r.patches[0]?.payload?.body ?? '');
   record('autofill-closing-keywords-carried-over',
@@ -564,6 +566,100 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
   const body = String(r.patches[0]?.payload?.body ?? '');
   const count = (body.match(/#12/g) || []).length;
   record('autofill-closing-keywords-dedup', wroteOne(r) && count === 1, `occurrences=${count}`);
+}
+{
+  // 覆盖差集契约（PR#21 实测）：人类 closing keyword 已声明的编号（fixes #16 #19 #20 全部确认）→
+  //   续写面剔除全部已覆盖编号 → 不追加 Closes 行（消除「fixes #16」与「Closes: #16」双写共存）；
+  //   人类原行照常在场（裸 #16 计数含人类原行）。夹具把 keyword 行置于「验证」节 prose
+  //   （mergeVerification :136-176 仅保留该节人类行，行经重写存活=双写共存的真实发生面）。
+  //   旧实现（确认集直写）产生 `Closes: #16, closes #19, closes #20` → 必红。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfixes #16 fixes #19 fixes #20',
+    closingIssues: [16, 19, 20],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  const bareCount = (body.match(/#16\b/g) || []).length;
+  record('autofill-closing-human-keyword-covered-no-duplicate',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('fixes #16') && bareCount >= 1,
+    `bare16=${bareCount} tail=` + JSON.stringify(body.slice(-160)));
+}
+{
+  // 覆盖差集部分覆盖契约：#16 被人类 keyword 覆盖（剔除）、#19 仅裸提及不覆盖（裸 #N 非 closing
+  //   keyword 前缀，不入覆盖集）→ 恰续写一条 `Closes: #19`。旧实现写 `Closes: #16, closes #19` → 必红。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfixes #16, see #19',
+    closingIssues: [16, 19],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-partial-coverage-writes-remainder',
+    wroteOne(r) && body.includes('Closes: #19') && !/Closes: #16/.test(body),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 覆盖差集单数 keyword 契约（PR 审查 E1 回灌）：GitHub 官方 closing 关键词集含单数 `fix`——
+  //   人类写 `fix #16` 且确认 → 覆盖集必须含 16（不续写）；旧正则 `fixes?`＝fixe+s? 不命中裸 `fix`
+  //   → 双写复发（本用例对旧形必红）。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfix #16',
+    closingIssues: [16],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-fix-singular-covered-no-duplicate',
+    wroteOne(r) && !/Closes:/.test(body) && body.includes('fix #16'),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 覆盖集噪声屏蔽契约（预 PR 审查回灌）：HTML 注释与行内代码内的 closing keyword 不是人类
+  //   声明面（GitHub 不在其中解析关闭关联）——若误入覆盖集，已确认关联会被丢弃（意图丢失，
+  //   反方向缺陷）。夹具：验证节 prose 同时含行内代码 `` `fixes #16` ``、HTML 注释
+  //   `<!-- fixes #17 -->` 与真实声明 `fixes #18`，确认集 [16,17,18] → 仅 #18 被覆盖，
+  //   #16/#17 照常续写（恰一条 `Closes: #16, closes #17`）。未屏蔽实现下覆盖集含 16/17 → 必红。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n文档示例 `fixes #16` 与 <!-- fixes #17 --> 注释引用；真实声明 fixes #18',
+    closingIssues: [16, 17, 18],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-noise-masked-not-covered',
+    wroteOne(r) && body.includes('Closes: #16, closes #17') && !/Closes: #18/.test(body),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // 关键词精确匹配契约（预 PR 审查回灌）：`fixe` 非 GitHub closing 关键词（fix/fixes/fixed）——
+  //   不得计入覆盖集（否则 `fixe #16` 会丢弃已确认关联）。夹具 prose 仅 `fixe #16`，
+  //   确认 [16] → 照常续写 `Closes: #16`。旧正则 `fix(?:e[ds]?)?` 命中 fixe → 必红。
+  const r = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfixe #16',
+    closingIssues: [16],
+  });
+  const body = String(r.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-fixe-not-a-keyword',
+    wroteOne(r) && body.includes('Closes: #16'),
+    'tail=' + JSON.stringify(body.slice(-160)));
+}
+{
+  // NOTE 口径契约（PR 审查 M2 回灌）：三 NOTE 三态——确认集直写形态退役后：
+  //   ① 全被人类 keyword 覆盖 → closing-keywords-all-covered-by-human（零行可观测）；
+  //   ② 部分覆盖 → closing-keywords-carried-over 记差集（仅 #19，被覆盖 #16 不在列）；
+  //   ③ 确认在但装配前 → closing-keywords-confirmed 记确认全集。
+  const rCovered = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfixes #16 fixes #19 fixes #20',
+    closingIssues: [16, 19, 20],
+  });
+  const rPartial = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\nfixes #16, see #19',
+    closingIssues: [16, 19],
+  });
+  const notesCovered = rCovered.logs.join('\n');
+  const notesPartial = rPartial.logs.join('\n');
+  record('autofill-closing-notes-three-states',
+    rCovered.err === null && rPartial.err === null &&
+      notesCovered.includes('closing-keywords-confirmed: 16,19,20') &&
+      notesCovered.includes('closing-keywords-all-covered-by-human') &&
+      !notesCovered.includes('closing-keywords-carried-over') &&
+      notesPartial.includes('closing-keywords-carried-over: 19') &&
+      !/closing-keywords-carried-over: 16/.test(notesPartial),
+    'covered=' + notesCovered.split('\n').filter((l) => l.includes('closing-keywords')).join('|') +
+      ' partial=' + notesPartial.split('\n').filter((l) => l.includes('closing-keywords')).join('|'));
 }
 {
   // 跨轮累积闸契约：脚本自生成 `Closes:` 行在再装配时剥离重建——N 轮 N 行禁止。
