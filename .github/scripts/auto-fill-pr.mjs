@@ -932,19 +932,26 @@ export async function runAutoFill(deps) {
   //   status 以 SHA 为键、state/context 不可被 PR 作者伪造、天然携带本轮运行标识（target_url）。
   //   bot-review-labeler 的进度表佐证只消费这条 status（context=auto-fill-pr, state=success）：
   //   status 在 = 本运行已处理该 head；status 缺失 = 任何下游都不得宣称 synced。
-  //   写入失败不回滚 PATCH（标题/正文已更新为事实），仅告警——佐证缺失的后果由 labeler 的
+  //   部分写入不落佐证（S0 幂等闸配套）：title/body 解耦 PATCH 后，单侧内容闸失败（仅写标题
+  //   或仅写正文）时若照常落 success，S0 会在同 head 重跑时短路，失败侧永远无法经重跑补写
+  //   （正文失败多为模型输出随机偏差，重跑即最直接恢复路径）。仅双侧均写入成功才落佐证；
+  //   写入失败不回滚 PATCH（已写字段仍为事实），仅告警——佐证缺失的后果由 labeler 的
   //   fail-closed 三态（stale）承担，不影响 auto-fill 主交付。
-  try {
-    await gh.postStatus(env.HEAD_SHA, {
-      state: 'success',
-      context: 'auto-fill-pr',
-      // 佐证 description 携带完整 40 位 sha：读取端 S0 幂等短路闸按 40 位正则回读比对，
-      //   截短会导致写入/读取永不匹配、短路闸失效（review 契约：两端格式必须一致）。
-      description: `auto-filled PR #${env.PR_NUMBER} head ${String(env.HEAD_SHA)}`,
-      target_url: String(env.RUN_URL || ''),
-    });
-  } catch (err) {
-    warn(`NOTE auto-fill status write failed (labeler will mark stale): ${sanitize(err && err.message)}`);
+  if (!titleError && !bodyError) {
+    try {
+      await gh.postStatus(env.HEAD_SHA, {
+        state: 'success',
+        context: 'auto-fill-pr',
+        // 佐证 description 携带完整 40 位 sha：读取端 S0 幂等短路闸按 40 位正则回读比对，
+        //   截短会导致写入/读取永不匹配、短路闸失效（review 契约：两端格式必须一致）。
+        description: `auto-filled PR #${env.PR_NUMBER} head ${String(env.HEAD_SHA)}`,
+        target_url: String(env.RUN_URL || ''),
+      });
+    } catch (err) {
+      warn(`NOTE auto-fill status write failed (labeler will mark stale): ${sanitize(err && err.message)}`);
+    }
+  } else {
+    warn(`NOTE partial write (title=${titleError ? 'fail' : 'ok'}, body=${bodyError ? 'fail' : 'ok'}): no corroboration status, rerun can fill missing side`);
   }
   const updated = { title: !titleError, body: !bodyError };
   return {

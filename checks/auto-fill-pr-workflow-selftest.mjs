@@ -793,6 +793,21 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
       st.target_url === 'https://github.com/o/r/actions/runs/4242',
     JSON.stringify(st || null));
 }
+{ // 部分写入不落佐证（S0 幂等闸配套，CodeRabbit Major 642-656）：title/body 解耦 PATCH 后，
+  //   单侧内容闸失败只写另一侧时不得落 success 佐证——否则同 head 重跑被 S0 短路，
+  //   失败侧永远无法经重跑补写（正文失败多为模型输出随机偏差，重跑即最直接恢复路径）。
+  //   两轮夹具：第一轮正文缺节（bodyError，仅写标题、零 postStatus）；第二轮回放第一轮
+  //   headStatuses（空佐证）→ 不得 S0 短路、照常全链跑并补写正文。
+  const r1 = await runCase({ aiBody: { 影响面与风险: undefined } }); // aiBody undefined 节整节消失（:135）→ 缺节闸咬
+  record('autofill-partial-write-no-corroboration-title-only',
+    bodyFailWith(r1, '缺节或同名重复') && (r1.calls.postStatus || 0) === 0 &&
+      r1.logs.join('\n').includes('no corroboration status'),
+    'postStatus=' + (r1.calls.postStatus || 0) + ' logs=' + r1.logs.join('\n').slice(0, 160));
+  const r2 = await runCaseWith(runAutoFill, { headStatuses: [] });
+  record('autofill-partial-write-rerun-not-s0-short-circuited',
+    r2.err === null && r2.out?.skipCode !== 'S0' && r2.calls.postStatus === 1,
+    'skipCode=' + (r2.out?.skipCode || 'none') + ' postStatus=' + (r2.calls.postStatus || 0));
+}
 { // 契约 :224/:307（Bot 意见·commits 同族）：MAX_COMMIT_CHARS 裁剪后 statsText 提交数必须
   //   取 REST 全量事实，不得少报为裁剪后数量。
   //   夹具：每条 message 约 640 字符 × 50 条 ≈ 32000 > MAX_COMMIT_CHARS(默认 12000)
