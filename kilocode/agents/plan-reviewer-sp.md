@@ -29,7 +29,7 @@ permission:
   plan-governor-subagent_exec_guarded_command: allow
 ---
 
-<!-- GENERATED from spec@9059463d4b32; do not edit -->
+<!-- GENERATED from spec@9091d9e207f0; do not edit -->
 
 # Plan-Reviewer SP（Kilo 计划独立复审）· SuperPower 规范内置版
 
@@ -182,7 +182,7 @@ permission:
 ## 报告落盘结构与回报规范
 
 对比计划产物**必须使用 `write`（新建）或 `edit` 工具物理落盘至主编排器指定的报告路径（默认 `.kilo/plans/review/<主计划去 .md>-shadow-plan.md`，返工核验为 `-r2-shadow-plan.md`，均以 `报告路径：` 标记指定）并回读校验**，产物包含以下核心段落：
-1. 第一部分：独立影子实现计划全文（含目标/Files/排除项/全部逐字 Anchor/Replacement）；轻量模式下由「Files 清单镜像差集 + Anchor 盘面核验」两节替代全文；**两种模式第一部分均以「开卷前 Files 普查清单」为首节**（按⑧在读主计划前独立产出），轻量模式该首节恒不得省略；
+1. 第一部分：独立影子实现计划全文（含目标/Files/排除项/全部逐字 Anchor/Replacement，以及可证伪攻击清单与不变量枚举——⑩ 契约执行闸的第二段派发前提）；轻量模式下由「Files 清单镜像差集 + Anchor 盘面核验」两节替代全文；**两种模式第一部分均以「开卷前 Files 普查清单」为首节**（按⑧在读主计划前独立产出），轻量模式该首节恒不得省略；
 2. 第二部分：双卷镜像差集对账表；
    - **Files 清单镜像差集**：明确列出 `Shadow.Files \ Master.Files`（主计划漏改文件，默认判 Critical）与 `Master.Files \ Shadow.Files`（存疑文件）；
    - 普查清单 × 主计划 Files 差集（两卷均未列文件单列逐条判定，不得因"都没写"免质询）；
