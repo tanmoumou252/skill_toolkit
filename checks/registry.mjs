@@ -92,19 +92,20 @@ export const SIZE_BUDGET_CEILING = {
 };
 // per-file 豁免登记表（显式登记，缺省空＝无豁免）。cap 为该文件的生效上限、reason 必填。
 // 2026-10-16T22:5xZ 接力步骤 5 口径 B 登记（棘轮两层未动：SIZE_BUDGET/CEILING 保持装机值）：
-//   实测锚+电报祈使地板高于类别默认上限（步骤 4 实测：转写/硬压均为负收益或触红线），逐件显式登记呈人类复核；
-//   本表＝登记时点实测地板的显式快照（声明面压缩已收口，零合法续压面）；复核未通过前即为欠账清单。cap＝登记时实测值+512（禁取整抬高；实测下移后 cap 只随下移不上调）。
+//   实测锚+电报祈使地板高于类别默认上限（步骤 4 实测：转写/硬压均为负收益或触红线），逐件显式登记；
+//   本表＝登记时点实测地板的显式快照（声明面压缩已收口，零合法续压面）。cap＝登记时实测值+512（禁取整抬高；实测下移后 cap 只随下移不上调）。
+// 2026-10-18 人类裁决＝豁免认可；10 件实测低于登记 cap 的按「cap 只随实测下移」规则 re-pin（新 cap＝min(现 cap, 实测+512)），reason 更新为已复核通过。
 export const SIZE_BUDGET_EXEMPT = {
-  'codebuddy/agents/plan-writer-sp.md': { cap: 30640, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'codebuddy/agents/plan-reviewer-sp.md': { cap: 28431, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'codebuddy/agents/pr-reviewer-sp.md': { cap: 23235, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'kilocode/agents/plan-writer-sp.md': { cap: 27889, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'kilocode/agents/plan-reviewer-sp.md': { cap: 28460, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'kilocode/agents/pr-reviewer-sp.md': { cap: 21262, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'zcode/agents/plan-writer-subagent-sp.md': { cap: 21339, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'zcode/agents/plan-reviewer-subagent-sp.md': { cap: 30470, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'zcode/agents/pr-reviewer-subagent-sp.md': { cap: 23077, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
-  'zcode/AGENTS.md': { cap: 17348, reason: '锚+电报祈使地板实测；声明面压缩已收口，零合法续压面' },
+  'codebuddy/agents/plan-writer-sp.md': { cap: 30299, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'codebuddy/agents/plan-reviewer-sp.md': { cap: 28431, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'codebuddy/agents/pr-reviewer-sp.md': { cap: 23235, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'kilocode/agents/plan-writer-sp.md': { cap: 27889, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'kilocode/agents/plan-reviewer-sp.md': { cap: 28448, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'kilocode/agents/pr-reviewer-sp.md': { cap: 21234, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'zcode/agents/plan-writer-subagent-sp.md': { cap: 21339, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'zcode/agents/plan-reviewer-subagent-sp.md': { cap: 30470, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'zcode/agents/pr-reviewer-subagent-sp.md': { cap: 23077, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
+  'zcode/AGENTS.md': { cap: 17306, reason: '锚+电报祈使地板实测；已复核通过（2026-10-18 人类裁决）' },
 };
 
 const P = 'kilocode|codebuddy|zcode';
