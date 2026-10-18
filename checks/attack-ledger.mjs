@@ -263,8 +263,12 @@ function lastAnchoredLine(text, re) {
 
 // pass-line-out-of-domain-gate：围栏外行首 `^<键>=` 整行、但取值不在值域闭集（不命中对应 *_LINE_RE）
 // ⇒ 记录行号。值域收窄后此类行不命中锚定、末次取值退回旧合法行，值语义闸绿、结构闸又被旧行满足
-// ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域：仅围栏外行首前缀整行；
-// 散文提及/行内代码引用/围栏内示例不触发（与前缀正则 ^X= 的行首锚定及 lineView 围栏掩蔽同口径）。
+// ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域（姊妹闸扩面，与 VERDICT
+//   闸 104g 同批同口径）：围栏外判定行行首——行首空白（缩进）、Markdown 加粗/斜体装饰（*_）、
+//   全角冒号改形（KEY：）与大小写变体（key=）均入闸；blockquote（>）、列表符（-）、标题（#）、
+//   表格（|）、行内代码（反引号）承载的旧值引用属合法非锚定形态，不触发（负控制由 selftest 104b-g 钉死）。
+// 散文提及/行内代码引用/围栏内示例不触发（lineView 围栏掩蔽同口径）。
+const PASS_STRAY_PREFIX_RE = (key) => new RegExp('^[ \\t]*[*_]{0,4}[ \\t]*' + key + '[ \\t]*[:=：]', 'i');
 function strayPassLineNumbers(text, prefixRe, lineRe) {
   const { lines, fenced } = lineView(text);
   const out = [];
@@ -287,7 +291,7 @@ export function checkSemanticPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：值域外行闸先于缺行早退执行——正是「无锚定命中即 return」让值域外
   //   修正行静默失效；缺行本身仍归结构闸存在性职责，此处不重复计数。
-  for (const n of strayPassLineNumbers(reportText, /^SEMANTIC_PASS=/, SEMANTIC_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('SEMANTIC_PASS'), SEMANTIC_PASS_LINE_RE)) {
     v.push({ msg: 'SEMANTIC_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const semHit = lastAnchoredLine(reportText, SEMANTIC_PASS_LINE_RE);
@@ -308,7 +312,7 @@ export function checkSemanticPassVerdict(reportText, v) {
 export function checkTruthPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：同 checkSemanticPassVerdict，值域外行闸先于缺行早退执行。
-  for (const n of strayPassLineNumbers(reportText, /^TRUTH_PASS=/, TRUTH_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('TRUTH_PASS'), TRUTH_PASS_LINE_RE)) {
     v.push({ msg: 'TRUTH_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const tp = lastAnchoredLine(reportText, TRUTH_PASS_LINE_RE);
@@ -326,7 +330,7 @@ export function checkShadowPassVerdict(reportText, v) {
   if (reportText === null || reportText === undefined) return;
   // pass-line-out-of-domain-gate：同上，值域外行闸先于缺行早退执行（本函数经 checkReportFormat
   //   恒执行路径消费影子文本，故影子侧 SHADOW_PASS 值域外行同样咬合）。
-  for (const n of strayPassLineNumbers(reportText, /^SHADOW_PASS=/, SHADOW_PASS_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, PASS_STRAY_PREFIX_RE('SHADOW_PASS'), SHADOW_PASS_LINE_RE)) {
     v.push({ msg: 'SHADOW_PASS= 第 ' + n + ' 行取值不在值域闭集（done|partial:<非空缺项>）：值域外机读行不生效，末次取值退回旧行（pass-line-out-of-domain-gate）' });
   }
   const sp = lastAnchoredLine(reportText, SHADOW_PASS_LINE_RE);
@@ -342,11 +346,15 @@ export function checkShadowPassVerdict(reportText, v) {
 //   不命中 VERDICT_LINE_RE（三值闭集之外的取值，或行尾续写 `:说明`——VERDICT_LINE_RE 无可选说明组）的行
 //   即判定行失配：末次取值退回被推翻的旧行（旧判定可能仍是 GO），失配修正行本身零红灯＝ERRATA 勘误静默
 //   失效的 fail-open 家族在 VERDICT 位仅存的一枚缺口。登记行号判红后，失配行被红灯强制重写为逐字命中
-//   锚定的形态，不存在「以非法行静默保留旧 GO」。触发域与闸族同口径：仅围栏外行首前缀整行；散文/行内
-//   代码/围栏内示例不触发。shadow 与 PR 两侧同闸消费（shadow 报告与 PR 复审报告均有 ERRATA 修正通道）。
+//   锚定的形态，不存在「以非法行静默保留旧 GO」。触发域（104g 扩面）：围栏外判定行行首——行首空白（缩进）、
+//   Markdown 加粗/斜体装饰（*_）、全角冒号（VERDICT：）与大小写变体（verdict:）均入闸，杜绝失配修正行
+//   以装饰形态静默失效；blockquote（>）、列表符（-）、标题（#）、表格（|）、行内代码（反引号）承载的
+//   旧判定行引用属 ERRATA 合法非锚定形态，不触发（排除面由 selftest 104g 负控制钉死）。shadow 与 PR
+//   两侧同闸消费（shadow 报告与 PR 复审报告均有 ERRATA 修正通道）。
+const VERDICT_STRAY_PREFIX_RE = PASS_STRAY_PREFIX_RE('verdict');
 export function checkVerdictStray(reportText, v) {
   if (reportText === null || reportText === undefined) return;
-  for (const n of strayPassLineNumbers(reportText, /^VERDICT:/, VERDICT_LINE_RE)) {
+  for (const n of strayPassLineNumbers(reportText, VERDICT_STRAY_PREFIX_RE, VERDICT_LINE_RE)) {
     v.push({ msg: 'VERDICT: 第 ' + n + ' 行取值不在三值闭集或行尾失配（GO|NO-GO|ESCALATE_TO_HUMAN，行尾仅容忍空格/制表符）：失配判定行不生效，末次取值退回旧行——严禁以失配行静默保留旧判定（含旧 GO），勘误必须重写为逐字命中锚定的修正行（verdict-line-out-of-domain-gate）' });
   }
 }

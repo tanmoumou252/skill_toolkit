@@ -772,6 +772,22 @@ check('assert-semantic-pass-out-of-domain-stray-line-detected',
   attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_SEM }).some((x) => x.msg.includes('SEMANTIC_PASS') && x.msg.includes('值域外')));
 check('assert-shadow-pass-out-of-domain-stray-line-detected',
   rv(SHADOW_STRAY).some((x) => x.msg.includes('SHADOW_PASS') && x.msg.includes('值域外')));
+// 104b-g 三 *_PASS 闸前缀扩面（pass-line-out-of-domain-gate 触发域，与 104g VERDICT 同批收口）：仅 ^KEY= 行首
+//   锚定漏掉缩进、加粗装饰、全角冒号（KEY：）与大小写变体——混存形态下值域外修正行静默失效同族。判据：
+//   三闸各携一个装饰/全角变体夹具必含本闸违规；负控制——合法行逐字命中锚定不判红、blockquote 引用不判红。
+const PR_STRAY_TRUTH_BOLD = PR_STRAY_TRUTH.replace('TRUTH_PASS=partial', '**TRUTH_PASS=partial**');
+const PR_STRAY_SEM_FULLWIDTH = PR_STRAY_SEM.replace('SEMANTIC_PASS=partial', 'SEMANTIC_PASS：partial');
+const SHADOW_STRAY_INDENT = REPORT_OK + '\n  shadow_pass=partial';
+const PR_QUOTE_PASS_REF = PR_OK.replace('## 主要变更', '## 主要变更\n> 旧值引用：TRUTH_PASS=done');
+check('assert-truth-pass-stray-line-bold-decorated-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_BOLD }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+check('assert-semantic-pass-stray-line-fullwidth-colon-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_SEM_FULLWIDTH }).some((x) => x.msg.includes('SEMANTIC_PASS') && x.msg.includes('值域外')));
+check('assert-shadow-pass-stray-line-indent-lowercase-detected',
+  rv(SHADOW_STRAY_INDENT).some((x) => x.msg.includes('SHADOW_PASS') && x.msg.includes('值域外')));
+check('assert-pass-stray-prefix-excludes-legal-refs',
+  attackLedger(auditorPlan, { prReviewReportText: PR_QUOTE_PASS_REF }).filter((x) => x.msg.includes('值域外')).length === 0
+  && attackLedger(auditorPlan, { prReviewReportText: PR_OK }).filter((x) => x.msg.includes('值域外')).length === 0);
 
 // 104e 零发现升级终局契约机械闭环（zero-finding-escalated-no-go）：围栏外独立成行 ZERO_FINDING_ESCALATED＝
 //   报告自宣「再攻仍零发现、升级人工」，与末次判定 VERDICT: GO 并存即自相矛盾——此前机器盲区（① 条只咬
@@ -789,6 +805,22 @@ check('assert-zero-finding-escalated-go-conflict',
 const PR_STRAY_VERDICT = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\nVERDICT: GONE');
 check('assert-verdict-out-of-domain-stray-line-detected',
   prWired(PR_STRAY_VERDICT).some((x) => x.msg.includes('verdict-line-out-of-domain-gate'))
+  && prWired(PR_OK).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0);
+// 104g ERRATA 失配判定行前缀扩面（verdict-line-out-of-domain-gate 触发域）：仅 ^VERDICT: 行首锚定漏掉
+//   缩进、Markdown 加粗装饰、全角冒号与大小写变体——混存形态下（报告已含合法判定行）失配修正行静默失效
+//   与 104f 同族。判据：全角冒号修正行与加粗修正行必含本闸违规；负控制三连——合法行逐字命中锚定不判红、
+//   blockquote 引用（ERRATA 合法非锚定形态）不判红、行内代码引用不判红。
+const PR_STRAY_VERDICT_FULLWIDTH = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\nVERDICT：NO-GO');
+const PR_STRAY_VERDICT_BOLD = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n**VERDICT: NO-GO**');
+const PR_QUOTE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n> 旧判定引用：VERDICT: GO');
+const PR_INLINE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n旧判定行原值 `VERDICT: GO` 已被推翻。');
+check('assert-verdict-stray-line-fullwidth-colon-detected',
+  prWired(PR_STRAY_VERDICT_FULLWIDTH).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-verdict-stray-line-bold-decorated-detected',
+  prWired(PR_STRAY_VERDICT_BOLD).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-verdict-stray-prefix-excludes-legal-refs',
+  prWired(PR_QUOTE_REF).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0
+  && prWired(PR_INLINE_REF).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0
   && prWired(PR_OK).filter((x) => x.msg.includes('verdict-line-out-of-domain-gate')).length === 0);
 
 // 105 registry 原子锚点：四问职责正文/结果表标题/计划作者义务正文被删除必须判红（子串必含条款逐条登记）。
