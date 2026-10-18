@@ -264,11 +264,13 @@ function lastAnchoredLine(text, re) {
 // pass-line-out-of-domain-gate：围栏外行首 `^<键>=` 整行、但取值不在值域闭集（不命中对应 *_LINE_RE）
 // ⇒ 记录行号。值域收窄后此类行不命中锚定、末次取值退回旧合法行，值语义闸绿、结构闸又被旧行满足
 // ⇒ 全篇零红灯（ERRATA 值域外修正行静默失效的 fail-open 家族）。触发域（姊妹闸扩面，与 VERDICT
-//   闸 104g 同批同口径）：围栏外判定行行首——行首空白（缩进）、Markdown 加粗/斜体装饰（*_）、
-//   全角冒号改形（KEY：）与大小写变体（key=）均入闸；blockquote（>）、列表符（-）、标题（#）、
-//   表格（|）、行内代码（反引号）承载的旧值引用属合法非锚定形态，不触发（负控制由 selftest 104b-g 钉死）。
+//   闸 104g 同批同口径）：围栏外判定行行首——行首空白（缩进）、Markdown 加粗/斜体装饰（*_，键名前
+//   开启与键名后闭合均入闸且数量不设上限，如 **KEY**: 与 ****KEY:）、全角冒号改形（KEY：）与
+//   大小写变体（key=）均入闸；blockquote（>）、
+//   列表符（-）、标题（#）、表格（|）、行内代码（反引号）承载的旧值引用属合法非锚定形态，不触发
+//   （负控制由 selftest 104b-g 钉死）。
 // 散文提及/行内代码引用/围栏内示例不触发（lineView 围栏掩蔽同口径）。
-const PASS_STRAY_PREFIX_RE = (key) => new RegExp('^[ \\t]*[*_]{0,4}[ \\t]*' + key + '[ \\t]*[:=：]', 'i');
+const PASS_STRAY_PREFIX_RE = (key) => new RegExp('^[ \\t]*[*_]*[ \\t]*' + key + '[ \\t]*[*_]*[ \\t]*[:=：]', 'i');
 function strayPassLineNumbers(text, prefixRe, lineRe) {
   const { lines, fenced } = lineView(text);
   const out = [];

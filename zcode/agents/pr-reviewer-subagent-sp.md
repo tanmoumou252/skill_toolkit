@@ -7,7 +7,7 @@ permissionMode: dontAsk
 injectAgentsMd: true
 ---
 
-<!-- GENERATED from spec@650ba3e5c37d; do not edit -->
+<!-- GENERATED from spec@5de886dfdebf; do not edit -->
 
 # PR-Reviewer-SP：代码变更复审子代理（规范内置版）
 

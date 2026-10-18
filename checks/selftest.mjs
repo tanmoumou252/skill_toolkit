@@ -812,6 +812,24 @@ check('assert-verdict-out-of-domain-stray-line-detected',
 //   blockquote 引用（ERRATA 合法非锚定形态）不判红、行内代码引用不判红。
 const PR_STRAY_VERDICT_FULLWIDTH = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\nVERDICT：NO-GO');
 const PR_STRAY_VERDICT_BOLD = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n**VERDICT: NO-GO**');
+// 104g-2 闭合装饰扩面：键名后闭合装饰（**VERDICT: NO-GO** 与 **TRUTH_PASS**: partial）——仅键前装饰
+//   锚定漏掉键名后闭合装饰，勘误修正行以闭合装饰形态静默失效同族。闭合装饰形态本身不构成合法机读行
+//   （*_LINE_RE 契约要求行首裸键），闸判红强制重写为逐字锚定形态＝fail-closed；机读行合法形态的
+//   零违规负控制由 PR_OK（裸键行）承载。
+const PR_STRAY_VERDICT_BOLD_CLOSED = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n**VERDICT: NO-GO**');
+const PR_STRAY_TRUTH_BOLD_CLOSED = PR_OK.replace('TRUTH_PASS=done', '**TRUTH_PASS**: partial');
+check('assert-verdict-stray-line-closing-bold-detected',
+  prWired(PR_STRAY_VERDICT_BOLD_CLOSED).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-truth-pass-stray-line-closing-bold-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_BOLD_CLOSED }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
+// 104g-3 装饰数量无上限扩面：{0,4} 数量上限漏掉 5+ 连续装饰（*****VERDICT: / ****TRUTH_PASS:），
+//   失配修正行以超量装饰形态静默失效同族。判据：5 个前导/后置装饰变体必含本闸违规。
+const PR_STRAY_VERDICT_PENTA = PR_OK.replace('VERDICT: GO', '## ERRATA\n原判定被反例推翻\n*****VERDICT: NO-GO');
+const PR_STRAY_TRUTH_PENTA = PR_OK.replace('TRUTH_PASS=done', '****TRUTH_PASS: partial');
+check('assert-verdict-stray-line-penta-decorated-detected',
+  prWired(PR_STRAY_VERDICT_PENTA).some((x) => x.msg.includes('verdict-line-out-of-domain-gate')));
+check('assert-truth-pass-stray-line-penta-decorated-detected',
+  attackLedger(auditorPlan, { prReviewReportText: PR_STRAY_TRUTH_PENTA }).some((x) => x.msg.includes('TRUTH_PASS') && x.msg.includes('值域外')));
 const PR_QUOTE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n> 旧判定引用：VERDICT: GO');
 const PR_INLINE_REF = PR_OK.replace('## 主要变更', '## 主要变更\n旧判定行原值 `VERDICT: GO` 已被推翻。');
 check('assert-verdict-stray-line-fullwidth-colon-detected',
