@@ -247,15 +247,28 @@ check('workflow-no-unbound-top-level-comment-consumption',
   text.includes('github.rest.issues.listComments') &&
   text.includes('comment.body?.includes(STATUS_COMMENT_MARKER)') &&
   (() => {
-    // 反向夹具（区域切片式）：4.1/4.2 评分管道区间内不得出现来自 issues.listComments/
-    //   comment 变量的文本拼接。取 4.1 节头到 4.4 节头之间的切片，锚定真实消费点。
+    // 可执行化重锚（旧版负夹具正则与 yml 实消费形永不匹配——paginate 传参形 `listComments, {`、
+    //   注入行 `codeRabbitText += text` 均逃逸，锚空心恒绿）：评分切片内顶层评论消费按「闸先行」判定——
+    //   marker 闸声明（TOP_LEVEL_MARKERS）偏移必须先于任何顶层注入点；身份+login+marker 三谓词文本在场；
+    //   无注入点且无 marker 闸的 fail-closed 原形态同样合法。
+    //   注入谓词只认顶层消费注入形（`codeRabbitText += text` 裸变量、`kiloCarrierTexts.push`），
+    //   不认 4.1/4.2 的合法注入（`codeRabbitText += \`…\`` 模板字面量，源自 head 绑定的 check output /
+    //   review 正文，非顶层评论面，且本就先于 marker 闸声明，若纳入必误判直消费回潮）。
     const start = text.indexOf('4.1 提取 Checks API');
     const end = text.indexOf('4.4 CodeRabbit');
     if (start === -1 || end === -1 || end <= start) return false;
     const scoring = text.slice(start, end);
-    return !/github\.rest\.issues\.listComments\(/.test(scoring) &&
-      !/codeRabbitText\s*\+=\s*[^\n]*comment/.test(scoring) &&
-      !/kiloCodeText\s*\+=\s*[^\n]*comment/.test(scoring);
+    const markerGate = scoring.indexOf('TOP_LEVEL_MARKERS');
+    const injectRe = /codeRabbitText\s*\+=\s*text\b|kiloCarrierTexts\.push/g;
+    if (markerGate === -1) return !injectRe.test(scoring); // 零顶层消费原形态：不得有注入
+    injectRe.lastIndex = 0;
+    let m;
+    while ((m = injectRe.exec(scoring)) !== null) {
+      if (m.index < markerGate) return false; // 注入必须先于闸＝直消费回潮，咬红
+    }
+    return /c\.user\?\.type === 'Bot'/.test(scoring) &&
+      /BOT_DEFINITIONS\[key\]\?\.logins/.test(scoring) &&
+      /c\.body\.includes\(marker\)/.test(scoring);
   })() &&
   !/botRoundBoundaries/.test(text) &&
   !/latestBotComment/.test(text));
@@ -1960,6 +1973,64 @@ function record(name, ok, detail) {
   });
   record('workflow-top-level-comment-untrusted-login-not-consumed',
     r.err === null && !r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// 顶层摘要多份并存 → 取最新一份（listComments 升序，数组末位＝最近创建），旧轮 stale 不得被消费。
+//   契约：旧 High（前）+ 新 Moderate（后）并存时消费后者的 Moderate → risk:medium；
+//   find 取最早命中的实现会吃旧份 → risk:high（红）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [
+      {
+        id: 91,
+        body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: High — 旧轮 stale 摘要',
+        user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      },
+      {
+        id: 92,
+        body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n<summary><strong>Merge Risk:</strong> <strong>🟡 Moderate</strong></summary>',
+        user: { type: 'Bot', login: 'coderabbitai[bot]' },
+      },
+    ],
+    pullComments: [],
+  });
+  record('workflow-top-level-comment-take-latest-summary',
+    r.err === null && r.labelsAdded.flat().includes('risk:medium') && !r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// band 与 Merge Risk 并存 → 同刻度取严 max：ready(1) + High(3) → crScore=3 → risk:high。
+//   else-if 链下 ready 先命中落 1、High 被吞 → risk:low（红）。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 93,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Readiness band: ready\n\n**Merge Risk:** **🟠 High**',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-cr-band-ready-merge-risk-high-takes-severe',
+    r.err === null && r.labelsAdded.flat().includes('risk:high'),
+    r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
+}
+// 回归守卫负控（修正前后皆应绿）：取严合并只收严不放松——blocked(4) + Low(1) → max=4 → risk:critical。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: 'SUGGESTION: ok' }],
+    comments: [{
+      id: 94,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Readiness band: blocked\n\n**Merge Risk:** **🟢 Low**',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-cr-band-blocked-merge-risk-low-still-critical',
+    r.err === null && r.labelsAdded.flat().includes('risk:critical'),
     r.err ? 'err=' + String((r.err && r.err.message) || r.err).split('\n')[0] : 'labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
 // C-A2：Kilo 顶层评论（marker `<!-- kilo-review -->` + 受信 login）含计数表 → kiloScore=2 → risk:medium。

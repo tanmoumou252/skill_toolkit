@@ -873,10 +873,14 @@ jobs:
             }
             if (Array.isArray(topComments)) {
               for (const [key, marker] of Object.entries(TOP_LEVEL_MARKERS)) {
-                const hit = topComments.find(c =>
+                // 取最新：listComments 分页按创建时间升序返回，find 取最早命中——多份摘要并存时把
+                //   旧轮风险级当本轮消费（跨轮 stale）。filter 全部命中后取数组末位＝最近创建份；
+                //   单命中（原地编辑常态）与原 find 同一份、行为零变化；身份+marker 双闸原样保留。
+                const hits = topComments.filter(c =>
                   c.user?.type === 'Bot' &&
                   (BOT_DEFINITIONS[key]?.logins || []).includes(c.user.login) &&
                   typeof c.body === 'string' && c.body.includes(marker));
+                const hit = hits[hits.length - 1];
                 if (hit) {
                   const text = `\n${hit.body}`;
                   if (key === 'coderabbit') codeRabbitText += text;
@@ -917,9 +921,11 @@ jobs:
               crScore = 2;
             } else if (crBandHas('ready')) {
               crScore = 1;
-            } else if (crMergeRiskScore !== null) {
-              crScore = crMergeRiskScore;
             }
+            // 跨形态取严合并：band 链与 Merge Risk 同 :909 crRiskRank 1-4 刻度，同文并存时
+            //   Merge Risk 不得被更轻的 band 吞掉（ready+High 应取 3）；非 null 时取 max。
+            //   risk null → band 链结果原样保持；band null + risk 非 null → 取 risk（与原兜底分支等价）。
+            if (crMergeRiskScore !== null) crScore = crScore === null ? crMergeRiskScore : Math.max(crScore, crMergeRiskScore);
 
             // --- 4.5 Kilo Code 真实等级提取 (严格对齐 Blocker / Warning / Suggestion) ---
             // K 系列契约（Bot 意见）：优先解析 Kilo 官方 Overview 计数表形态（PR8 实测，comment

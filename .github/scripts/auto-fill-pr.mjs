@@ -181,15 +181,27 @@ function VERIF_HEADING_WITH_TABLE() {
 
 // closing keyword 保留/续写（review 契约）：本 bot 每轮整段重写头部区，人类写进描述的 issue 关联
 //   会被冲掉。续写口径三步（对应实测 issue #16 / PR #18 形态）：
-//   ① 提取＝旧 body 围栏外的 **裸** `#N` 引用（不限 keyword 前缀——创建 PR 时手写的就是裸编号），
-//      跨形态去重；是否真构成关联交给 ② 反查闸裁决，提取面放宽不引入捏造；
-//   ② 反查闸两道：先 `GET /issues/N` 判类型——响应带 `pull_request` 字段即编号实为 PR，跳过
-//      （绝不给「关别的 PR」续写）；确为 issue 的再拉 timeline，`cross-referenced`（source 指向本 PR）
-//      或 `connected`（subject 指向本 PR，= 手动 Development 关联，网页上那条 linked a pull request
-//      that will close this issue）任一命中即确认；任一反查失败（5xx 等）→ fail-closed 整体不续写；
-//   ③ 续写行＝脚本以确认集合构造 `Closes: #N, #M`（固定格式，无模型参与，不捏造——无确认即不加行）；
+//   ① 提取＝旧 body 围栏外的 **裸** `#N` 候选（不限 keyword 前缀——脚本自生成的
+//      `Closes: #A, closes #B` 列表行后续编号的关键词不统一，逐 keyword 提取必丢尾项；
+//      提取只供候选不做意图判定），
+//      跨形态去重＋安全整数/正数护栏＋数量上限（调用处截断并 NOTE 留痕）；是否真构成关闭关联完全交给 ② 确认闸裁决；
+//   ② 确认闸＝GraphQL pullRequest.closingIssuesReferences（「本 PR 合并将关闭哪些 issue」的权威
+//      投影——手动 Development link 与 GitHub 解析 closing keyword 语法的最终汇聚面），候选∩清单即确认；
+//      纯提及（仅产生 cross-referenced 记录）不在清单＝不确认——否则「参见 #19」类提及会被升级为合并即关闭；
+//      编号实为 PR → 清单只含 issue、天然不进入（旧 GET /issues/N 类型闸与 timeline 扫 connected 通道
+//      一并退役：REST connected 事件不含指向 PR 的字段，subject.number 为未文档化臆形）；
+//      POST 异常或响应 shape 不识别 → fail-closed 整体不续写（绝不把「读不到」当「空清单」）；
+//   ③ 续写行＝脚本以确认集合构造，逐编号各带一个 closing keyword（GitHub 多编号语法要求
+//      「Use full syntax for each issue」——`Closes: #N, #M` 只有首项被解析为合并即关闭，其余退化
+//      为普通提及＝承诺的关闭未兑现）；固定格式、无模型参与、不捏造——无确认即不加行（见 formatClosingLine）；
 //   ④ 注入面＝固定格式行只含数字与既有确认事实，MANUAL_LINE_RE/sentinel 语义不受影响。
-const CLOSING_REF_RE = /#(\d+)\b/g;
+// `#` 前负向后顾排除跨仓粘连尾段（`org/repo#9` 不入库——非本仓人类声明面）；位数不设界，
+//   合法性由 `Number.isSafeInteger` 护栏裁决（10-19 位合法安全整数编号照常保留）。
+const CLOSING_REF_RE = /(?<![\w\/.-])#(\d+)\b/g;
+// 护栏：非安全整数/非正数在提取阶段过滤——零 API 足迹（污染路径 404 → fail-closed 连带抛弃合法
+//   关联的形态被结构性排除）；上限截断放调用处（runAutoFill 内 closing 装配段）——提取纯函数返回全量有序集，
+//   「被截断」须经 NOTE 可见，纯函数无 note 通道故截断不落这里。
+const MAX_CLOSING_REFS = 10;
 function extractClosingRefs(bodyText, inFenceFlags) {
   const out = new Set();
   const lines = String(bodyText || '').split('\n');
@@ -197,30 +209,63 @@ function extractClosingRefs(bodyText, inFenceFlags) {
     if (inFenceFlags && inFenceFlags[i]) continue; // 围栏内引用不是关联面（与 pr-manual/sentinel 同口径）
     CLOSING_REF_RE.lastIndex = 0;
     let m;
-    while ((m = CLOSING_REF_RE.exec(lines[i])) !== null) out.add(Number(m[1]));
+    while ((m = CLOSING_REF_RE.exec(lines[i])) !== null) {
+      const n = Number(m[1]);
+      if (Number.isSafeInteger(n) && n > 0) out.add(n);
+    }
   }
   return [...out].sort((a, b) => a - b);
 }
+// 续写行格式化（③ 单源构造）：主路径与 CAS 重合并路径共用，杜绝两侧格式漂移（其中一侧漏改即
+//   产生「同一轮两种行形」与跨轮剥离漏面）。GitHub 多编号语法要求逐编号各带一个 closing keyword
+//   （官方：Use full syntax for each issue）——`Closes: #N, #M` 只有首项被解析为「合并即关闭」，
+//   其余退化成普通提及＝脚本承诺的关闭关联未兑现（欠做向，且无声）。故首项承 `Closes: ` 前缀，
+//   其后每项各带 `closes `；空确认集返回 null（调用处以假值判定「不加行」，零捏造底线不变）。
+function formatClosingLine(confirmed) {
+  const nums = (confirmed || []).map((n) => `#${n}`);
+  return nums.length === 0 ? null : 'Closes: ' + nums.join(', closes ');
+}
+// G1/G2：关闭意图权威确认源＝本 PR 的 closingIssuesReferences（GraphQL）——手动 Development link
+//   与正文 closing keyword 解析两条意图路径最终都汇入该清单。REST timeline 的 connected 事件
+//   不含任何指向 PR 的字段（2026-10-17T22:07Z 真实响应取证），旧 GET+timeline 双查通道退役；
+//   「编号实为 PR」由清单语义天然排除（清单只含 issue），类型闸随之整体移除。
+//   清单含跨仓 closing keyword（`Closes owner/repo#N`）解析出的他仓 issue（GitHub 官方：closingIssuesReferences
+//   为 IssueConnection 且 resolves cross-repo links），其 number 可与本地裸 #N 候选同号碰撞→误关本仓
+//   无关 issue（过做向、破「绝不误关」红线）——确认必带仓库维度过滤，缺/异仓不入集（欠做安全侧）。
+function closingListQuery(env) {
+  // 注入收口：owner/name 仅保留 GitHub 命名白名单字符（清洗=删除而非转义，拼入字面量不可能逃逸
+  //   字符串上下文）；PR 号经安全整数校验；候选编号从不进入查询文本——body 面注入在本通道结构性不存在。
+  const slash = String(env.REPO || '').indexOf('/');
+  const owner = (slash === -1 ? '' : String(env.REPO).slice(0, slash)).replace(/[^A-Za-z0-9._-]/g, '');
+  const name = (slash === -1 ? '' : String(env.REPO).slice(slash + 1)).replace(/[^A-Za-z0-9._-]/g, '');
+  const prNum = Number(env.PR_NUMBER);
+  if (!owner || !name || !Number.isSafeInteger(prNum) || prNum <= 0) throw new Error('closing-list query inputs invalid');
+  return '{ repository(owner: "' + owner + '", name: "' + name + '") { pullRequest(number: ' + prNum +
+    ') { closingIssuesReferences(first: 100) { nodes { number repository { nameWithOwner } } } } } }';
+}
 async function verifiedClosingRefs(refs, gh, env) {
-  const confirmed = [];
-  for (const n of refs) {
-    try {
-      // 类型闸：`#N` 未必是 issue——带 pull_request 字段的编号实为 PR，跳过（不关别的 PR）。
-      const it = await gh.get(`repos/${env.REPO}/issues/${n}`);
-      if (it && it.pull_request) continue;
-      const events = await gh.get(`repos/${env.REPO}/issues/${n}/timeline`);
-      const hit = Array.isArray(events) && events.some((e) =>
-        e && (
-          (e.event === 'cross-referenced' && e.source && e.source.issue &&
-            Number(e.source.issue.number) === Number(env.PR_NUMBER)) ||
-          (e.event === 'connected' && e.subject && Number(e.subject.number) === Number(env.PR_NUMBER))
-        ));
-      if (hit) confirmed.push(n);
-    } catch (err) {
-      return { confirmed: [], verified: false, failedIssue: n, failedMsg: sanitize(err && err.message) }; // fail-closed：反查不可达不续写
+  if (refs.length === 0) return { confirmed: [], verified: true }; // 零候选零查询（G1 成本面）
+  try {
+    const res = await gh.graphql(closingListQuery(env));
+    const nodes = res && res.data && res.data.repository && res.data.repository.pullRequest &&
+      res.data.repository.pullRequest.closingIssuesReferences && res.data.repository.pullRequest.closingIssuesReferences.nodes;
+    // shape 不识别＝确认源不可用，与 POST 异常同向 fail-closed——绝不把「读不到」当「空清单」
+    if (!Array.isArray(nodes)) return { confirmed: [], verified: false, failedIssue: 0, failedMsg: 'closing-list shape unrecognized' };
+    // 仓库维度（E1 红线）：清单可含他仓 issue（跨仓 closing keyword），其 number 与本地裸 #N 候选同号
+    //   碰撞即误关本仓无关 issue；按 Issue.repository.nameWithOwner 锁定本仓，缺/异仓→不入集（欠做安全侧）。
+    const home = String(env.REPO || '').toLowerCase();
+    const willClose = new Set();
+    for (const nd of nodes) {
+      const n = nd && Number(nd.number);
+      if (!(Number.isSafeInteger(n) && n > 0)) continue; // 清单面同样过安全整数校验（数据不可盲信）
+      const repoName = nd && nd.repository && nd.repository.nameWithOwner;
+      if (!repoName || String(repoName).toLowerCase() !== home) continue; // 跨仓/仓库字段缺失→不入集（绝不误关本仓 issue）
+      willClose.add(n);
     }
+    return { confirmed: refs.filter((n) => willClose.has(n)), verified: true };
+  } catch (err) {
+    return { confirmed: [], verified: false, failedIssue: 0, failedMsg: sanitize(err && err.message) }; // fail-closed：确认源不可达不续写
   }
-  return { confirmed, verified: true };
 }
 
 function spliceVerification(body, tableBlock) {
@@ -645,15 +690,22 @@ export async function runAutoFill(deps) {
   // 文件数取 changed_files、提交数取裁剪前全量（REST 事实源，对齐 :224 与契约 :307）；截断/裁剪只减入模数组，不减 PR 真实规模
   const statsText = `${pr.changed_files || files.length} 文件，+${pr.additions || 0}/-${pr.deletions || 0}, ${totalCommits} commits`;
 
-  // closing keyword 保留/续写：提取（旧 body 围栏外）→ gh 反查（timeline cross-referenced 指向本 PR）
-  //   → 确认集合构造续写行。反查失败 fail-closed（不续写不告警中断，主交付不阻塞）。
-  //   在 AI 调用前完成——续写行是事实构造，不依赖模型输出。
-  const closingRefs = extractClosingRefs(pr.body, inFence);
+  // closing keyword 保留/续写：提取面止于 CodeRabbit 切分点——尾块属 bot 自治区，其叙述文本中的
+  //   `Closes #77` 样式编号既非人类声明面，也不得挤占上限截断的反查槽位（截断按升序取前 N，
+  //   尾块小数字会把头部人类候选挤出界）→ gh 确认（GraphQL closingIssuesReferences 权威清单 ∩ 候选）
+  //   → 确认集合构造续写行。超限候选截断后以 NOTE 记丢弃数（退化可见）；反查失败 fail-closed
+  //   （不续写不告警中断，主交付不阻塞）。在 AI 调用前完成——续写行是事实构造，不依赖模型输出。
+  const splitIdx = findSplitIndex(lines, inFence);
+  const headLen = splitIdx === -1 ? lines.length : splitIdx;
+  const closingRefs = extractClosingRefs(lines.slice(0, headLen).join('\n'), inFence.slice(0, headLen));
   let closingLine = null;
+  if (closingRefs.length > MAX_CLOSING_REFS) {
+    note('closing-refs-truncated: ' + (closingRefs.length - MAX_CLOSING_REFS) + ' 个编号超上限被截断不续写');
+  }
   if (closingRefs.length > 0) {
-    const vr = await verifiedClosingRefs(closingRefs, gh, env);
+    const vr = await verifiedClosingRefs(closingRefs.slice(0, MAX_CLOSING_REFS), gh, env);
     if (vr.verified && vr.confirmed.length > 0) {
-      closingLine = 'Closes: ' + vr.confirmed.map((n) => `#${n}`).join(', ');
+      closingLine = formatClosingLine(vr.confirmed);
       note('closing-keywords-carried-over: ' + vr.confirmed.join(','));
     } else if (!vr.verified) {
       note(`closing-keywords-verify-failed issue=${vr.failedIssue}: ${vr.failedMsg}（fail-closed 不续写）`);
@@ -683,6 +735,21 @@ export async function runAutoFill(deps) {
   // 契约 2（解耦 PATCH）：标题与正文各自校验、各自写回——title 校验失败只影响 title 侧，
   //   body 校验失败只影响 body 侧；两侧均失败才落 skipCode。S5/S6 写前硬闸（接管标记/head 漂移）
   //   仍是全局闸，保持整包跳过。
+  // S5/S6 写前全局闸：任何字段将 PATCH 前必复核最新 PR——body 成功路径与「正文内容闸早退 →
+  //   仅写标题」路径共用。命中 → 调用方 report('S5'/'S6') 整包早退，禁 PATCH 与佐证 status；
+  //   gh.get 异常向上传播（与旧内联复核同形态，fail-closed 方向不变）。
+  const recheckWriteGates = async () => {
+    const latest = await gh.get(prPath);
+    if (!latest || !latest.head || latest.head.sha !== env.HEAD_SHA) {
+      return { headDrift: '写前 head 与事件 head 不一致' };
+    }
+    const ls = String(latest.body || '').replace(/\r\n/g, '\n').split('\n');
+    const f = fenceFlags(ls);
+    for (let i = 0; i < ls.length; i += 1) {
+      if (!f[i] && MANUAL_LINE_RE.test(ls[i])) return { manualMarker: true };
+    }
+    return { latest };
+  };
   const bodyOutcome = await (async () => {
     const fail = (error) => ({ bodyError: error });
     const bodyLines = model.body.split('\n');
@@ -738,11 +805,29 @@ export async function runAutoFill(deps) {
       }
       return out.join('\n');
     };
+    // Closes 续写行跨轮累积闸：脚本追加在头部区末尾的 `Closes: #N, #M` 行若原样进入
+    //   mergeVerification 输入，会被「验证」节按非表格行当 humanProse 保留、本轮再追加 →
+    //   每轮复制一行，正文无界增长直至撞超长闸（跨轮剥离自生成标记的同型先例即上方
+    //   stripSyncSentinels：同围栏感知、同「剥离-重建」结构）。
+    //   剥离仅发生在装配面：只认脚本输出形（固定前缀+逗号列表，新旧两形皆认），人类手写 keyword 变体形不触碰；
+    //   提取面（头部区 body）不受影响——自生成行仍是合法 carry-over 种子，
+    //   经 GraphQL closingIssuesReferences 权威清单确认后本轮重建，编号零丢失。围栏内行不剥（fenceFlags 同口径）。
+    //   新形兼容：自「逐编号各带 keyword」改版起输出为 `Closes: #A, closes #B`（GitHub 多编号语法要求
+    //   逐项重复 keyword，否则只有首项被解析为合并即关闭）。旧形行仍真实存在于已上线的 PR 正文里，
+    //   只认新形会让这些旧行漏剥 → 每轮复制一行、正文无界增长直至撞超长闸（正是本闸要防的缺陷形）。
+    //   故 `#\d+` 前允许可选的 `closes ` 前缀，旧形与新形一并剥离；行首锚定+行尾锚定不变，
+    //   人类散文行（含 keyword 但不为该固定形）依旧不触碰。
+    const CARRIED_CLOSING_RE = /^Closes: #\d+(?:, (?:closes )?#\d+)*\s*$/;
+    const stripCarriedClosing = (text) => {
+      const ls = String(text).split('\n');
+      const f = fenceFlags(ls);
+      return ls.filter((l, i) => f[i] || !CARRIED_CLOSING_RE.test(l)).join('\n');
+    };
     const syncSentinelLine = `<!-- auto-fill-pr: synced head=${env.HEAD_SHA} -->`;
     const finalBodyOf = (assembledText) => stripSyncSentinels(assembledText).trimEnd() + '\n' + syncSentinelLine + '\n';
 
-    const splitIdx = findSplitIndex(lines, inFence);
-    const existingHead = lines.slice(0, splitIdx === -1 ? lines.length : splitIdx).join('\n');
+    // splitIdx/headLen 已随提取面上移（尾块候选不占截断槽位），此处直接复用、不重复计算。
+    const existingHead = lines.slice(0, headLen).join('\n');
     const existingTail = splitIdx === -1 ? '' : lines.slice(splitIdx).join('\n');
 
     const statsLine = injectStats(draftWithoutVerif, statsText);
@@ -750,7 +835,7 @@ export async function runAutoFill(deps) {
       const tv = sectionBodyOf(template, '验证').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|') && l.includes('`'));
       return tv.length > 0 ? tv : [];
     })();
-    let headBody = mergeVerification(statsLine, existingHead, templateVerifCommands);
+    let headBody = mergeVerification(statsLine, stripCarriedClosing(existingHead), templateVerifCommands);
     // closing keyword 续写行落位：头部区末尾（验证节之后、尾块之前）——GitHub 只在描述正文解释
     //   closing keyword，尾块属 CodeRabbit 自治区不混入；无确认关联时 closingLine 为 null 不加行。
     if (closingLine) headBody = headBody.trimEnd() + '\n\n' + closingLine + '\n';
@@ -763,8 +848,10 @@ export async function runAutoFill(deps) {
     // E3/review 契约：超长闸对剥离旧标记后的最终 PATCH 长度真实生效（不再用预算近似）。
     if (finalBody.length > MAX_FINAL_BODY_CHARS) return fail('最终正文超长 ' + finalBody.length);
 
-    const latest = await gh.get(prPath);
-    if (!latest || !latest.head || latest.head.sha !== env.HEAD_SHA) return { headDrift: '写前 head 与事件 head 不一致' };
+    const gate = await recheckWriteGates();
+    if (gate.manualMarker) return { manualMarker: true };
+    if (gate.headDrift) return { headDrift: gate.headDrift };
+    const latest = gate.latest;
     const bodyChanged = (latest.body || '') !== (pr.body || '');
     const stampChanged = (latest.updated_at || '') !== (pr.updated_at || '');
     if (bodyChanged || stampChanged) {
@@ -783,9 +870,25 @@ export async function runAutoFill(deps) {
       const idx2 = findSplitIndex(l2sLines, f2s);
       const head2 = l2sLines.slice(0, idx2 === -1 ? l2sLines.length : idx2).join('\n');
       const tail2 = idx2 === -1 ? '' : l2sLines.slice(idx2).join('\n');
-      headBody = mergeVerification(statsLine, head2, templateVerifCommands);
-      // CAS 重合并路径同样续写 closing keyword（同一事实源，重合并不得丢失关联行）。
-      if (closingLine) headBody = headBody.trimEnd() + '\n\n' + closingLine + '\n';
+      headBody = mergeVerification(statsLine, stripCarriedClosing(head2), templateVerifCommands);
+      // CAS 同源重算（G3）：以最新正文头区重提取候选＋同通道重确认——人类往返期间新增并关联的
+      //   issue 本轮即现；不复用往返前旧值（复用旧值即本缺陷形态）。重确认不可用/零候选 → 本轮不写 closing 行。
+      const head2Len = idx2 === -1 ? l2sLines.length : idx2;
+      const closingRefs2 = extractClosingRefs(l2sLines.slice(0, head2Len).join('\n'), f2s.slice(0, head2Len));
+      if (closingRefs2.length > MAX_CLOSING_REFS) {
+        note('closing-refs-truncated: ' + (closingRefs2.length - MAX_CLOSING_REFS) + ' 个编号超上限被截断不续写');
+      }
+      let closingLine2 = null;
+      if (closingRefs2.length > 0) {
+        const vr2 = await verifiedClosingRefs(closingRefs2.slice(0, MAX_CLOSING_REFS), gh, env);
+        if (vr2.verified && vr2.confirmed.length > 0) {
+          closingLine2 = formatClosingLine(vr2.confirmed);
+          note('closing-keywords-carried-over: ' + vr2.confirmed.join(','));
+        } else if (!vr2.verified) {
+          note(`closing-keywords-verify-failed issue=${vr2.failedIssue}: ${vr2.failedMsg}（fail-closed 不续写）`);
+        }
+      }
+      if (closingLine2) headBody = headBody.trimEnd() + '\n\n' + closingLine2 + '\n';
       finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
       if (tail2 && headTailOverlap(headBody, tail2)) {
         return fail('以最新正文重合并后仍与尾块重叠');
@@ -805,7 +908,14 @@ export async function runAutoFill(deps) {
   if (titleError && bodyError) {
     return report('S9', titleError + '；' + bodyError);
   }
-  if (bodyError) note('body-not-updated: ' + bodyError);
+  if (bodyError) {
+    // 正文内容闸早退时路径内写前复核未执行；标题 PATCH 前补跑全局闸——人工已声明接管（S5）
+    //   或 head 已漂移（S6，旧 head 事实生成的标题不得裸写）→ 整包早退，禁 PATCH 与佐证 status。
+    const gate2 = await recheckWriteGates();
+    if (gate2.manualMarker) return report('S5', '写前复核发现新接管标记');
+    if (gate2.headDrift) return report('S6', gate2.headDrift);
+    note('body-not-updated: ' + bodyError);
+  }
   if (titleError) note('title-not-updated: ' + titleError);
 
   const patchPayload = {};
@@ -912,6 +1022,11 @@ function makeCliDeps(env) {
         if (p.endsWith('/files')) return paged(p, 'files');
         return request(p, {});
       },
+      graphql: async (query) => request('graphql', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ query }),
+      }),
       patch: async (p, payload) => request(p, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
