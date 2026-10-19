@@ -106,7 +106,8 @@ if [ -d .github/workflows ]; then
   git rm -rq --ignore-unmatch .github/workflows
 fi
 git checkout origin/hub -- .github/
-git add .github/
+git add .github/ .coderabbit.yaml
+
 git commit -m "ci: overlay full automation layer onto ephemeral staging [skip ci]" || true
 
 # 5. 强制推送到远程临时分支 wip

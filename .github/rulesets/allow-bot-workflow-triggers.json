@@ -1,0 +1,38 @@
+{
+  "id": 7864,
+  "name": "allow-bot-workflow-triggers",
+  "target": "actions",
+  "source_type": "Repository",
+  "source": "tanmoumou252/kiss-translator",
+  "enforcement": "active",
+  "conditions": {
+    "workflow_path": {
+      "exclude": [],
+      "include": [
+        ".github/workflows/auto-fill-pr.yml",
+        ".github/workflows/bot-review-labeler.yml",
+        ".github/workflows/*.yml",
+        ".github/workflows/sync-upstream.yml",
+        ".github/workflows/pr-cleanup-reset.yml"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "restrict_action_events",
+      "parameters": {
+        "allowed_events": [
+          "check_run",
+          "issue_comment",
+          "pull_request_review",
+          "pull_request_target",
+          "schedule",
+          "workflow_call",
+          "workflow_dispatch",
+          "workflow_run"
+        ]
+      }
+    }
+  ],
+  "bypass_actors": []
+}

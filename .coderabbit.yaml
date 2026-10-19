@@ -6,6 +6,21 @@ reviews:
   request_changes_workflow: false
   high_level_summary: true
   poem: false
+
+  # 0. 【关键】解除 base≠默认分支 的自动审查跳过：默认分支 hub 天然被审，
+  #    base_branches 为「在默认分支之外追加」语义，故只需列出 PR 模拟沙盒的 base=wip。
+  #    不加这一段，CodeRabbit 对 base=wip 的 PR 恒回 “Auto reviews are disabled on
+  #    base/target branches other than the default branch.”
+  #    开源仓库出于安全只读 base 分支的本文件、忽略 PR head 分支版本
+  #    （CodeRabbit 原文警告：only the configuration from the base branch is applied for
+  #    open source repositories）。本 PR base=wip，故此文件必须随 overlay 落到 wip 才生效；
+  #    hub 上这份是 overlay 源 + hub-base PR 的治理副本，两头都要有（缺 wip 那份＝审查被跳过）。
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "^wip$" # 锚定精确匹配，避免误伤任何含 wip 子串的其他分支名
+
   # 1. 彻底关掉那些制造噪音的无关工具
   tools:
     languagetool:
