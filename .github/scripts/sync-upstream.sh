@@ -41,6 +41,13 @@ if [ -z "${UPSTREAM_REPO}" ]; then
   echo "::error::无法确定上游仓库：本仓库不是 fork（无 parent）。请在 workflow_dispatch 表单填写 upstream_repo，或设置仓库变量 UPSTREAM_REPO。"
   exit 1
 fi
+# 自指闸（首个 fetch/push 前）：上游配置指向本仓库时同步退化为自我覆盖（fork 自抓自，
+#   强推镜像/staging 分支改写自身历史）——GitHub 仓库名 owner/repo 大小写不敏感，故
+#   不区分大小写比较。命中即跳过同步并成功退出，绝不触碰任何 fetch/push。
+if [ "$(printf '%s' "${UPSTREAM_REPO}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')" ]; then
+  echo "::notice::UPSTREAM_REPO (${UPSTREAM_REPO}) 与本仓库 (GITHUB_REPOSITORY) 相同，跳过自同步。"
+  exit 0
+fi
 echo "上游仓库: ${UPSTREAM_REPO}"
 # 测试覆写面（PR 审查回灌）：UPSTREAM_URL_OVERRIDE 指向本地 bare 仓库供集成测试免网执行；
 #   生产环境缺省（CI/local 不设该变量）仍走 https://github.com/<UPSTREAM_REPO>.git。

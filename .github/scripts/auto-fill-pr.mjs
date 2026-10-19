@@ -269,8 +269,11 @@ function maskNonDeclarationText(bodyText) {
     let closeStart = -1;
     for (let k = j; k < chars.length && chars[k] !== '\n' && chars[k] !== '\r'; k += 1) {
       if (chars[k] !== '`') continue;
+      // 关界串必须恰好等于开界长度（CommonMark/GitHub：反引号串取极大连续 run）——
+      //   旧上限 `e - k < runLen` 会把更长的关界串截断成 runLen 误判为配对，开界前后的
+      //   声明面被错误遮罩 → 覆盖集漏记 → 确认集补写双写共存。
       let e = k;
-      while (e < chars.length && chars[e] === '`' && e - k < runLen) e += 1;
+      while (e < chars.length && chars[e] === '`') e += 1;
       if (e - k === runLen) { closeStart = k; break; }
       k = e - 1;
     }

@@ -730,7 +730,6 @@ let codeRabbitText = '';
 //   commit_id 绑定，旧 head 的 Merge Risk 不得冒充本轮裁决）。head 绑定评级单独解析后
 //   仅用于 review:approved 核准门（allExpectedResolved）；展示/风险分仍取 codeRabbitText。
 let codeRabbitHeadText = '';
-let kiloCodeText = '';
 let hasCheckFailure = false;
 
 // 4.1 提取 Checks API 中的 Output 文本
@@ -739,9 +738,6 @@ for (const run of targetRuns) {
   if (/coderabbit/i.test(run.name) || /coderabbit/i.test(run.app?.slug || '')) {
     codeRabbitText += `\n${textBlob}`;
     codeRabbitHeadText += `\n${textBlob}`;
-  }
-  if (/kilo/i.test(run.name) || /kilo/i.test(run.app?.slug || '')) {
-    kiloCodeText += `\n${textBlob}`;
   }
   if (run.conclusion !== 'success' && run.conclusion !== 'neutral' && run.conclusion !== 'skipped') {
     hasCheckFailure = true;
@@ -758,7 +754,6 @@ const reviews = allReviews; // 复用栅栏处单次同参 listReviews（Bot W8�
 // 正文采集与栅栏同源排除已撤销（DISMISSED）review：撤销的评审不得影响评级。
 for (const rev of reviews.filter(r => r.commit_id === currentHeadSha && r.state !== 'DISMISSED')) {
   if (isBotReview(rev.user, 'coderabbit')) { codeRabbitText += `\n${rev.body || ''}`; codeRabbitHeadText += `\n${rev.body || ''}`; }
-  if (isBotReview(rev.user, 'kilocode')) kiloCodeText += `\n${rev.body || ''}`;
 }
 
 // 4.3 顶层 issue 评论消费收窄开口（C-A，20261017 计划）：仅消费带对应 bot marker 的
@@ -863,8 +858,8 @@ if (crHeadMergeRiskScore !== null) crScoreHeadBound = crScoreHeadBound === null 
 //   id 6117996536：`**Status:** N Issues Found` + `| Severity | Count |` 三行计数）——
 //   按大于零的最严重档赋级；`Status: No Issues Found` 或计数全零 → 最低评级（1）。
 //   既有 severity/bare 前缀正则保留为其他输出格式的兜底（次序：计数表先于兜底）。
-// 载体分解析（review-finding 契约）：kiloCodeText 聚合多载体（check run output + review
-//   正文），全文混合解析会让旧载体的计数表（全零→1）遮蔽另一载体的真实发现——
+// 载体分解析（review-finding 契约）：kiloCarrierTexts 聚合多载体（check run output + review
+//   正文 + 4.3b 顶层评论），全文混合解析会让旧载体的计数表（全零→1）遮蔽另一载体的真实发现——
 //   按载体分别解析各自得分后取最高（与 4.4 CodeRabbit 汇总多 band 最严原则同构）。
 const kiloCarrierTextsAggregated = targetRuns
   .filter(run => /kilo/i.test(run.name) || /kilo/i.test(run.app?.slug || ''))
@@ -897,6 +892,15 @@ for (const carrierText of kiloCarrierTexts) {
   const s = kiloScoreOf(carrierText);
   if (s !== null && (kiloScore === null || s > kiloScore)) kiloScore = s;
 }
+// head 绑定评级（核准门专用，与 crScoreHeadBound 同构）：仅由当前 head 的载体文本
+//   （kiloCarrierTextsAggregated：4.1 kilo check run output + 4.2 head 绑定 review）重跑
+//   同一取严解析，排除 4.3b 顶层评论——顶层评论无 commit_id 绑定，旧轮计数表不得冒充
+//   本轮裁决把 kilocode 记为落定穿透核准门（与 coderabbit crScoreHeadBound 同一缺口）。
+let kiloScoreHeadBound = null;
+for (const carrierText of kiloCarrierTextsAggregated) {
+  const s = kiloScoreOf(carrierText);
+  if (s !== null && (kiloScoreHeadBound === null || s > kiloScoreHeadBound)) kiloScoreHeadBound = s;
+}
 
 // --- 4.6 裁决汇总（最严原则，正向标签以「全部必需 bot 通过」为门，可选 bot 缺席不阻塞）---
 const ratingByBot = { coderabbit: crScore, kilocode: kiloScore };
@@ -914,12 +918,15 @@ const allBotsRated = requiredKeys.length > 0 && requiredKeys.every(key => rating
 //   （`Merge Risk: Low` 穿透核准门冒充本轮裁决）。再补 completed 空载体一支：本轮载体的评级
 //   只信任 head 绑定的 review / completed check run（crScoreHeadBound）；completed 但 head 绑定
 //   文本无可解析评级（评级仅由旧顶层评论填充）同样不算落定，保持 review:pending 等待重评。
-//   file_limit/manual_required 为确定性缺席，仍视作落定。kilocode 判定口径不变。
+//   file_limit/manual_required 为确定性缺席，仍视作落定。kilocode 同口径收紧：评级仅信任
+//   head 绑定载体（kiloScoreHeadBound），旧顶层评论填充的评级不算落定。
 const allExpectedResolved = expectedKeys.every(key => {
   const st = botStatuses[key]?.state;
   if (['in_progress', 'absent'].includes(st)) return false;
   if (['file_limit', 'manual_required'].includes(st)) return true;
-  const resolvedRating = key === 'coderabbit' ? crScoreHeadBound : ratingByBot[key];
+  const resolvedRating = key === 'coderabbit' ? crScoreHeadBound
+    : key === 'kilocode' ? kiloScoreHeadBound
+    : ratingByBot[key];
   return resolvedRating !== null;
 });
 let finalScore = allBotsRated ? Math.max(...requiredKeys.map(key => ratingByBot[key]), ...scores.filter(score => score !== null)) : null;

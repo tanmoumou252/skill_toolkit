@@ -153,16 +153,22 @@ test('Architectural Regression: Control Branch (hub) + Mirror (dev) + Ephemeral 
     //   （fork-parent curl）因 UPSTREAM_REPO 显式注入被跳过，不触网。
     const syncSh = path.join(repoRoot, '.github', 'scripts', 'sync-upstream.sh');
     const cleanupSh = path.join(repoRoot, '.github', 'scripts', 'pr-cleanup-reset.sh');
-    const shEnv = (extra) => ({
-      ...process.env,
-      GITHUB_REPOSITORY: 'o/r',
-      GITHUB_TOKEN: 'test-token',
-      GH_TOKEN_PAT: '',
-      PUSH_URL_OVERRIDE: forkBare,
-      UPSTREAM_REPO: 'upstream-corp/dev',
-      UPSTREAM_URL_OVERRIDE: upstreamBare,
-      ...extra,
-    });
+    const shEnv = (extra) => {
+      const env = {
+        ...process.env,
+        GITHUB_REPOSITORY: 'o/r',
+        GITHUB_TOKEN: 'test-token',
+        PUSH_URL_OVERRIDE: forkBare,
+        UPSTREAM_REPO: 'upstream-corp/dev',
+        UPSTREAM_URL_OVERRIDE: upstreamBare,
+        ...extra,
+      };
+      // 显式剥离宿主环境可能残留的 GH_TOKEN_PAT：与 pr-cleanup-reset.yml 一致（该工作流
+      //   仅注入 GITHUB_TOKEN），真实验证 set -u 下脚本对未设键的安全求值（${VAR:-}），
+      //   不靠宿主/注入空串掩盖回归。
+      delete env.GH_TOKEN_PAT;
+      return env;
+    };
 
     await t.test('Step 1: real sync-upstream.sh runs on hub, spawns wip from dev and carries automation layer', () => {
       // 上游更新到 v2

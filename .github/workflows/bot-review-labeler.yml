@@ -37,7 +37,10 @@ on:
 # PR 解析完成后由 sync-labels job 以 PR 编号串行；无法归因的 check_run 不进入写标签 job。
 
 permissions:
-  # 无 contents 写权：HEAD 徽章走 shields 动态外链（不落库），本工作流从不写仓库文件。
+  # contents: read 仅供 resolve-pr 与 sync-labels 中 actions/checkout 拉取默认分支脚本本体；
+  #   显式声明是必需的（顶层 permissions 块存在时未列出的权限一律归零）。仍无 contents 写权：
+  #   HEAD 徽章走 shields 动态外链（不落库），本工作流从不写仓库文件。
+  contents: read
   pull-requests: write
   issues: write
   checks: read

@@ -647,6 +647,16 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
   record('autofill-closing-inline-code-equal-length-pairing',
     wroteOne(rPair) && pairBody.includes('Closes: #16') && !/Closes: #17/.test(pairBody),
     'tail=' + JSON.stringify(pairBody.slice(-160)));
+  // ④ 关界串须**恰好**等长（Kilo SUGGESTION 回灌）：单反引号开界后跟双反引号关界不是配对——
+  //   旧上限实现把双反引号 run 截成 1 长误判配对，整段声明面被遮罩 → `fixes #16` 漏出覆盖集
+  //   → 确认集补写 `Closes: #16` 双写共存。正确实现下 #16 已被覆盖，零续写。
+  const rLong = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n`fixes #16`` 之后收尾',
+    closingIssues: [16],
+  });
+  record('autofill-closing-inline-code-close-run-exact-length',
+    wroteOne(rLong) && !/Closes: #16/.test(String(rLong.patches[0]?.payload?.body ?? '')),
+    'tail=' + JSON.stringify(String(rLong.patches[0]?.payload?.body ?? '').slice(-120)));
 }
 {
   // 关键词精确匹配契约（预 PR 审查回灌）：`fixe` 非 GitHub closing 关键词（fix/fixes/fixed）——

@@ -10,7 +10,8 @@ set -euo pipefail
 # 关键：actions/checkout 会注入 http.extraheader=GITHUB_TOKEN，优先级高于 URL 内嵌凭证，必须先清除
 git config --unset-all http.https://github.com/.extraheader || true
 # 选择推送凭证：PUSH_TOKEN（PAT，可更新工作流文件）优先，否则 GITHUB_TOKEN
-if [ -n "${GH_TOKEN_PAT}" ]; then
+# （${VAR:-} 形态：set -u 下 env 未注入该键时安全取空——本工作流不注入 GH_TOKEN_PAT，本地直接运行不崩）
+if [ -n "${GH_TOKEN_PAT:-}" ]; then
   PUSH_URL="https://x-access-token:${GH_TOKEN_PAT}@github.com/${GITHUB_REPOSITORY}.git"
 else
   PUSH_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
