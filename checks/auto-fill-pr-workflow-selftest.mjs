@@ -624,6 +624,31 @@ const titleFailWith = (r, frag) => r.err === null && r.patches.length === 1 &&
     'tail=' + JSON.stringify(body.slice(-160)));
 }
 {
+  // 行内代码遮罩契约（PR 审查回灌·E1 等长配对）：GitHub 行内代码按**等长反引号串**配对——
+  //   ① 单个未配对反引号不是代码开界，其后文本仍是声明面（旧实现 toggle 到串尾 → 后文声明被
+  //      误遮罩 → 覆盖集漏记 → 确认集照常补写 = 双写共存，反方向缺陷）；
+  //   ② 等长串配对：`` ` ``（双反引号开界）内含单反引号须整段遮罩，配平后文本恢复声明面；
+  //   ③ 不等长串不得错误配对（三反引号开界须等三反引号关界，而非下一个单反引号）。
+  //   三夹具均按「声明面是否入覆盖集」判定，未配对实现下必红。
+  // ① 未配对单反引号：其后真实声明 `fixes #16` 仍计入覆盖集 → 不续写 #16
+  const rOdd = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n代码示例孤悬一个 ` 反引号：fixes #16',
+    closingIssues: [16],
+  });
+  record('autofill-closing-unpaired-backtick-not-open-inline-code',
+    wroteOne(rOdd) && !/Closes:/.test(String(rOdd.patches[0]?.payload?.body ?? '')),
+    'tail=' + JSON.stringify(String(rOdd.patches[0]?.payload?.body ?? '').slice(-120)));
+  // ② 等长双反引号串配对：串内 `fixes #16` 遮罩（不覆盖），配平后 `fixes #17` 为声明面
+  const rPair = await runCase({
+    existingBody: '## 概述\n\n相关修复说明。\n\n## 验证\n\n| 命令 | 结果 |\n|---|---|\n\n``code `fixes #16` span`` 之后 fixes #17',
+    closingIssues: [16, 17],
+  });
+  const pairBody = String(rPair.patches[0]?.payload?.body ?? '');
+  record('autofill-closing-inline-code-equal-length-pairing',
+    wroteOne(rPair) && pairBody.includes('Closes: #16') && !/Closes: #17/.test(pairBody),
+    'tail=' + JSON.stringify(pairBody.slice(-160)));
+}
+{
   // 关键词精确匹配契约（预 PR 审查回灌）：`fixe` 非 GitHub closing 关键词（fix/fixes/fixed）——
   //   不得计入覆盖集（否则 `fixe #16` 会丢弃已确认关联）。夹具 prose 仅 `fixe #16`，
   //   确认 [16] → 照常续写 `Closes: #16`。旧正则 `fix(?:e[ds]?)?` 命中 fixe → 必红。

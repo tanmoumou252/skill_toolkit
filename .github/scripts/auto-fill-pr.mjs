@@ -247,7 +247,10 @@ function maskNonDeclarationText(bodyText) {
   const codepoints = [...text];
   const blank = (i) => { if (chars[i] !== '\n' && chars[i] !== '\r') chars[i] = ' '; };
   let inHtmlComment = false;
-  let inInlineCode = false;
+  // 行内代码遮罩（等长配对契约，PR 审查 E1）：GitHub 行内代码配对是**行内作用域**——
+  //   开界反引号串须在同一行内找到等长关界串才成代码；未配对（行内无等长关界）按普通文本处理，
+  //   其后真实声明面不得被误遮罩（旧 toggle 实现/跨行贪吃均会把声明面吞掉 → 覆盖集漏记 → 双写共存）。
+  //   HTML 注释是跨行状态，须先于行内代码处理（注释内的反引号不参与配对）。
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i];
     if (inHtmlComment) {
@@ -255,11 +258,28 @@ function maskNonDeclarationText(bodyText) {
       if (ch === '>' && codepoints[i - 1] === '-' && codepoints[i - 2] === '-') inHtmlComment = false;
       continue;
     }
-    if (inInlineCode) { blank(i); if (ch === '`') inInlineCode = false; continue; }
     if (ch === '<' && chars[i + 1] === '!' && chars[i + 2] === '-' && chars[i + 3] === '-') {
       inHtmlComment = true; blank(i); blank(i + 1); blank(i + 2); blank(i + 3); i += 3; continue;
     }
-    if (ch === '`') { inInlineCode = true; blank(i); continue; }
+    if (ch !== '`') continue;
+    // 行内代码配对：吞整串连续反引号为开界，行内查找等长关界串；找到才遮罩其间内容。
+    let j = i;
+    while (j < chars.length && chars[j] === '`') j += 1;
+    const runLen = j - i;
+    let closeStart = -1;
+    for (let k = j; k < chars.length && chars[k] !== '\n' && chars[k] !== '\r'; k += 1) {
+      if (chars[k] !== '`') continue;
+      let e = k;
+      while (e < chars.length && chars[e] === '`' && e - k < runLen) e += 1;
+      if (e - k === runLen) { closeStart = k; break; }
+      k = e - 1;
+    }
+    if (closeStart === -1) {
+      // 未配对：整串反引号按普通文本保留（不 blank、不入代码态），继续扫描其后内容。
+      i = j - 1; continue;
+    }
+    for (let k = i; k <= closeStart + runLen - 1; k += 1) blank(k);
+    i = closeStart + runLen - 1;
   }
   return chars.join('');
 }

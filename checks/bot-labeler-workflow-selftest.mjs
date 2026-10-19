@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workflowPath = path.join(root, '.github', 'workflows', 'bot-review-labeler.yml');
-const text = fs.readFileSync(workflowPath, 'utf8');
+const labelerMjsPath = path.join(root, '.github', 'scripts', 'bot-review-labeler.mjs');
+// CI 引擎解耦（2b 实现阶段）：业务逻辑已迁入 .mjs，脚本级结构锚改读模块本体（text）；
+//   YAML 级锚（触发/权限/双 job/concurrency/checkout/run 行零插值）读 wfText。
+const wfText = fs.readFileSync(workflowPath, 'utf8');
+const text = fs.readFileSync(labelerMjsPath, 'utf8');
 
 // 结构断言用 check（首错即停）；行为 harness 用非抛出 record 以逐格留证。
 function check(name, ok, detail = '') {
@@ -15,7 +19,7 @@ function check(name, ok, detail = '') {
 let behaviorFailures = 0;
 
 check('bot-labeler-resolve-pr-job',
-  text.includes('resolve-pr:') &&
+  wfText.includes('resolve-pr:') &&
   text.includes('listPullRequestsAssociatedWithCommit') &&
   text.includes("core.setOutput('number', number || '')"));
 // 触发收敛（🤝 上游实质变化才重评，人类定版）：issue_comment 事件里 review 内联评论的
@@ -23,15 +27,15 @@ check('bot-labeler-resolve-pr-job',
 //   重评）。顶层摘要评论无 pull_request_url 字段、内联评论有——job-gate 据此排除内联事件，
 //   杜绝「内联编辑也全量跑 resolve-pr+sync-labels」的过程浪费。
 check('bot-labeler-job-gate-excludes-inline-comment-events',
-  /github\.event\.comment\.pull_request_url == null/.test(text) &&
-  (text.match(/github\.event\.comment\.pull_request_url == null/g) || []).length >= 2);
+  /github\.event\.comment\.pull_request_url == null/.test(wfText) &&
+  (wfText.match(/github\.event\.comment\.pull_request_url == null/g) || []).length >= 2);
 check('bot-labeler-pr-concurrency',
-  text.includes('needs: resolve-pr') &&
-  text.includes('group: bot-sync-${{ needs.resolve-pr.outputs.number }}') &&
-  text.includes("needs.resolve-pr.outputs.number != ''"));
+  wfText.includes('needs: resolve-pr') &&
+  wfText.includes('group: bot-sync-${{ needs.resolve-pr.outputs.number }}') &&
+  wfText.includes("needs.resolve-pr.outputs.number != ''"));
 // queue: max 必须落在 sync-labels concurrency 内，group 之后、cancel-in-progress: false 之前。
 check('bot-labeler-queue-max-pending',
-  /group: bot-sync-\$\{\{ needs\.resolve-pr\.outputs\.number \}\}\s*\n\s*queue:\s*max\s*\n\s*cancel-in-progress:\s*false/.test(text));
+  /group: bot-sync-\$\{\{ needs\.resolve-pr\.outputs\.number \}\}\s*\n\s*queue:\s*max\s*\n\s*cancel-in-progress:\s*false/.test(wfText));
 check('bot-labeler-head-recheck-before-label-writes',
   (text.match(/assertCurrentHead/g) || []).length >= 3 &&
   text.includes('latestPr.head.sha !== eventHeadSha'));
@@ -61,7 +65,10 @@ check('bot-labeler-status-verdict-no-dead-allbotsrated',
 // --- E2 契约：每次托管标签删除前必须复核 head，且复核必须落在"删除条件"与
 // --- "removeLabel 调用"之间（守的是真实写操作，不是文件中某处存在调用）。
 // --- 期望值由契约推导：guard 索引须严格大于条件索引且严格小于删除调用索引。
+// --- 防假绿硬闸：任一锚 indexOf 返回 -1（符号漂移）一律判红，绝不允许「-1 < 条件 < -1」式
+// --- 的索引比较在错提取文本上静默通过（符号迁进 .mjs 后源文本即此函数输入，drift 必咬红）。
 function guardBeforeDelete(conditionIdx, deleteIdx, guardIdx) {
+  if (conditionIdx < 0 || deleteIdx < 0 || guardIdx < 0) return false;
   return conditionIdx >= 0 && deleteIdx >= 0 && guardIdx > conditionIdx && guardIdx < deleteIdx;
 }
 
@@ -132,13 +139,13 @@ check('workflow-ordinary-suggestion-text-does-not-parse', !prodBareSuggestion.te
 
 // --- 触发域：pull_request_review submitted 必须显式声明（R1）---
 check('workflow-declares-pull-request-review-submitted-trigger',
-  /pull_request_review:\s*\n\s*types:\s*\[submitted\]/.test(text));
+  /pull_request_review:\s*\n\s*types:\s*\[submitted\]/.test(wfText));
 
 // --- 触发域：sync-labels.if 必须放行 review 事件（R2，E1 闭合）---
 // 断言：if 表达式块内含 pull_request_review 事件名放行；精确锚定 job if 表达式片段，
 // 避免仅匹配到别处的 event_name 字符串。
 check('workflow-sync-labels-if-admits-review-event',
-  /if:\s*>\s*\n\s*needs\.resolve-pr\.outputs\.number != '' \&\&\s*\n\s*\(github\.event_name == 'pull_request_target' \|\|\s*\n\s*github\.event_name == 'pull_request_review' \|\|/.test(text));
+  /if:\s*>\s*\n\s*needs\.resolve-pr\.outputs\.number != '' \&\&\s*\n\s*\(github\.event_name == 'pull_request_target' \|\|\s*\n\s*github\.event_name == 'pull_request_review' \|\|/.test(wfText));
 
 // --- step-0 head 解析：review 事件须从 payload.pull_request.head.sha 取 head（R3）---
 check('workflow-step0-resolves-review-head',
@@ -192,21 +199,81 @@ check('workflow-checkrun-identity-fail-closed',
 check('workflow-no-stale-appid-slug-fallback',
   !text.includes("if (typeof r.app?.id === 'number' && r.app.id !== def.appId) return false;"));
 
-// --- github-script 固定 Node-24 兼容 SHA（runtime-warning 处理）---
-check('workflow-github-script-node24-sha',
-  // 出处声明（本断言 SHA 的可核验事实源，非凭空捏造）：
-  //   1) 2026-10-16 会话实取：`git ls-remote https://github.com/actions/github-script.git refs/tags/v8`
-  //      ＝ ed597411d8f924073f98dfc5c65a23a2325f34cd（v8.0.0 release note 明确 "Update Node.js version
-  //      support to 24.x"，GitHub 签名验证 tag；runner 最低 v2.327.1）；
-  //   2) 旧 3a2844b7…（v7 系，action.yml 声明 node20）自 2026-09-23 runner 移除 node20 后仅剩 warning 噪音，
-  //      本轮按欠账清单（stacked-pr-handover §2）升级清偿；
-  //   3) runner 版本前置沿用 `.kilo/logs_103132623553/0_sync-labels.txt:1` 实测（2.337.0 ≥ 2.327.1）。
-  //   断言仍逐字锁定该 pin，v7 标签由反向锚 workflow-no-stale-github-script-v7 锁死不得回归；
-  //   SHA 变更须走代码变更审查链并同步以上登记。
-  /actions\/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd/.test(text));
-// 反向锚：旧的 v7 标签不得残留。
-check('workflow-no-stale-github-script-v7',
-  !text.includes('actions/github-script@v7'));
+// --- CI 引擎解耦：抛弃 actions/github-script，两 job 改 run: node 调本地脚本；run 行零插值；
+// --- checkout 钉默认分支（禁 base_ref/head_ref，r1 影子 E-1 供应链 RCE 防护）。
+//   原 workflow-github-script-node24-sha（锁 actions/github-script@ed597411… pin）按"抛弃 github-script"
+//   改判为以下三条结构锚；v7 反向锚并入「不再出现任何 github-script」总闸。
+//
+// run: 块解析器：提取每个 step 的 run 命令文本（兼容内联单行与块标量 | / >），统计其中 ${{ }} 出现次数。
+function runBlockInterpolations(yml) {
+  const lines = yml.split(/\r?\n/);
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^(\s*)run:(.*)$/.exec(lines[i]);
+    if (!m) continue;
+    const indent = m[1].length;
+    const inline = m[2].replace(/^[ \t]+/, '');
+    let block;
+    if (inline && !/^[|>]/.test(inline)) {
+      block = inline;
+    } else {
+      const parts = [];
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j];
+        if (l.trim() === '') { parts.push(l); continue; }
+        if (l.match(/^[ \t]*/)[0].length <= indent) break;
+        parts.push(l);
+      }
+      block = parts.join('\n');
+    }
+    count += (block.match(/\$\{\{/g) || []).length;
+  }
+  return count;
+}
+
+check('workflow-abandons-github-script',
+  !/uses:\s*actions\/github-script/.test(wfText) &&
+  !/^\s*script:\s*\|/.test(wfText) &&
+  (wfText.match(/run:\s*node \.github\/scripts\/bot-review-labeler\.mjs/g) || []).length === 2,
+  'githubScriptUses=' + (wfText.match(/uses:\s*actions\/github-script/g) || []).length +
+    ' nodeRuns=' + (wfText.match(/run:\s*node \.github\/scripts\/bot-review-labeler\.mjs/g) || []).length);
+// 反向锚：github-script 的 setOutput 注入面不得残留在 YAML（已迁至 .mjs，由 CLI 写 $GITHUB_OUTPUT）。
+check('workflow-no-github-script-setoutput-in-yaml',
+  !wfText.includes('core.setOutput') && !wfText.includes('actions/github-script@v7'));
+// 反注入闸：所有 run 行零 ${{ }} 内联插值（事件/凭证只经 env 传参）。
+check('workflow-run-lines-zero-interpolation',
+  runBlockInterpolations(wfText) === 0,
+  'interpInRunLines=' + runBlockInterpolations(wfText));
+// 迁移后的脚本本体必须彻底脱离引擎插值（.mjs 内零 ${{ }}）。
+check('workflow-mjs-source-has-no-interpolation',
+  !text.includes('${{'),
+  'interpInMjs=' + (text.match(/\$\{\{/g) || []).length);
+// checkout 配置面：钉默认分支（非 base_ref/head_ref），不持久化凭证；绝不传 event.repository 派生 repository
+//   （fork 可控脚本供应链 RCE，PR-Reviewer E-1）；resolve-pr 步保留 `id: resolve`（job.outputs 读取面，r2 R2-OPEN-2）。
+// L3 结构感知（PR-Reviewer E1-r2 修复）：checkout 是 JS action 无 run——`id: resolve`/`run:` 必须落在**独立 step** 上，
+//   不得与 checkout 步融合（融合＝脚本永不执行 + outputs.number 恒空 + sync-labels 门恒假＝主链路静默全停）。
+//   判据：checkout uses 行与其后的首个 run: node 行之间必须隔着新的 `- name:` step 键（6 空格缩进）；
+//   `id: resolve` 必须以 8 空格 step 键缩进（`^        id: resolve$`）出现在 `- name: Resolve PR number` 步内。
+check('workflow-checkout-pins-default-branch-not-base-head',
+  (wfText.match(/ref: \$\{\{ github\.event\.repository\.default_branch \}\}/g) || []).length === 2 &&
+  !/^\s*ref:\s*\$\{\{[^}]*(?:base_ref|head_ref)/m.test(wfText) &&
+  !/^\s+repository:\s*\$\{\{/m.test(wfText) &&
+  (wfText.match(/persist-credentials: false/g) || []).length === 2 &&
+  /^ {8}id: resolve$/m.test(wfText) &&
+  /^ {6}- name: Resolve PR number$/m.test(wfText),
+  'defaultBranchRefs=' + (wfText.match(/ref: \$\{\{ github\.event\.repository\.default_branch \}\}/g) || []).length +
+    ' repositoryInputs=' + (wfText.match(/^\s+repository:\s*\$\{\{/gm) || []).length +
+    ' resolveStepKey=' + /^ {8}id: resolve$/m.test(wfText));
+// L3 step 边界闸（E1-r2）：每个 run: node 必须归属独立 step，且不与 checkout 步同体。
+//   判据：首个 checkout uses 行到首个 run: node 行之间至少存在一个 6 空格 `- name:` step 键。
+check('workflow-run-node-in-independent-step-after-checkout',
+  (() => {
+    const co = wfText.indexOf('uses: actions/checkout@');
+    const rn = wfText.indexOf('run: node .github/scripts/bot-review-labeler.mjs');
+    if (co === -1 || rn === -1 || rn < co) return false;
+    return /(^|\n) {6}- name: /.test(wfText.slice(co, rn));
+  })(),
+  'fused=' + (() => { const co = wfText.indexOf('uses: actions/checkout@'); const rn = wfText.indexOf('run: node .github/scripts/bot-review-labeler.mjs'); return co === -1 || rn === -1 || rn < co ? 'n/a' : !/(^|\n) {6}- name: /.test(wfText.slice(co, rn)); })());
 
 // --- T2 — fork PR review 受信写面契约：fork PR 的 pull_request_review 触发器运行在
 // ---   非受信 merge commit、GITHUB_TOKEN 被 clamp 为只读，无法完成标签写入。受信写面
@@ -216,7 +283,7 @@ check('workflow-no-stale-github-script-v7',
 
 // --- 受信写面：issue_comment 触发必须显式声明 created/edited（fork review 的受信唤醒路）---
 check('workflow-declares-issue-comment-trusted-writer-trigger',
-  /issue_comment:\s*\n\s*types:\s*\[created, edited\]/.test(text));
+  /issue_comment:\s*\n\s*types:\s*\[created, edited\]/.test(wfText));
 
 // --- 唤醒闸：评论唤醒必须限官方 Bot 作者（type=Bot），人类评论不得触发写标签求值 ---
 check('workflow-comment-wake-gates-bot-author',
@@ -230,7 +297,7 @@ check('workflow-comment-wake-defers-head-binding',
 
 // --- sync-labels.if 必须放行 issue_comment（受信唤醒进入 job 求值）---
 check('workflow-sync-labels-if-admits-issue-comment',
-  /github\.event_name == 'issue_comment'/.test(text));
+  /github\.event_name == 'issue_comment'/.test(wfText));
 
 // --- resolve-pr：issue 顶层评论事件必须可归因 PR 编号（issue.pull_request 存在性闸）---
 check('workflow-resolve-pr-admits-issue-comment-number',
@@ -410,8 +477,8 @@ check('workflow-status-labels-declared',
 check('workflow-required-bot-field-and-thresholds',
   /'coderabbit': \{[^}]*required: false/.test(text) &&
   /'kilocode': \{[^}]*required: true/.test(text) &&
-  /^ {6}CODERABBIT_MAX_FILES: '100'$/m.test(text) &&
-  /^ {6}CODERABBIT_MIN_STARS: '10'$/m.test(text) &&
+  /^ {6}CODERABBIT_MAX_FILES: '100'$/m.test(wfText) &&
+  /^ {6}CODERABBIT_MIN_STARS: '10'$/m.test(wfText) &&
   /const CODERABBIT_MAX_FILES = Number\(process\.env\.CODERABBIT_MAX_FILES/.test(text) &&
   /const CODERABBIT_MIN_STARS = Number\(process\.env\.CODERABBIT_MIN_STARS/.test(text));
 check('workflow-file-limit-and-manual-required-signals',
@@ -450,7 +517,7 @@ check('workflow-status-comment-badges-repo-localized',
   })() &&
   /const BADGE_FILES = new Set\(\[/.test(text) &&
   /unknown badge asset/.test(text) &&
-  !/^[ \t]*contents:[ \t]*write[ \t]*(#.*)?$/m.test(text) &&
+  !/^[ \t]*contents:[ \t]*write[ \t]*(#.*)?$/m.test(wfText) &&
   (text.match(/img\.shields\.io/g) || []).length === 1); // 仅 HEAD 徽章 shields 外链一处// S2 图标定版（本仓固化后修订）：octicon path 固化于 .github/assets/badges/（icon-*.svg 六枚，
 //   生成器 checks/build-status-badges.mjs 着色 #57606a），工作流以 ICON(name,size) 引用本仓 raw URL；
 //   emoji 零使用（负向锚：status comment 区段（常量区 BOT_STATE_META 起）不匹配 emoji 码点区间，
@@ -528,17 +595,17 @@ check('workflow-conclusion-badge-assets-retired-on-disk',
     ].every((n) => fs.existsSync(path.join(badgeDir, `${n}-flat.svg`))),
   'dir=' + badgeDir);
 // S3 内联采集区段隔离：pulls.listComments 仅出现在 writeStatusComment 区段（4.1 节头之前）。
+//   CI 引擎解耦后区段边界以节标题「4.1 提取 Checks API」锚定（原按 YAML 12 空格缩进闭括号定位，
+//   .mjs 缩进不同已失效）；并强化为全局恰出现 1 次，杜绝评分/栅栏管道误接内联面。
 check('workflow-inline-comments-fetched-in-status-comment-only',
   text.includes('github.rest.pulls.listComments') &&
   (() => {
     const fnStart = text.indexOf('async function writeStatusComment');
-    const fnEnd = text.indexOf('\n            }\r\n', fnStart) !== -1
-      ? text.indexOf('\n            }\r\n', fnStart)
-      : text.indexOf('\n            }\n', fnStart);
     const section41 = text.indexOf('4.1 提取 Checks API');
-    if (fnStart === -1 || fnEnd === -1 || section41 === -1 || fnEnd > section41) return false;
-    const body = text.slice(fnStart, fnEnd);
-    return body.includes('github.rest.pulls.listComments');
+    if (fnStart === -1 || section41 === -1 || section41 < fnStart) return false;
+    const body = text.slice(fnStart, section41);
+    return (body.match(/github\.rest\.pulls\.listComments/g) || []).length === 1 &&
+      (text.match(/github\.rest\.pulls\.listComments/g) || []).length === 1;
   })());
 // S4 证据链接定版：HEAD 徽章 commit 链接 + bot 执行结果徽章 html_url 包裹 + 进度表 auto-fill 三态解析。
 // S4b 取末次 sentinel 双保险（E1 契约）：实现侧用 matchAll 取末次标记（first-match 跨轮累积时取最旧）。
@@ -571,45 +638,37 @@ check('workflow-bot-metadata-tail-with-escaping',
 // 期望值由契约推导，不以当前实现为 Oracle；gate-removal 变异必须被捕获（突变验证）。
 // ================================================================
 function extractSyncLabelsScript(y) {
-  const lines = y.split(/\r?\n/);
-  // 锚定 sync-labels job：先定位 `sync-labels:` 作业键，再取其之后的第一个 script 块。
-  //   不假设「最后一个 script 块就是 sync-labels」——后续追加/重排含 script 的 step 会让
-  //   提取器静默执行错脚本而文本断言仍绿（行为套件假绿）。取首个而非末个，同步保序安全。
-  let jobIdx = -1;
-  for (let i = 0; i < lines.length; i++) if (/^\s{0,4}sync-labels:\s*$/.test(lines[i])) { jobIdx = i; break; }
-  if (jobIdx === -1) throw new Error('未定位 sync-labels job');
-  // job 边界：从 job 键之后第一个缩进 ≤ job 键缩进的非空行终止，使 script 收集与唯一性判定锁在本 job 内。
-  const jobKeyIndent = lines[jobIdx].match(/^[ \t]*/)[0].length;
-  let jobEnd = lines.length;
-  for (let i = jobIdx + 1; i < lines.length; i++) {
-    if (lines[i].trim() === '') continue;
-    if (lines[i].trim().startsWith('#')) continue;
-    if (lines[i].match(/^[ \t]*/)[0].length <= jobKeyIndent) { jobEnd = i; break; }
-  }
-  const starts = [];
-  for (let i = jobIdx + 1; i < jobEnd; i++) if (/^([ \t]*)script:[ \t]*\|[ \t]*$/.test(lines[i])) starts.push(i);
-  // 结构锚（评审 359）：sync-labels job 必须恰含 1 个 script 块——缺失/歧义一律拒绝执行，
-  //   而非靠内部符号名把守（符号名是实现对细节非契约，重命名常量不应使 harness 崩溃）。
-  if (starts.length !== 1) throw new Error('sync-labels job 内 script 块数非 1（实际 ' + starts.length + '，疑似结构变动）；拒绝在歧义块上执行');
-  const s = starts[0];
-  const keyIndent = lines[s].match(/^[ \t]*/)[0].length;
-  const body = [];
-  for (let s2 = s + 1; s2 < jobEnd; s2++) {
-    const l = lines[s2];
-    if (l.trim() === '') { body.push(''); continue; }
-    const ind = l.match(/^[ \t]*/)[0].length;
-    if (ind <= keyIndent) break;
-    body.push(l);
-  }
-  const nonEmpty = body.filter((l) => l.trim() !== '');
-  if (nonEmpty.length === 0) throw new Error('sync-labels script 块为空');
+  // CI 引擎解耦：从 .mjs 的 run(deps) 体取出原 sync-labels 脚本源（逐字），供变异 .replace 注入。
+  //   YAML 已无 script 块；run() 体是同一脚本逐字平移（仅以形参取代 github-script 注入面）。
+  const runOpen = 'export async function run(deps) {';
+  const ri = y.indexOf(runOpen);
+  if (ri === -1) throw new Error('未定位 run(deps) 导出（疑似结构变动）');
+  const rp = y.indexOf('\nexport async function resolvePr(deps) {');
+  if (rp === -1 || rp <= ri) throw new Error('未定位 resolvePr 导出边界（疑似结构变动）');
+  let inner = y.slice(ri + runOpen.length, rp)
+    .replace(/^[ \t]*\r?\n/, '')                                         // 去 '{' 后首换行
+    .replace(/^[ \t]*const \{[^}]*\} = deps;[ \t]*\r?\n/, '')          // 去 deps 解构注入行
+    .replace(/}[ \t]*\r?\n?[ \t]*\r?\n?[ \t]*$/, '');                  // 去 run() 闭合 '}' 与尾随空行
+  const lines = inner.split(/\r?\n/);
+  const nonEmpty = lines.filter((l) => l.trim() !== '');
+  if (nonEmpty.length === 0) throw new Error('run() 脚本体为空');
   const common = Math.min(...nonEmpty.map((l) => l.match(/^ */)[0].length));
-  const script = body.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
-  // 错提取防呆：脚本体必引用标签写调用 addLabels/removeLabel（行为契约级结构锚，
-  //   区别于绑定单一实现符号名的 SYSTEM_LABELS），提取错块时 fail-loud，绝不静默执行他脚本。
+  const script = lines.map((l) => (l.trim() === '' ? '' : l.slice(common))).join('\n');
+  // 错提取防呆：脚本体必引用标签写调用 addLabels/removeLabel（行为契约级结构锚）。
   if (!/\baddLabels\s*\(/.test(script) || !/\bremoveLabel\s*\(/.test(script))
-    throw new Error('提取到的 script 未引用标签写调用 addLabels/removeLabel（疑似提取错脚本块）');
+    throw new Error('提取到的 run 体未引用标签写调用 addLabels/removeLabel（疑似提取错区间）');
   return script;
+}
+
+// 防假绿硬闸（r1 影子 Important）：变异必须真实改写源文本（命中 ≥1 次）。
+//   符号迁入 .mjs 后，若变异锚在源文本上命中 0 次（符号漂移/提取源错配/结构重组），
+//   则 .replace 返回原文＝变异未生效＝gate-removal 静默假绿。命中 0 立即判红，绝不静默通过。
+function mutateOrThrow(originalSource, from, to) {
+  const mutated = originalSource.replace(from, to);
+  if (mutated === originalSource) {
+    throw new Error('mutation no-op: 变异锚未命中源文本（命中 0 次）——符号漂移/提取源错配，gate-removal 假绿风险');
+  }
+  return mutated;
 }
 
 // 从 sync-labels 内联脚本真实执行；mock github/context/process，记录标签 API 调用。
@@ -723,29 +782,38 @@ async function runWorkflow({ eventName, payload, env, headSha, headBranchRef, re
   const core = { setOutput: () => {} };
   const process = { env: env || {} };
   const consoleMock = { log: (...a) => logs.push(a.join(' ')) };
-  // 提取失败不再穿出顶层 await 终止进程（评审 359）：捕获进 err，使载体矩阵与后续用例仍逐例上报真实原因。
-  let scriptBody = scriptSrc;
+  // 行为 harness 注入面：与 github-script 同形 (context, github, core, process, console)，mock 夹具逐字复用。
+  const deps = { context, github, core, process, console: consoleMock };
+  // CI 引擎解耦：默认（干净）用例经 import 调用本地模块导出的 run(deps)（证明"业务逻辑脱离引擎、本地可运行"）；
+  //   变异用例（显式 scriptSrc）改在脚本源文本上 .replace 注入变异体，经 new Function 执行——二者共用同一 mock。
+  //   提取/构造/运行三级 err 通道（评审 359）保持不变：extractErr > constructErr > runtimeErr，逐例上报不裸穿。
+  const isMutation = Boolean(scriptSrc);
   let extractErr = null;
-  if (!scriptBody) {
-    try { scriptBody = extractSyncLabelsScript(text); }
-    catch (e) { extractErr = e; scriptBody = ''; }
-  }
-  // 构造期 SyntaxError（YAML 编辑事故产出非法 JS）与提取失败同走逐例 err 通道（评审 359 契约）：
-  //   new Function 同步 throw 不被 await 链 .then(onrejected) 覆盖，必须就地捕获，否则裸穿终止套件。
-  let fn = null;
   let constructErr = null;
-  try {
-    fn = new Function('context', 'github', 'core', 'process', 'console',
-      'return (async () => {\n' + scriptBody + '\n})()');
-  } catch (e) {
-    constructErr = e;
-  }
-  // E2 可读性修正：err 优先级拆为显式逐级求值，语义与 F6 契约逐字等价——
-  //   extractErr（提取失败）> constructErr（构造期 SyntaxError）> runtimeErr（运行期异常），
-  //   且保留短路语义：前两者在场时不再执行 fn，避免无谓跑空脚本体。
   let runtimeErr = null;
-  if (!extractErr && !constructErr && fn) {
-    runtimeErr = await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
+  if (isMutation) {
+    let fn = null;
+    try {
+      fn = new Function('context', 'github', 'core', 'process', 'console',
+        'return (async () => {\n' + scriptSrc + '\n})()');
+    } catch (e) {
+      constructErr = e;
+    }
+    if (!constructErr && fn) {
+      runtimeErr = await fn(context, github, core, process, consoleMock).then(() => null, (e) => e);
+    }
+  } else {
+    let mod = null;
+    try {
+      mod = await import(new URL('file:///' + labelerMjsPath.replace(/\\/g, '/')).href);
+    } catch (e) {
+      constructErr = e;
+    }
+    if (!constructErr && typeof mod.run === 'function') {
+      runtimeErr = await mod.run(deps).then(() => null, (e) => e);
+    } else if (!constructErr) {
+      constructErr = new Error('bot-review-labeler.mjs 未导出 run(deps)');
+    }
   }
   const err = extractErr || constructErr || runtimeErr;
   return { calls, labelsAdded, labelsRemoved, provisioned, comments: commentList, logs, err };
@@ -1425,35 +1493,30 @@ function record(name, ok, detail) {
     'add=' + r.calls.add + ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
 
-// E6/F3: job-level YAML comments must not truncate jobEnd — extraction still finds the block.
-// 期望值溯源：行为契约 F3 触发域（注释行不得被判为 job 边界），非抄录当前实现。
-// E1-r2 修正：整行 splice 保留原缩进，把浅注释作为独立行插在 sync-labels 的 script: 行之前。
-//   旧实现把该行判为下一 job 边界 → jobEnd 截断 → starts=0 → throw（真红）；
-//   新实现跳过注释行 → starts=1 提取成功（转绿）。禁止字符串级 splice（破坏列位、恒绿/永红）。
+// E6/F3 改判（CI 引擎解耦后）：YAML script 块提取器已退役（逻辑迁至本地 .mjs），原「job-level 注释
+// 不得截断 jobEnd / 提取找得到 script 块」夹具语义失效。改判为等价的"提取/装配结构完整性"三锚：
+//   ① 双 job 边界在场（resolve-pr / sync-labels 各独立 job 键，撤销合并单 job 的结构后果——E-3）；
+//   ② 两 job 各 checkout 先于 run: node（脚本本体检出先于执行）；
+//   ③ 从 .mjs 提取出合法 run() 脚本体（addLabels/removeLabel 在场，错提取即 fail-loud）。
 {
-  const flines = text.split(/\r?\n/);
-  const fj = flines.findIndex((l) => /^\s{0,4}sync-labels:\s*$/.test(l));
-  const fk = fj + 1 + flines.slice(fj + 1).findIndex((l) => /^([ \t]*)script:[ \t]*\|[ \t]*$/.test(l));
-  const ok0 = fj >= 0 && fk > fj && fk < flines.length;
-  record('workflow-f3-fixture-anchor-found', ok0);
-  // trap 取 job 键同缩进（sync-labels 键缩进=2）：浅缩进方能在旧实现里被判为边界。
-  const jobKeyIndent = (flines[fj] || '').match(/^[ \t]*/)[0].length;
-  const trap = ' '.repeat(jobKeyIndent) + '# job-level boundary trap';
-  const synth = ok0 ? flines.slice(0, fk).concat([trap], flines.slice(fk)).join('\n') : text;
-  let ok = false;
-  let detail = '';
-  try {
-    extractSyncLabelsScript(synth);
-    ok = true;
-  } catch (e) {
-    detail = String(e.message).split('\n')[0];
-  }
-  record('workflow-job-boundary-skips-yaml-comment-lines', ok, detail);
+  const hasResolveJob = /^\s{0,4}resolve-pr:\s*$/m.test(wfText);
+  const hasSyncJob = /^\s{0,4}sync-labels:\s*$/m.test(wfText);
+  record('workflow-f3-dual-job-boundaries-preserved', hasResolveJob && hasSyncJob,
+    'resolve=' + hasResolveJob + ' sync=' + hasSyncJob);
+  const coCount = (wfText.match(/uses: actions\/checkout@/g) || []).length;
+  const runCount = (wfText.match(/run:\s*node \.github\/scripts\/bot-review-labeler\.mjs/g) || []).length;
+  record('workflow-f3-checkout-precedes-node-run',
+    coCount === 2 && runCount === 2 &&
+      wfText.indexOf('uses: actions/checkout@') < wfText.indexOf('run: node .github/scripts/bot-review-labeler.mjs'),
+    'checkout=' + coCount + ' nodeRun=' + runCount);
+  let extractOk = true;
+  let extractDetail = '';
+  try { extractSyncLabelsScript(text); } catch (e) { extractOk = false; extractDetail = String(e.message).split('\n')[0]; }
+  record('workflow-mjs-run-body-extractable', extractOk, extractDetail);
 }
-// E7/F6: syntactically invalid script body must surface as per-case err, never crash the suite.
-// 期望值溯源：F6 契约（构造期 SyntaxError 归并进 err 返回路径）。E2-r2 修正：断言比对异常
-//   类型（instanceof SyntaxError），而非在 err.message 里找 "SyntaxError" 类名（Function
-//   Constructor 抛的 message 只含 "Unexpected token"，类名在 err.name，旧断言修复后仍假红）。
+// E7/F6: 变异源（new Function）构造期 SyntaxError 必须归并为逐例 err，绝不裸穿终止套件。
+// 期望值溯源：F6 契约。E2-r2 修正：断言比对异常类型（instanceof SyntaxError），而非在 err.message 里
+//   找 "SyntaxError" 类名（Function Constructor 抛的 message 只含 "Unexpected token"，类名在 err.name）。
 {
   const broken = "const x = ;\n github.rest.issues.addLabels(\n github.rest.issues.removeLabel(";
   const r = await runWorkflow({
@@ -1477,7 +1540,7 @@ function record(name, ok, detail) {
     // 突变体：actor 门条件恒假（等价于删除门）。human actor 事件将不再早退，深入求值并写标签。
     //   提取失败不再使进程崩溃（评审 359）：捕获为 loud FAIL 证据，突变用例仍产出逐例上报。
     try {
-      const src = extractSyncLabelsScript(text).replace(
+      const src = mutateOrThrow(extractSyncLabelsScript(text),
         "if (context.eventName === 'pull_request_review' && context.payload.review?.user?.type !== 'Bot')",
         "if (false)");
       const r = await runWorkflow({
@@ -1683,7 +1746,7 @@ function record(name, ok, detail) {
 //   `(async()=>{throw})() || fn` 会在求值实参时把 Promise 对象（非函数）传给 paginate → paginate 内
 //   `fn(params)` 抛 TypeError（非 API 拒绝）且被弃的 rejected Promise 触发 unhandled rejection（实测崩全链）。
 {
-  const broken = extractSyncLabelsScript(text).replace(
+  const broken = mutateOrThrow(extractSyncLabelsScript(text),
     'github.rest.pulls.listComments',
     'async () => { throw new Error("boom"); }');
   const r = await runWorkflow({
@@ -1706,7 +1769,7 @@ function record(name, ok, detail) {
 //   桩同为「被 paginate 调用才 reject 的 async 函数」；降级语义区别于 D6——D6 是内联采集（展示面
 //   降级行仍写入），本用例是 ownComment 定位（直接跳过评论写，不 duplicate marker 评论）。
 {
-  const broken = extractSyncLabelsScript(text).replace(
+  const broken = mutateOrThrow(extractSyncLabelsScript(text),
     'github.rest.issues.listComments',
     'async () => { throw new Error("lookup-boom"); }');
   const r = await runWorkflow({
@@ -1732,7 +1795,7 @@ function record(name, ok, detail) {
   //   干净实现内联零回流 → 但 CR 未评（optional absent）→ 契约 3 落 review:pending（非 approved）。
   const ATTACK = 'Merge Readiness band: Blocked';
   // 夹具侧防求值：${textBlob} 以 \${ 转义写入篡改串，仅在被执行脚本内展开。
-  const tampered = extractSyncLabelsScript(text).replace(
+  const tampered = mutateOrThrow(extractSyncLabelsScript(text),
     'codeRabbitText += `\\n${textBlob}`;',
     'codeRabbitText += `\\n${textBlob}\\n' + ATTACK + '`;');
   // 4.1 提取循环以 targetRuns 为输入（无 completed run 时循环体不执行、篡改行不运行）——
@@ -2081,6 +2144,34 @@ function record(name, ok, detail) {
       inProg.labelsAdded.flat().includes('review:pending') && !inProg.labelsAdded.flat().includes('review:approved') &&
       absent.labelsAdded.flat().includes('review:pending') && !absent.labelsAdded.flat().includes('review:approved'),
     'inprog=' + JSON.stringify(inProg.labelsAdded.flat()) + ' absent=' + JSON.stringify(absent.labelsAdded.flat()));
+}
+// C2 延伸（PR#21 CodeRabbit 反馈）：当前 head 的 CodeRabbit completed 载体无可解析评级时，
+//   不得用旧顶层评论的 Merge Risk 把 coderabbit 记为落定而误写 review:approved。
+//   夹具＝Kilo head review 已评级（required→allBotsRated 真）+ CodeRabbit 当前 head 有 completed
+//   check run（state=completed 但 output 无 band/风险→crScoreHeadBound=null）+ 一份旧 `Merge Risk: Low`
+//   顶层评论（无 head 绑定，仅喂展示分 crScore=1）。期望：coderabbit 未落定→review:pending，绝不 approved。
+{
+  const r = await barrierCase({
+    changedFiles: 1, stars: 100,
+    reviews: [{ ...COMMENTED, body: '**Status:** No Issues Found' }],
+    comments: [{
+      id: 96,
+      body: '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nMerge Risk: Low',
+      user: { type: 'Bot', login: 'coderabbitai[bot]' },
+    }],
+    checkRuns: [{
+      name: 'CodeRabbit Review', status: 'completed', conclusion: 'success', run_attempt: 1,
+      app: { slug: 'coderabbitai', id: 347564 },
+      output: { title: 'CodeRabbit reviewed', summary: '', text: '' },
+    }],
+    pullComments: [],
+  });
+  record('workflow-completed-coderabbit-empty-carrier-stale-top-comment-not-approved',
+    r.err === null &&
+      r.labelsAdded.flat().includes('review:pending') &&
+      !r.labelsAdded.flat().includes('review:approved'),
+    'err=' + (r.err ? String(r.err.message).split('\n')[0] : 'null') +
+      ' labels=' + JSON.stringify(r.labelsAdded.flat()));
 }
 
 // ================================================================

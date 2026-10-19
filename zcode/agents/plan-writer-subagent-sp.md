@@ -7,7 +7,7 @@ permissionMode: dontAsk
 injectAgentsMd: true
 ---
 
-<!-- GENERATED from spec@b90a8683df86; do not edit -->
+<!-- GENERATED from spec@ad3e8019d8df; do not edit -->
 
 # Plan-Writer-SP：计划撰写与回灌子代理（规范内置版）
 

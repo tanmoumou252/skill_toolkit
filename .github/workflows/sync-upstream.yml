@@ -1,0 +1,59 @@
+name: Sync Upstream & Spawn Staging Branch
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 在默认分支 hub 上永久生效
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: '上游仓库 (owner/repo)；留空则自动探测 fork parent，或回退仓库变量 UPSTREAM_REPO'
+      upstream_branch:
+        description: '上游同步源分支 (dev)'
+        required: true
+        default: 'dev'
+      mirror_branch:
+        description: '本仓库镜像分支 (dev)'
+        required: true
+        default: 'dev'
+      staging_branch:
+        description: 'PR 模拟临时分支 (wip)'
+        required: true
+        default: 'wip'
+
+permissions:
+  contents: write
+  pull-requests: read
+
+# 并发防护（PR 审查回灌）：sync 与 cleanup 都强推 wip——并发运行可互相覆盖
+#   （cleanup 的回退推送被随后的 sync 重建覆盖，或反之）。同组串行 + 不取消运行中任务，
+#   保证「先完成的写入不被后完成者基于过期状态覆盖」，顺序由队列保持。
+concurrency:
+  group: ephemeral-staging-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  sync-and-spawn:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Control Branch (default branch)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git Bot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch Upstream & Provision Ephemeral Branch wip
+        env:
+          UPSTREAM_REPO: ${{ inputs.upstream_repo || vars.UPSTREAM_REPO }}
+          GH_TOKEN_PAT: ${{ secrets.PUSH_TOKEN }} # 带 workflow 作用域的 PAT；未配置时为空，回退 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ github.token }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'dev' }}
+          MIRROR_BRANCH: ${{ inputs.mirror_branch || 'dev' }}
+          STAGING_BRANCH: ${{ inputs.staging_branch || 'wip' }}
+        # 业务逻辑已外置到 .github/scripts/sync-upstream.sh（CI 引擎只负责环境/密钥/触发）；
+        # 事件/密钥数据全经上方 env: 注入，run 行零 ${{ }} 内联插值（反注入闸）。
+        run: bash .github/scripts/sync-upstream.sh
