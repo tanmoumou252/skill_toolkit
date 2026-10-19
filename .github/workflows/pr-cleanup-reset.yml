@@ -1,0 +1,61 @@
+name: Cleanup Ephemeral Staging Branch
+
+on:
+  pull_request_target:
+    types: [closed]
+
+# 推送令牌语义（外部审查回灌）：本工作流的推送（重置 + overlay 提交）使用 GITHUB_TOKEN
+#   （github.token，经 env 注入脚本；无 PAT 回退——PUSH_TOKEN 已收敛至 hub 受信面的 sync-upstream.yml）。
+#   permissions 已授 contents: write（推送分支级变更的必需权限）。
+#   注意：GitHub 的 permissions: 块没有 workflows 键（写入即整文件解析失败），GITHUB_TOKEN 对
+#   创建/更新 .github/workflows/* 是硬边界；本脚本 overlay 提交恢复的工作流文件与 hub 逐字相同
+#   （同路径同内容已存在于同仓另一分支 → 免 workflow scope），脚本对最终 push 带拒绝原因诊断。
+# 严格适配 2026 年 11 月 2 日权限红线
+permissions:
+  contents: write
+  pull-requests: read
+
+# 并发防护（PR 审查回灌）：与 sync-upstream.yml 同组——两工作流都强推 wip，并发运行互相覆盖。
+#   同组串行 + 不取消运行中任务（cleanup 先入队则 sync 等其完成再重建，反之亦然）。
+concurrency:
+  group: ephemeral-staging-${{ github.repository }}
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  cleanup-staging:
+    # 仅当 PR 被合并且目标是临时分支 wip 时触发
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'wip'
+    runs-on: ubuntu-latest
+    steps:
+      # 取脚本本体：钉仓库默认分支（hub 控制面）而非事件检出态——pull_request_target(closed)
+      #   默认检出刚被合并污染的 wip，合并夹带的 .github/scripts/pr-cleanup-reset.sh 会以
+      #   contents:write 凭证在 runner 上执行＝供应链 RCE；不传 ref 时 checkout 在
+      #   pull_request_target 上下文检出合并提交（wip），必须显式钉 ref 覆盖。
+      #   persist-credentials:false：脚本自带凭证选择（env 注入），工作区凭据不得残留复用推送。
+      - name: Checkout default branch (script source only)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure Git Bot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Reset Ephemeral Branch wip
+        env:
+          TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO }}
+          MIRROR_BRANCH: ${{ vars.MIRROR_BRANCH || 'dev' }}
+          # 不注入 PUSH_TOKEN：本 job 由 wip 上的工作流文件执行（pull_request_target 取 base 分支文件面），
+          #   仓库级 PAT 若经 env 进入本面即暴露给可能被夹带污染的 wip 上下文——回退 GITHUB_TOKEN。
+          #   带 workflow 作用域的 PAT 仅由 hub 上的 sync-upstream.yml（工作流文件取自 hub，受信面）消费；
+          #   收敛为 branch=hub 的 environment secret 属仓库设置动作，由人工在 Settings → Environments 配置。
+          GITHUB_TOKEN: ${{ github.token }}
+        # 业务逻辑已外置到 .github/scripts/pr-cleanup-reset.sh（CI 引擎只负责环境/密钥/触发）；
+        # 事件/密钥数据全经上方 env: 注入，run 行零 ${{ }} 内联插值（反注入闸）。
+        run: bash .github/scripts/pr-cleanup-reset.sh

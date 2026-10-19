@@ -225,6 +225,94 @@ function formatClosingLine(confirmed) {
   const nums = (confirmed || []).map((n) => `#${n}`);
   return nums.length === 0 ? null : 'Closes: ' + nums.join(', closes ');
 }
+// 人类 closing keyword 已覆盖编号提取（PR#21 实测契约）：最终 PATCH 面围栏外已带 closing keyword 的
+//   裸 #N 视为人类已声明关闭意图——续写行只补「已确认但未被覆盖」的编号，杜绝 `fixes #16` 与
+//   `Closes: #16` 双写共存。覆盖检测纯文本、不判定真伪——真伪由 GraphQL 确认闸裁决，覆盖集只做差集；
+//   人类 keyword 行在重写中丢失时覆盖集不含该编号 → 确认集照常补写，意图不丢失。
+// 噪声面屏蔽（预 PR 审查回灌）：HTML 注释（跨行 `<!--…-->`）与行内代码（反引号段）不是 GitHub
+//   解析 closing keyword 的声明面——其中出现的 keyword 若计入覆盖集，会把已确认关联误剔（意图丢失，
+//   反方向缺陷）。屏蔽以等长字符替换实现：保留换行与逐字符位宽，与 inFenceFlags 行号严格对应
+//   （删行或改行宽会使 fenceFlags/covered 提取错位，正是本实现要防的形态）。
+// 关键词精确集：GitHub 官方 closing keywords 为 close/closed/closes + fix/fixes/fixed +
+//   resolve/resolves/resolved（`fixe` 不在集——旧 `fix(?:e[ds]?)?` 误命中，已确认关联被丢弃）。
+const KEYWORD_COVERED_RE = /\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?)\s*:?\s*#(\d+)\b/gi;
+function maskNonDeclarationText(bodyText) {
+  const text = String(bodyText || '');
+  const chars = [...text];
+  // 关闭检测必须对照原始文本（本字符序列已被本函数占位——读 chars 永不命中 `-->`，
+  //   注释将吞掉其后全文，注释后的真实声明面被误遮罩为未覆盖 → 确认集补写双写共存）。
+  //   索引基必须与 chars 一致：[...text] 展开为码点数组，astral emoji（如 🤖）占 1 个码点位
+  //   但占 2 个 UTF-16 代码单元——直接 text[i-1] 按代码单元取值会在含 astral 字符的行上偏移，
+  //   `-->` 漏检（内联回灌实证）。故按码点切原始文本得到 codepoints，与 chars 逐位对齐。
+  const codepoints = [...text];
+  const blank = (i) => { if (chars[i] !== '\n' && chars[i] !== '\r') chars[i] = ' '; };
+  let inHtmlComment = false;
+  // 行内代码遮罩（等长配对契约，PR 审查 E1）：GitHub 行内代码配对是**行内作用域**——
+  //   开界反引号串须在同一行内找到等长关界串才成代码；未配对（行内无等长关界）按普通文本处理，
+  //   其后真实声明面不得被误遮罩（旧 toggle 实现/跨行贪吃均会把声明面吞掉 → 覆盖集漏记 → 双写共存）。
+  //   HTML 注释是跨行状态，须先于行内代码处理（注释内的反引号不参与配对）。
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i];
+    if (inHtmlComment) {
+      blank(i);
+      if (ch === '>' && codepoints[i - 1] === '-' && codepoints[i - 2] === '-') inHtmlComment = false;
+      continue;
+    }
+    if (ch === '<' && chars[i + 1] === '!' && chars[i + 2] === '-' && chars[i + 3] === '-') {
+      inHtmlComment = true; blank(i); blank(i + 1); blank(i + 2); blank(i + 3); i += 3; continue;
+    }
+    if (ch !== '`') continue;
+    // 行内代码配对：吞整串连续反引号为开界，行内查找等长关界串；找到才遮罩其间内容。
+    let j = i;
+    while (j < chars.length && chars[j] === '`') j += 1;
+    const runLen = j - i;
+    let closeStart = -1;
+    for (let k = j; k < chars.length && chars[k] !== '\n' && chars[k] !== '\r'; k += 1) {
+      if (chars[k] !== '`') continue;
+      // 关界串必须恰好等于开界长度（CommonMark/GitHub：反引号串取极大连续 run）——
+      //   旧上限 `e - k < runLen` 会把更长的关界串截断成 runLen 误判为配对，开界前后的
+      //   声明面被错误遮罩 → 覆盖集漏记 → 确认集补写双写共存。
+      let e = k;
+      while (e < chars.length && chars[e] === '`') e += 1;
+      if (e - k === runLen) { closeStart = k; break; }
+      k = e - 1;
+    }
+    if (closeStart === -1) {
+      // 未配对：整串反引号按普通文本保留（不 blank、不入代码态），继续扫描其后内容。
+      i = j - 1; continue;
+    }
+    for (let k = i; k <= closeStart + runLen - 1; k += 1) blank(k);
+    i = closeStart + runLen - 1;
+  }
+  return chars.join('');
+}
+function extractKeywordCoveredRefs(bodyText, inFenceFlags) {
+  const masked = maskNonDeclarationText(bodyText);
+  const out = new Set();
+  const lines = masked.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    if (inFenceFlags && inFenceFlags[i]) continue;
+    KEYWORD_COVERED_RE.lastIndex = 0;
+    let m;
+    while ((m = KEYWORD_COVERED_RE.exec(lines[i])) !== null) {
+      const n = Number(m[1]);
+      if (Number.isSafeInteger(n) && n > 0) out.add(n);
+    }
+  }
+  return out;
+}
+// 共用装配助手（主路径与 CAS 重合并路径两处独立调用，杜绝两侧口径漂移）：对装配后的 headBody
+//   计算人类已覆盖集，确认集做差集——返回 { body, extra }；extra 空=全部被覆盖（调用方落
+//   closing-keywords-all-covered-by-human 可观测 NOTE），否则按差集续写（调用方落
+//   closing-keywords-carried-over NOTE）。纯函数不调 note（模块层无该作用域，TDZ 教训）。
+function appendClosingLine(headBody, confirmed) {
+  const ls = String(headBody || '').split('\n');
+  const flags = fenceFlags(ls);
+  const covered = extractKeywordCoveredRefs(headBody, flags);
+  const extra = (confirmed || []).filter((n) => !covered.has(n));
+  if (extra.length === 0) return { body: headBody, extra };
+  return { body: headBody.trimEnd() + '\n\n' + formatClosingLine(extra) + '\n', extra };
+}
 // G1/G2：关闭意图权威确认源＝本 PR 的 closingIssuesReferences（GraphQL）——手动 Development link
 //   与正文 closing keyword 解析两条意图路径最终都汇入该清单。REST timeline 的 connected 事件
 //   不含任何指向 PR 的字段（2026-10-17T22:07Z 真实响应取证），旧 GET+timeline 双查通道退役；
@@ -698,15 +786,15 @@ export async function runAutoFill(deps) {
   const splitIdx = findSplitIndex(lines, inFence);
   const headLen = splitIdx === -1 ? lines.length : splitIdx;
   const closingRefs = extractClosingRefs(lines.slice(0, headLen).join('\n'), inFence.slice(0, headLen));
-  let closingLine = null;
+  let lastConfirmed = [];
   if (closingRefs.length > MAX_CLOSING_REFS) {
     note('closing-refs-truncated: ' + (closingRefs.length - MAX_CLOSING_REFS) + ' 个编号超上限被截断不续写');
   }
   if (closingRefs.length > 0) {
     const vr = await verifiedClosingRefs(closingRefs.slice(0, MAX_CLOSING_REFS), gh, env);
+    if (vr.verified) lastConfirmed = vr.confirmed;
     if (vr.verified && vr.confirmed.length > 0) {
-      closingLine = formatClosingLine(vr.confirmed);
-      note('closing-keywords-carried-over: ' + vr.confirmed.join(','));
+      note('closing-keywords-confirmed: ' + vr.confirmed.join(','));
     } else if (!vr.verified) {
       note(`closing-keywords-verify-failed issue=${vr.failedIssue}: ${vr.failedMsg}（fail-closed 不续写）`);
     }
@@ -837,8 +925,14 @@ export async function runAutoFill(deps) {
     })();
     let headBody = mergeVerification(statsLine, stripCarriedClosing(existingHead), templateVerifCommands);
     // closing keyword 续写行落位：头部区末尾（验证节之后、尾块之前）——GitHub 只在描述正文解释
-    //   closing keyword，尾块属 CodeRabbit 自治区不混入；无确认关联时 closingLine 为 null 不加行。
-    if (closingLine) headBody = headBody.trimEnd() + '\n\n' + closingLine + '\n';
+    //   closing keyword，尾块属 CodeRabbit 自治区不混入；确认集为空或全被人类 keyword 覆盖时不加行。
+    const appended = appendClosingLine(headBody, lastConfirmed);
+    headBody = appended.body;
+    if (appended.extra.length === 0 && lastConfirmed.length > 0) {
+      note('closing-keywords-all-covered-by-human');
+    } else if (appended.extra.length > 0) {
+      note('closing-keywords-carried-over: ' + appended.extra.join(','));
+    }
     let finalBody = finalBodyOf(existingTail ? headBody.trimEnd() + '\n\n' + existingTail + '\n' : headBody.trimEnd() + '\n');
 
     if (existingTail && headTailOverlap(headBody, existingTail)) {
@@ -878,17 +972,23 @@ export async function runAutoFill(deps) {
       if (closingRefs2.length > MAX_CLOSING_REFS) {
         note('closing-refs-truncated: ' + (closingRefs2.length - MAX_CLOSING_REFS) + ' 个编号超上限被截断不续写');
       }
-      let closingLine2 = null;
+      let lastConfirmed2 = [];
       if (closingRefs2.length > 0) {
         const vr2 = await verifiedClosingRefs(closingRefs2.slice(0, MAX_CLOSING_REFS), gh, env);
+        if (vr2.verified) lastConfirmed2 = vr2.confirmed;
         if (vr2.verified && vr2.confirmed.length > 0) {
-          closingLine2 = formatClosingLine(vr2.confirmed);
-          note('closing-keywords-carried-over: ' + vr2.confirmed.join(','));
+          note('closing-keywords-confirmed: ' + vr2.confirmed.join(','));
         } else if (!vr2.verified) {
           note(`closing-keywords-verify-failed issue=${vr2.failedIssue}: ${vr2.failedMsg}（fail-closed 不续写）`);
         }
       }
-      if (closingLine2) headBody = headBody.trimEnd() + '\n\n' + closingLine2 + '\n';
+      const appended2 = appendClosingLine(headBody, lastConfirmed2);
+      headBody = appended2.body;
+      if (appended2.extra.length === 0 && lastConfirmed2.length > 0) {
+        note('closing-keywords-all-covered-by-human');
+      } else if (appended2.extra.length > 0) {
+        note('closing-keywords-carried-over: ' + appended2.extra.join(','));
+      }
       finalBody = finalBodyOf(tail2 ? headBody.trimEnd() + '\n\n' + tail2 + '\n' : headBody.trimEnd() + '\n');
       if (tail2 && headTailOverlap(headBody, tail2)) {
         return fail('以最新正文重合并后仍与尾块重叠');
